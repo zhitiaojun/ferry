@@ -13,22 +13,23 @@ gomobile version
 
 验证：均打印版本号（M0 安装后执行）；实际版本记入 `MAP.md` §4。
 
-## B. M1：本机双进程互传（未执行，代码尚不存在）
+## B. M1：本机双进程互传（2026-11-07 已执行，`evidence/stage0/20261107-1835.log`）
 
-前置：`cmd/ft` 已实现（命令为草案，以实现为准）。
+前置：已 `go build ./...`（或直接用构建产物 `ft`）。两端在同一台机器，走本地 TCP。
 
 ```bash
-# 终端 1（接收端）
-go run ./cmd/ft recv --listen 127.0.0.1:47000 --out ./recv/
+# 终端 1（接收端，先起；监听 0 端口时由日志打印实际地址）
+ft recv --listen 127.0.0.1:18900 --out ./recv/ --log recv.jsonl
 # 终端 2（发送端）
-go run ./cmd/ft send --to 127.0.0.1:47000 --file ./test-2.1m.bin
+ft send --addr 127.0.0.1:18900 --file ./test-2.1m.bin --log send.jsonl
 ```
 
 验证：
 
-1. 两端打印的分块数与字节数一致；
-2. 接收端 SHA-256 与发送端一致；
-3. 输出保存为 `evidence/stage0/YYYYMMDD-HHMM.log`。
+1. 两端 stdout 的 JSON 摘要 `ok:true`，`bytes`/`chunks` 与文件大小相符；
+2. `sha256sum` 比较源文件与 `<out>/<文件名>`，必须一致；
+3. 中断演练：传输中杀掉发送进程，确认 `<out>/<文件名>.ftpart` 保留；重跑同样的 `recv` 与 `send`，日志出现 `resume_from`，完成后哈希仍一致；
+4. 原始输出写入 `evidence/stage0/YYYYMMDD-HHMM.log` 并在 `NOW.md` 登记。
 
 ## C. M2：局域网直传（未执行）
 
