@@ -31,21 +31,28 @@ ft send --addr 127.0.0.1:18900 --file ./test-2.1m.bin --log send.jsonl
 3. 中断演练：传输中杀掉发送进程，确认 `<out>/<文件名>.ftpart` 保留；重跑同样的 `recv` 与 `send`，日志出现 `resume_from`，完成后哈希仍一致；
 4. 原始输出写入 `evidence/stage0/YYYYMMDD-HHMM.log` 并在 `NOW.md` 登记。
 
-## C. M2：局域网直传（未执行）
+## C. M2：局域网直传与手机热点（2026-11-07 已执行，`evidence/stage1/20261107-1909.log`）
 
-前置：Win 与手机同网段（热点场景必通；学校网络有概率，R6）；手机侧 APK 已构建安装（构建方式见 `docs/context/design.md` §6，尚属待定项）。
+前置：`./android/build.sh` 产出 `android/build/ft-debug.apk` 并 `adb install -r`；手机开启热点、电脑连入；发现端口 **45321/UDP**（40002 在 Android 上属保留端口，见 `core/discovery/announce.go`）。
 
 ```bash
-# Win 侧：确认本机在局域网内的地址
-ipconfig
-# 手机侧：确认能看到 Win 的发现广播（抓包或应用日志）
+# 电脑侧（接收端，同时公告自己）
+ft recv --lan --out ./recv/ --name pc --log recv.jsonl --once
+# 电脑侧（发送端：自动发现，或直接给地址）
+ft send --discover --to <设备名> --file ./test-2.1m.bin --log send.jsonl
+ft send --addr <手机IP>:<端口> --file ./test-2.1m.bin --log send.jsonl
 ```
 
-验证（三选二即可）：
+手机侧：安装 APK →「开始接收」（日志显示监听端口）→ 电脑 `ft send --addr`；反向则由手机「搜索设备」→ 选文件并发送。
 
-- 手机侧日志出现 Win 设备名与地址；
-- 传输完成且校验一致；
-- 对照测试：关闭 Wi-Fi 后应当**无法**建立局域网路径（证明不是走了别的档）。
+验证：
+
+1. 两端 JSON 摘要 `ok:true`，`path:"lan"`，热点场景 `topology:"hotspot"`；
+2. `sha256sum` 比较源文件与接收端文件（手机侧用 `adb pull` 取回），必须一致；
+3. 对照：关掉 Wi-Fi/热点后同样操作应失败（证明没有静默走服务器；M2 尚无中继可回退）；
+4. 日志里 `discovery.announce.start.interfaces` 只含物理网卡（TUN/VPN 被过滤）；原始输出写 `evidence/stage1/`。
+
+已知限制：手机侧 Go 不能读 netlink，接口信息由 Java 枚举后经 `discovery.Hint` 传入；Android 前台服务尚未加入，传输时请保持应用在前台。
 
 ## D. BJ 服务器核验（只读，未执行；依据运维档案）
 

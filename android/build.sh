@@ -50,8 +50,8 @@ find android/src -name '*.java' >"$WORK/sources.txt"
 echo "== d8 (dex) =="
 find .tools/android-build/classes -name '*.class' >"$WORK/classes.txt"
 "$JDK/bin/java" -cp "$(m "$BT/lib/d8.jar")" com.android.tools.r8.D8 \
-  --min-api 21 --lib "$(m "$AJAR")" --classpath "$(m "$WORK/aar/classes.jar")" \
-  --output "$(m "$WORK/dex")" @"$(m "$WORK/classes.txt")"
+  --min-api 21 --lib "$(m "$AJAR")" \
+  --output "$(m "$WORK/dex")" @"$(m "$WORK/classes.txt")" "$(m "$WORK/aar/classes.jar")"
 
 echo "== aapt2 link =="
 "$BT/aapt2.exe" link -o "$(m "$WORK/base.apk")" \

@@ -16,8 +16,10 @@ import (
 )
 
 const (
-	// Port is the UDP port used for LAN announcements.
-	Port = 40002
+	// Port is the UDP port used for LAN announcements. It must stay outside
+	// host-reserved ranges: Android phones reserve 40002 (a Xiaomi build lists
+	// it in net.ipv4.ip_local_reserved_ports) and Windows excludes 50000-50059.
+	Port = 45321
 	// MulticastGroup is the admin-scoped IPv4 group used next to broadcast.
 	MulticastGroup = "239.255.42.99"
 	// PayloadVersion is the announcement format version.
@@ -106,6 +108,20 @@ type Config struct {
 	Port     int
 	Interval time.Duration
 	Log      *logging.Logger
+	// Hint, when set, replaces system interface enumeration. Android supplies
+	// it from Java because netlink is not readable inside apps.
+	Hint *Hint
+}
+
+// ifaces returns the interfaces to announce/listen on: the hint when given,
+// otherwise the system's eligible physical interfaces.
+func (c Config) ifaces() ([]Iface, error) {
+	if c.Hint != nil {
+		if ifc, ok := c.Hint.iface(); ok {
+			return []Iface{ifc}, nil
+		}
+	}
+	return Eligible()
 }
 
 func (c Config) interval() time.Duration {
@@ -129,7 +145,7 @@ func (c Config) announcement(iface string) ([]byte, error) {
 // Announce sends announcements on every eligible physical interface until ctx
 // is done. Broadcast (directed per interface) and multicast are both sent.
 func Announce(ctx context.Context, cfg Config) error {
-	ifaces, err := Eligible()
+	ifaces, err := cfg.ifaces()
 	if err != nil {
 		return err
 	}

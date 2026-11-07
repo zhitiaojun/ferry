@@ -4,7 +4,7 @@
 
 ## 当前目标
 
-以“我的手机 ↔ 我的电脑”之间的最佳传输体验为主、兼顾陌生设备（D12），按 `PLAN.md` 的 M0–M9 推进至 v1.0。当前处于 **M0 收口与初始化**，由 work agent 执行中（D25，规约见 `WORK_AGENT.md`）：协议规范、Go 骨架、开发机 Android 工具链已完成；G0 于 2026-11-07 关闭（用户委托 work agent 定稿）。M1 本机核心传输的代码与 G1 证据已完成，待用户确认后进入 M2。
+以“我的手机 ↔ 我的电脑”之间的最佳传输体验为主、兼顾陌生设备（D12），按 `PLAN.md` 的 M0–M9 推进至 v1.0。当前处于 **M2 局域网 + 安卓最小 APK**，由 work agent 执行（D25，规约见 `WORK_AGENT.md`）：M0（G0 已关闭）、M1（代码与 G1 证据完成）之后，M2 的发现、LAN 直连、最小 APK 与热点双向传输已验证；学校网络实测与投放小窗预研待做。
 
 ## 进展（截至 2026-11-07）
 
@@ -21,23 +21,29 @@
 - [x] M0-d 规范定稿（G0）：§6 数值冻结、空文件改为**支持**、信令字段留待 M3、多文件串行；金标向量新增空文件清单用例。
 - [x] M0-c 开发机工具链：Go 1.27.3、Temurin JDK 17.0.21、Android cmdline-tools 12.0 / build-tools 34.0.0 / platform android-34 / NDK r27c、gomobile + gobind 均装在仓库内 `.tools/`（不入库）；`gomobile bind` 产出 arm64 AAR 并校验（`evidence/stage0/20261107-1800.log`）。
 - [x] M1 本机核心传输：`core/session`（HELLO/HELLO_ACK、累计偏移 ACK、去重、PING、ERROR）、`core/transfer`（MANIFEST、64 KiB 分块、块与整文件 SHA-256、`.ftpart` 续传、FIN 校验）、`core/pathmgr`（TCP `Dial/Accept/Close`）、`core/logging`（JSONL）、`cmd/ft send|recv`；单测含故障注入；证据 `evidence/stage0/20261107-1835.log`（M1_EVIDENCE=PASS）。
-- [ ] M2–M9 —— 未开始。
+- [x] M2 发现与 LAN 直连：`core/discovery`（广播 + 组播双发、设备表、TTL、虚拟网卡/TUN 过滤）、`cmd/ft send --discover/--peer`、`ft recv --lan`；本机回环与「电脑连手机热点」双向直传均通过（2.1 MB / 10 MB，哈希一致），拓扑判定 `topology=hotspot`（对端为网关）。
+- [x] M2 安卓最小 APK：`core/mobile` gomobile 绑定 + `android/`（Java 单 Activity、MulticastLock、无 Gradle 构建脚本），Redmi M332BF（Android 17 / SDK 37）安装运行，手机 ↔ 电脑热点双向传输哈希一致（`evidence/stage1/20261107-1909.log`）。
+- [x] M2 两个平台缺陷已修：Android 17 禁止应用读取 netlink（`route ip+net: netlinkrib: permission denied`）→ 改为 Java 枚举 Wi-Fi 网卡并把 `{name,index,ip,prefix}` 经 gomobile 传给 Go（`discovery.Hint`）；Android 保留端口含 40002（`ip_local_reserved_ports`）导致 bind 失败 → 发现端口改为 **45321**（Windows 侧 50000-50059 也被排除）。
+- [ ] M2 学校网络实测（T1）：待手机连入校园网后做多次广播/组播/单播可达性记录。
+- [ ] M2 VPN(TUN) 诊断（T10）：热点头场地已记录 Meta TUN 开启时 LAN 仍成功、TUN 被过滤；学校网络下需复测。
+- [ ] M2 投放小窗预研（Go + Win32 拖拽原型，结论进 `design.md` §8）。
+- [ ] M3–M9 —— 未开始。
 
-可运行入口：`ft -version`、`ft send` / `ft recv`（`cmd/ft`，仅本机 TCP）。`core/proto` 有金标向量单测，`core/session`、`core/transfer` 有单测与故障注入；`core/{identity,logging,pathmgr}` 已实现最小功能；`core/{discovery,signaling,punch,relay,lanweb}`、`server/`、`cmd/ft-desktop/` 仍为占位。
+可运行入口：`ft -version`、`ft send` / `ft recv`（`cmd/ft`；本机 TCP、LAN 发现与热点直连）。`core/proto` 有金标向量单测，`core/session`、`core/transfer` 有单测与故障注入；`core/{identity,logging,pathmgr}` 已实现最小功能；`core/{discovery,signaling,punch,relay,lanweb}`、`server/`、`cmd/ft-desktop/` 仍为占位。
 
 ## 阻塞 / 待确认
 
-无阻塞。G0 已关闭（用户委托定稿：§6 冻结、空文件改为支持、信令留待 M3、多文件串行）。执行中的待实测项（ESA 上 WSS 行为、学校网络可达性、IPv6、Android 17 权限）已列入对应里程碑任务卡。执行中的待实测项（ESA 上 WSS 行为、学校网络可达性、IPv6、Android 17 权限）已列入对应里程碑任务卡。
+无阻塞。G0 已关闭（用户委托定稿：§6 冻结、空文件改为支持、信令留待 M3、多文件串行）。执行中的待实测项（ESA 上 WSS 行为、学校网络可达性、IPv6、Android 17 本地网络权限与前台服务限制）已列入对应里程碑任务卡。
 
 ## 下一步（按优先级，由 work agent 执行）
 
-M1 已完成，等用户确认 G1。确认后进入 M2（按 `PLAN.md` 任务卡，涉及用户手机，开工前先对齐测试窗口）：
+M2 剩余（按 `PLAN.md` 任务卡）：
 
-1. 发现：UDP 广播 + 组播双发（载荷带设备 ID），安卓 `MulticastLock`；手动 `--peer <ip:port>` 兜底。
-2. LAN 路径 TCP 直连；识别“电脑连安卓热点”拓扑，此拓扑下 LAN 失败默认不回退中继。
-3. VPN/TUN 网卡识别与排除（D28）；日志记录 VPN 状态。
-4. gomobile 打包 AAR + Kotlin 单 Activity + 前台服务；确认 Android 17 本地网络权限。
-5. 学校网络与热点实测，产出 `evidence/stage1/`；投放小窗预研。
+1. 学校网络实测（T1）：电脑与手机同连校园网，多时段记录广播 / 组播 / 单播可达性，写入 `evidence/stage1/` 并更新 `RISKS.md` R6。
+2. VPN(TUN) 诊断（T10）：校园网下开 Meta TUN 复测，记录两端 VPN 状态、TUN 网卡与出口。
+3. 安卓前台服务：传输期间保活（`PLAN.md` M2-5），确认 Android 17 本地网络权限对 targetSdk 34 无影响并记入风险。
+4. 投放小窗预研：Go + Win32 最小原型（Explorer 拖拽 → 右下角置顶窗 → 接收 `CF_HDROP` → 收起），结论写 `docs/context/design.md` §8。
+5. 收尾：G2 报告 + 证据归档 + 提交。
 
 ## 证据入口
 
@@ -45,7 +51,7 @@ M1 已完成，等用户确认 G1。确认后进入 M2（按 `PLAN.md` 任务卡
 |---|---|---|
 | M0 | `evidence/stage0/20261107-1745.log`（向量生成 + 构建 + 测试）、`20261107-1800.log`（Android 工具链 + AAR）、`20261107-1805.log`（规范定稿 + 向量重生成） | 已有 |
 | M1 本机 | `evidence/stage0/20261107-1835.log`（构建/测试/CLI×3 哈希/故障注入/续传/内存，`M1_EVIDENCE=PASS`） | 已有 |
-| M2 局域网 | 待建：`evidence/stage1/*.log` | 无 |
+| M2 局域网 | `evidence/stage1/20261107-1909.log`（热点双向、哈希、TUN 过滤、端口 45321） | 已有（学校网络待补） |
 | M4 打洞 | 待建：`evidence/stage2/*.log` | 无 |
 | M3 中继 | 待建：`evidence/stage3/*.log` | 无 |
 

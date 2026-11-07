@@ -67,6 +67,36 @@ func broadcastFor(ip net.IP, mask net.IPMask) net.IP {
 	return b
 }
 
+// Hint describes one interface supplied by the caller instead of enumerating
+// the system. Android uses it because Go's netlink interface dump is denied to
+// apps there ("route ip+net: netlinkrib: permission denied"); Java enumerates
+// the Wi-Fi address and passes it across the gomobile bridge.
+type Hint struct {
+	Name   string `json:"name"`
+	Index  int    `json:"index"`
+	IP     string `json:"ip"`
+	Prefix int    `json:"prefix"`
+}
+
+// iface converts the hint into an Iface, reporting whether it is usable.
+func (h Hint) iface() (Iface, bool) {
+	ip := net.ParseIP(h.IP).To4()
+	if ip == nil || h.Prefix < 0 || h.Prefix > 32 {
+		return Iface{}, false
+	}
+	mask := net.CIDRMask(h.Prefix, 32)
+	if mask == nil {
+		return Iface{}, false
+	}
+	return Iface{
+		Name:      h.Name,
+		Index:     h.Index,
+		IP:        ip,
+		Mask:      mask,
+		Broadcast: broadcastFor(ip, mask),
+	}, true
+}
+
 // Interfaces lists every up, non-loopback interface that has an IPv4 address.
 func Interfaces() ([]Iface, error) {
 	nifs, err := net.Interfaces()

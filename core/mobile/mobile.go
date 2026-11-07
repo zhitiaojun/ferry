@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -66,7 +67,7 @@ type summary struct {
 
 // StartReceiver listens on all interfaces, announces on the LAN and accepts
 // transfers into outDir until StopReceiver. It returns the listen address.
-func StartReceiver(name, outDir string) (string, error) {
+func StartReceiver(name, outDir, hintJSON string) (string, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	if rcv != nil {
@@ -96,6 +97,7 @@ func StartReceiver(name, outDir string) (string, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	hint := parseHint(hintJSON)
 	r := &receiver{name: name, outDir: outDir, ln: ln, cancel: cancel, logger: logger, logf: logf}
 	rcv = r
 	go func() {
@@ -104,6 +106,7 @@ func StartReceiver(name, outDir string) (string, error) {
 			Name:     name,
 			Port:     port,
 			Log:      logger,
+			Hint:     hint,
 		})
 		if err != nil {
 			logger.Event("discovery.announce.error", map[string]any{"error": err.Error()})
@@ -177,7 +180,7 @@ func (r *receiver) handle(ctx context.Context, nc net.Conn) {
 
 // Discover waits timeoutMS for LAN announcements and returns a JSON array of
 // devices (name, addr, iface). It announces this device's name too.
-func Discover(name string, timeoutMS int) (string, error) {
+func Discover(name string, timeoutMS int, hintJSON string) (string, error) {
 	if name == "" {
 		name = "android"
 	}
@@ -187,9 +190,11 @@ func Discover(name string, timeoutMS int) (string, error) {
 	timeout := time.Duration(timeoutMS) * time.Millisecond
 	ctx, cancel := context.WithTimeout(context.Background(), timeout+time.Second)
 	defer cancel()
+	hint := parseHint(hintJSON)
 	l, err := discovery.Listen(discovery.Config{
 		DeviceID: identity.DeviceID(name),
 		Name:     name,
+		Hint:     hint,
 	})
 	if err != nil {
 		return "", err
@@ -204,6 +209,7 @@ func Discover(name string, timeoutMS int) (string, error) {
 			DeviceID: identity.DeviceID(name),
 			Name:     name,
 			Port:     1, // discovery-only: no TCP service in this call
+			Hint:     hint,
 		})
 	}()
 
@@ -288,6 +294,20 @@ func marshalSummary(s summary) string {
 		return `{"ok":false,"error":"summary marshal failed"}`
 	}
 	return string(b)
+}
+
+// parseHint decodes the JSON interface hint Java passes in; an empty string
+// means "enumerate normally".
+func parseHint(s string) *discovery.Hint {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "null" {
+		return nil
+	}
+	var h discovery.Hint
+	if err := json.Unmarshal([]byte(s), &h); err != nil || h.IP == "" {
+		return nil
+	}
+	return &h
 }
 
 func portOf(addr string) int {

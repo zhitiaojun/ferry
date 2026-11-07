@@ -25,7 +25,12 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.InterfaceAddress;
+import java.net.NetworkInterface;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import mobile.Mobile;
@@ -155,7 +160,7 @@ public class MainActivity extends Activity {
         new Thread(() -> {
             try {
                 File dir = new File(getExternalFilesDir(null), "received");
-                String addr = Mobile.startReceiver(name, dir.getAbsolutePath());
+                String addr = Mobile.startReceiver(name, dir.getAbsolutePath(), lanHint());
                 ui.post(() -> {
                     receiverRunning = true;
                     stopBtn.setEnabled(true);
@@ -188,6 +193,46 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    /**
+     * Description of the Wi-Fi interface, as JSON, for the Go side.
+     * Android denies netlink dumps to apps, so Go cannot enumerate interfaces
+     * itself; the transport falls back to this hint.
+     */
+    private String lanHint() {
+        try {
+            List<NetworkInterface> nifs = Collections.list(NetworkInterface.getNetworkInterfaces());
+            for (int pass = 0; pass < 2; pass++) {
+                for (NetworkInterface ni : nifs) {
+                    String n = ni.getName();
+                    if (n == null || !ni.isUp() || ni.isLoopback() || ni.isVirtual()) {
+                        continue;
+                    }
+                    if (n.startsWith("rmnet") || n.startsWith("p2p") || n.startsWith("dummy")
+                            || n.startsWith("tun") || n.startsWith("ip6tnl")) {
+                        continue;
+                    }
+                    if (pass == 0 && !n.toLowerCase().startsWith("wlan")) {
+                        continue;
+                    }
+                    for (InterfaceAddress ia : ni.getInterfaceAddresses()) {
+                        InetAddress a = ia.getAddress();
+                        if (a instanceof Inet4Address && !a.isLoopbackAddress() && !a.isLinkLocalAddress()) {
+                            JSONObject o = new JSONObject();
+                            o.put("name", n);
+                            o.put("index", ni.getIndex());
+                            o.put("ip", a.getHostAddress());
+                            o.put("prefix", ia.getNetworkPrefixLength());
+                            return o.toString();
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "lanHint", e);
+        }
+        return "";
+    }
+
     private void acquireMulticastLock() {
         try {
             WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
@@ -217,7 +262,7 @@ public class MainActivity extends Activity {
         final String name = currentName();
         new Thread(() -> {
             try {
-                String json = Mobile.discover(name, 3000);
+                String json = Mobile.discover(name, 3000, lanHint());
                 JSONArray arr = new JSONArray(json);
                 final StringBuilder sb = new StringBuilder();
                 String first = "";

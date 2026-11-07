@@ -45,7 +45,7 @@ func Listen(cfg Config) (*Listener, error) {
 	}
 	pc := ipv4.NewPacketConn(conn)
 	group := &net.UDPAddr{IP: net.ParseIP(MulticastGroup), Port: Port}
-	ifaces, err := Eligible()
+	ifaces, err := cfg.ifaces()
 	if err != nil {
 		_ = conn.Close()
 		return nil, err

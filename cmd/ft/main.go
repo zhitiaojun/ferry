@@ -443,7 +443,7 @@ func classifyIP(ip net.IP) string {
 	if ip.IsLoopback() {
 		return "local"
 	}
-	if gw := discovery.GatewayIPv4(); gw != nil && gw.Equal(ip) {
+	if gw := discovery.GatewayFor(ip); gw != nil && gw.Equal(ip) {
 		return "hotspot"
 	}
 	return "lan"
