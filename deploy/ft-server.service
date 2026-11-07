@@ -1,0 +1,21 @@
+[Unit]
+Description=filetransfer signaling and relay server (ft-server)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/ft-server/ft-server -listen 127.0.0.1:18790 -log /var/log/ft-server/events.jsonl
+Environment=GOMEMLIMIT=160MiB
+MemoryMax=256M
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/log/ft-server
+LimitNOFILE=8192
+
+[Install]
+WantedBy=multi-user.target
