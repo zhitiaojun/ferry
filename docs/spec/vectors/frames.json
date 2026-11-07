@@ -1,0 +1,226 @@
+{
+  "spec": "docs/spec/protocol.md v1.0-draft",
+  "generator": "tools/gen_vectors.py",
+  "vectors": [
+    {
+      "name": "hello",
+      "frame_hex": "465452580101000000112233445566778899aabbccddeeff00000000000000000000004100010001d538046b282cfc47ba55d8aa2e4c972b29c6dc4cbd1abe9689a0d7e6cb6b6769a1b2c3d4e5f60718293a4b5c6d7e8f9000000003000777696e2d646576",
+      "expect": {
+        "version": 1,
+        "type": "HELLO",
+        "type_id": 1,
+        "flags": 0,
+        "session_id": "00112233445566778899aabbccddeeff",
+        "seq": 0,
+        "payload_len": 65,
+        "payload": {
+          "min_version": 1,
+          "max_version": 1,
+          "device_id": "d538046b282cfc47ba55d8aa2e4c972b29c6dc4cbd1abe9689a0d7e6cb6b6769",
+          "nonce": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+          "capabilities": 3,
+          "name": "win-dev"
+        }
+      }
+    },
+    {
+      "name": "hello_empty_name",
+      "frame_hex": "465452580101000000112233445566778899aabbccddeeff00000000000000010000003a00010001d538046b282cfc47ba55d8aa2e4c972b29c6dc4cbd1abe9689a0d7e6cb6b6769a1b2c3d4e5f60718293a4b5c6d7e8f90000000030000",
+      "expect": {
+        "version": 1,
+        "type": "HELLO",
+        "type_id": 1,
+        "flags": 0,
+        "session_id": "00112233445566778899aabbccddeeff",
+        "seq": 1,
+        "payload_len": 58,
+        "payload": {
+          "min_version": 1,
+          "max_version": 1,
+          "device_id": "d538046b282cfc47ba55d8aa2e4c972b29c6dc4cbd1abe9689a0d7e6cb6b6769",
+          "nonce": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+          "capabilities": 3,
+          "name": ""
+        }
+      }
+    },
+    {
+      "name": "hello_ack",
+      "frame_hex": "465452580102000000112233445566778899aabbccddeeff0000000000000000000000430001bc7b49fd8d68a8b61b9c1dc29c16ad858889d0d0e9337fac893ab2da610d0c4ba1b2c3d4e5f60718293a4b5c6d7e8f9000000003000b616e64726f69642d646576",
+      "expect": {
+        "version": 1,
+        "type": "HELLO_ACK",
+        "type_id": 2,
+        "flags": 0,
+        "session_id": "00112233445566778899aabbccddeeff",
+        "seq": 0,
+        "payload_len": 67,
+        "payload": {
+          "version": 1,
+          "device_id": "bc7b49fd8d68a8b61b9c1dc29c16ad858889d0d0e9337fac893ab2da610d0c4b",
+          "nonce_echo": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+          "capabilities": 3,
+          "name": "android-dev"
+        }
+      }
+    },
+    {
+      "name": "manifest",
+      "frame_hex": "465452580103000000112233445566778899aabbccddeeff000000000000000200000086101112131415161718191a1b1c1d1e1f00010000000000020005612e62696e0000000000200b200000019a5d2fb97b92f6936afe5b1475de18eb21f109673af988be962db8a30694a895da5fabc3070005622e74787400000000000004000000019a5d2fbac80c66f2c45405de575189209a768399bcaf88ccc51002407e395c0136aad2844d",
+      "expect": {
+        "version": 1,
+        "type": "MANIFEST",
+        "type_id": 3,
+        "flags": 0,
+        "session_id": "00112233445566778899aabbccddeeff",
+        "seq": 2,
+        "payload_len": 134,
+        "payload": {
+          "transfer_id": "101112131415161718191a1b1c1d1e1f",
+          "chunk_size": 65536,
+          "files": [
+            {
+              "name": "a.bin",
+              "size": 2100000,
+              "mtime_ms": 1762500000123,
+              "sha256": "92f6936afe5b1475de18eb21f109673af988be962db8a30694a895da5fabc307"
+            },
+            {
+              "name": "b.txt",
+              "size": 1024,
+              "mtime_ms": 1762500000456,
+              "sha256": "0c66f2c45405de575189209a768399bcaf88ccc51002407e395c0136aad2844d"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "data",
+      "frame_hex": "465452580104000000112233445566778899aabbccddeeff000000000000000a0000004e101112131415161718191a1b1c1d1e1f000000000000000000020000a30e12d094b7a69210faf9f7c2ac5182d55b1e5ad0d4822acf9081d3afbf033068656c6c6f2066696c657472616e73666572",
+      "expect": {
+        "version": 1,
+        "type": "DATA",
+        "type_id": 4,
+        "flags": 0,
+        "session_id": "00112233445566778899aabbccddeeff",
+        "seq": 10,
+        "payload_len": 78,
+        "payload": {
+          "transfer_id": "101112131415161718191a1b1c1d1e1f",
+          "file_index": 0,
+          "offset": 131072,
+          "chunk_sha256": "a30e12d094b7a69210faf9f7c2ac5182d55b1e5ad0d4822acf9081d3afbf0330",
+          "data_hex": "68656c6c6f2066696c657472616e73666572"
+        }
+      }
+    },
+    {
+      "name": "ack",
+      "frame_hex": "465452580105000000112233445566778899aabbccddeeff000000000000000b0000001c101112131415161718191a1b1c1d1e1f000000000000000000020000",
+      "expect": {
+        "version": 1,
+        "type": "ACK",
+        "type_id": 5,
+        "flags": 0,
+        "session_id": "00112233445566778899aabbccddeeff",
+        "seq": 11,
+        "payload_len": 28,
+        "payload": {
+          "transfer_id": "101112131415161718191a1b1c1d1e1f",
+          "file_index": 0,
+          "offset": 131072
+        }
+      }
+    },
+    {
+      "name": "resume",
+      "frame_hex": "465452580106000000112233445566778899aabbccddeeff000000000000000c0000001c101112131415161718191a1b1c1d1e1f000000000000000000030000",
+      "expect": {
+        "version": 1,
+        "type": "RESUME",
+        "type_id": 6,
+        "flags": 0,
+        "session_id": "00112233445566778899aabbccddeeff",
+        "seq": 12,
+        "payload_len": 28,
+        "payload": {
+          "transfer_id": "101112131415161718191a1b1c1d1e1f",
+          "file_index": 0,
+          "offset": 196608
+        }
+      }
+    },
+    {
+      "name": "fin",
+      "frame_hex": "465452580107000000112233445566778899aabbccddeeff00000000000000140000005500101112131415161718191a1b1c1d1e1f0000000292f6936afe5b1475de18eb21f109673af988be962db8a30694a895da5fabc3070c66f2c45405de575189209a768399bcaf88ccc51002407e395c0136aad2844d",
+      "expect": {
+        "version": 1,
+        "type": "FIN",
+        "type_id": 7,
+        "flags": 0,
+        "session_id": "00112233445566778899aabbccddeeff",
+        "seq": 20,
+        "payload_len": 85,
+        "payload": {
+          "status": 0,
+          "transfer_id": "101112131415161718191a1b1c1d1e1f",
+          "file_sha256": [
+            "92f6936afe5b1475de18eb21f109673af988be962db8a30694a895da5fabc307",
+            "0c66f2c45405de575189209a768399bcaf88ccc51002407e395c0136aad2844d"
+          ]
+        }
+      }
+    },
+    {
+      "name": "error",
+      "frame_hex": "465452580108000000112233445566778899aabbccddeeff0000000000000015000000130004000f6672616d6520746f6f206c61726765",
+      "expect": {
+        "version": 1,
+        "type": "ERROR",
+        "type_id": 8,
+        "flags": 0,
+        "session_id": "00112233445566778899aabbccddeeff",
+        "seq": 21,
+        "payload_len": 19,
+        "payload": {
+          "code": 4,
+          "code_name": "frame_too_large",
+          "message": "frame too large"
+        }
+      }
+    },
+    {
+      "name": "ping",
+      "frame_hex": "465452580109000000112233445566778899aabbccddeeff000000000000001e000000081122334455667788",
+      "expect": {
+        "version": 1,
+        "type": "PING",
+        "type_id": 9,
+        "flags": 0,
+        "session_id": "00112233445566778899aabbccddeeff",
+        "seq": 30,
+        "payload_len": 8,
+        "payload": {
+          "token": "1122334455667788"
+        }
+      }
+    },
+    {
+      "name": "pong",
+      "frame_hex": "46545258010a000000112233445566778899aabbccddeeff000000000000001f000000081122334455667788",
+      "expect": {
+        "version": 1,
+        "type": "PONG",
+        "type_id": 10,
+        "flags": 0,
+        "session_id": "00112233445566778899aabbccddeeff",
+        "seq": 31,
+        "payload_len": 8,
+        "payload": {
+          "token": "1122334455667788"
+        }
+      }
+    }
+  ]
+}
