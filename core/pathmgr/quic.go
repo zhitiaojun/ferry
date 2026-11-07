@@ -110,6 +110,54 @@ func (q *QUIC) Accept(ctx context.Context) (net.Conn, error) {
 	return &streamConn{stream: stream, conn: conn, laddr: q.udp.LocalAddr(), raddr: conn.RemoteAddr()}, nil
 }
 
+// AcceptOrDial waits for an inbound QUIC connection while also dialing every
+// peer candidate. Symmetric NATs map each destination separately, so a
+// receiver that only listens never opens the mapping its peer would dial;
+// dialing out makes the punch symmetric.
+func (q *QUIC) AcceptOrDial(ctx context.Context, addrs []*net.UDPAddr) (net.Conn, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type result struct {
+		conn net.Conn
+		err  error
+	}
+	total := len(addrs) + 1
+	ch := make(chan result, total)
+
+	go func() {
+		conn, err := q.Accept(ctx)
+		ch <- result{conn, err}
+	}()
+	for _, addr := range addrs {
+		addr := addr
+		go func() {
+			conn, err := q.DialAddr(ctx, addr.String())
+			ch <- result{conn, err}
+		}()
+	}
+
+	var firstErr error
+	for i := 0; i < total; i++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case r := <-ch:
+			if r.err == nil {
+				cancel()
+				return r.conn, nil
+			}
+			if firstErr == nil {
+				firstErr = r.err
+			}
+		}
+	}
+	if firstErr == nil {
+		firstErr = fmt.Errorf("punch: no candidate accepted")
+	}
+	return nil, firstErr
+}
+
 // Name implements Path.
 func (q *QUIC) Name() string { return "punch" }
 

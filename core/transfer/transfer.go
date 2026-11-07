@@ -24,6 +24,10 @@ type Config struct {
 	// TransferID overrides the random id when the caller already committed to
 	// one (e.g. the signaling transfer id); zero means "generate".
 	TransferID [16]byte
+	// OnProgress, when set, is called after each acknowledged chunk with the
+	// number of bytes the peer confirmed for the current file. It is meant for
+	// path switching decisions (relay -> punch upgrade) and diagnostics.
+	OnProgress func(bytes int64)
 }
 
 func (c Config) chunkSize() int {

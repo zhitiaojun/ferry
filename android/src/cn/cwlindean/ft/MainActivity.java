@@ -56,6 +56,10 @@ public class MainActivity extends Activity {
     private Button relayBtn;
     private TextView relayInfo;
     private EditText pairField;
+    private Button punchBtn;
+    private Button punchSendBtn;
+    private TextView punchInfo;
+    private boolean pickPunch;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private WifiManager.MulticastLock multicastLock;
@@ -71,6 +75,75 @@ public class MainActivity extends Activity {
             requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 7);
         }
         status.setText("未启动。先在电脑上运行 ft recv --lan，再点“开始接收”。");
+        importBootstrapPairs();
+        applyDebugPeerId();
+    }
+
+    // applyDebugPeerId lets adb pre-fill the peer field for tests (typing a
+    // 64-hex id through the IME drops characters).
+    private void applyDebugPeerId() {
+        java.io.File f = new java.io.File(getFilesDir(), "peer.id");
+        if (!f.isFile()) {
+            return;
+        }
+        try {
+            String id = new String(java.nio.file.Files.readAllBytes(f.toPath()), "UTF-8").trim();
+            if (!id.isEmpty()) {
+                peerField.setText(id);
+            }
+        } catch (Exception e) {
+            Log.w("ft", "applyDebugPeerId", e);
+        }
+    }
+
+    // importBootstrapPairs exists for lab work: adb cannot write the app's
+    // external files dir on Android 11+, but run-as can drop a file into the
+    // internal one. Each line is an ftpair:// URI to trust.
+    private void importBootstrapPairs() {
+        java.io.File dir = new java.io.File(getExternalFilesDir(null), "received");
+        String target = new java.io.File(dir, "paired.json").getAbsolutePath();
+        java.io.File boot = new java.io.File(getFilesDir(), "pair.import");
+        int n = 0;
+        if (boot.isFile()) {
+            try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(boot))) {
+                String line;
+                while ((line = r.readLine()) != null) {
+                    line = line.trim();
+                    if (line.startsWith("ftpair://")) {
+                        Mobile.pairImport(line, target);
+                        n++;
+                    }
+                }
+                boot.delete();
+            } catch (Exception e) {
+                status.setText("导入配对失败：" + e.getMessage());
+                return;
+            }
+        }
+        java.io.File tf = new java.io.File(target);
+        if (tf.isFile()) {
+            copyForDebug(tf);
+        }
+        if (n > 0) {
+            status.setText("已导入 " + n + " 个配对：" + target);
+        }
+    }
+
+    // copyForDebug mirrors a file into internal storage so adb run-as can read
+    // it; the external files dir is not reachable from there on Android 11+.
+    private void copyForDebug(java.io.File src) {
+        try (java.io.FileInputStream in = new java.io.FileInputStream(src)) {
+            java.io.File dst = new java.io.File(getFilesDir(), src.getName() + ".debug");
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(dst)) {
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    out.write(buf, 0, n);
+                }
+            }
+        } catch (Exception e) {
+            Log.w("ft", "copyForDebug", e);
+        }
     }
 
     private View buildUi() {
@@ -105,9 +178,13 @@ public class MainActivity extends Activity {
         relayBtn = new Button(this);
         relayBtn.setText("中继接收");
         relayBtn.setOnClickListener(v -> startRelayReceiver());
+        punchBtn = new Button(this);
+        punchBtn.setText("打洞接收");
+        punchBtn.setOnClickListener(v -> startPunchReceiver());
         receiverRow.addView(startBtn);
         receiverRow.addView(stopBtn);
         receiverRow.addView(relayBtn);
+        receiverRow.addView(punchBtn);
         root.addView(receiverRow);
 
         relayInfo = new TextView(this);
@@ -135,6 +212,11 @@ public class MainActivity extends Activity {
         root.addView(pairRow);
 
         root.addView(relayInfo);
+
+        punchInfo = new TextView(this);
+        punchInfo.setTextSize(13);
+        punchInfo.setText("打洞：未启动（STUN 123.57.253.208:40000/40001）");
+        root.addView(punchInfo);
 
         TextView title = new TextView(this);
         title.setText("附近的设备（需对方也在公告）：");
@@ -165,8 +247,13 @@ public class MainActivity extends Activity {
 
         sendBtn = new Button(this);
         sendBtn.setText("选文件并发送");
-        sendBtn.setOnClickListener(v -> pickFiles());
+        sendBtn.setOnClickListener(v -> pickFiles(false));
         root.addView(sendBtn);
+
+        punchSendBtn = new Button(this);
+        punchSendBtn.setText("打洞发送（对方设备 ID）");
+        punchSendBtn.setOnClickListener(v -> pickFiles(true));
+        root.addView(punchSendBtn);
 
         return root;
     }
@@ -299,6 +386,7 @@ public class MainActivity extends Activity {
             try {
                 Mobile.stopReceiver();
                 Mobile.stopRelayReceiver();
+                Mobile.stopPunchReceiver();
             } catch (Exception e) {
                 Log.e(TAG, "stopReceiver", e);
             }
@@ -443,11 +531,12 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void pickFiles() {
+    private void pickFiles(boolean punch) {
         if (peerField.getText().toString().trim().isEmpty()) {
-            toast("先搜索或填写对方地址");
+            toast(punch ? "先填写对方设备 ID（64 位 hex）" : "先搜索或填写对方地址");
             return;
         }
+        pickPunch = punch;
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
         i.setType("*/*");
@@ -474,6 +563,12 @@ public class MainActivity extends Activity {
         }
         final String peer = peerField.getText().toString().trim();
         final String name = currentName();
+        final boolean punch = pickPunch;
+        pickPunch = false;
+        if (punch) {
+            sendPunch(uris, name, peer);
+            return;
+        }
         status.setText("准备发送 " + uris.size() + " 个文件…");
         sendBtn.setEnabled(false);
         startKeepAlive("正在发送 " + uris.size() + " 个文件");
@@ -495,6 +590,66 @@ public class MainActivity extends Activity {
                     sendBtn.setEnabled(true);
                     stopKeepAlive();
                     status.setText("发送失败：" + e.getMessage());
+                });
+            }
+        }).start();
+    }
+
+    private void startPunchReceiver() {
+        punchBtn.setEnabled(false);
+        final String name = currentName();
+        new Thread(() -> {
+            try {
+                File dir = new File(getExternalFilesDir(null), "received");
+                File key = new File(dir, "device.key");
+                File paired = new File(dir, "paired.json");
+                String id = Mobile.startPunchReceiver(name, dir.getAbsolutePath(),
+                        "wss://ft.cwlindean.cn/signal", key.getAbsolutePath(), paired.getAbsolutePath(),
+                        lanHint(), "");
+                ui.post(() -> {
+                    punchBtn.setEnabled(true);
+                    stopBtn.setEnabled(true);
+                    receiverRunning = true;
+                    punchInfo.setText("打洞接收中 设备 ID：" + id);
+                    status.setText("等待对方打洞…");
+                    startKeepAlive("打洞接收中");
+                });
+            } catch (Exception e) {
+                Log.e(TAG, "startPunchReceiver", e);
+                ui.post(() -> {
+                    punchBtn.setEnabled(true);
+                    toast("打洞启动失败：" + e.getMessage());
+                });
+            }
+        }).start();
+    }
+
+    private void sendPunch(List<Uri> uris, String name, String peerId) {
+        status.setText("打洞发送 " + uris.size() + " 个文件…");
+        punchSendBtn.setEnabled(false);
+        startKeepAlive("打洞发送中");
+        new Thread(() -> {
+            try {
+                File dir = new File(getExternalFilesDir(null), "received");
+                JSONArray paths = new JSONArray();
+                for (Uri u : uris) {
+                    paths.put(copyToCache(u));
+                }
+                String summary = Mobile.sendViaPunch("wss://ft.cwlindean.cn/signal",
+                        new File(dir, "device.key").getAbsolutePath(),
+                        new File(dir, "paired.json").getAbsolutePath(),
+                        peerId, name, paths.toString(), lanHint(), "");
+                ui.post(() -> {
+                    punchSendBtn.setEnabled(true);
+                    stopKeepAlive();
+                    status.setText("打洞发送结果：" + summary);
+                });
+            } catch (Exception e) {
+                Log.e(TAG, "sendPunch", e);
+                ui.post(() -> {
+                    punchSendBtn.setEnabled(true);
+                    stopKeepAlive();
+                    status.setText("打洞发送失败：" + e.getMessage());
                 });
             }
         }).start();

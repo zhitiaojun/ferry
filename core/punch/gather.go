@@ -32,6 +32,23 @@ type Gathered struct {
 // Gather collects LAN and STUN candidates for this host. STUN failures are
 // logged but do not fail the collection: LAN candidates still work.
 func Gather(ctx context.Context, stunServers []string, timeout time.Duration, log *logging.Logger) (*Gathered, error) {
+	return GatherHint(ctx, stunServers, timeout, nil, log)
+}
+
+// GatherHint is Gather for callers that cannot enumerate interfaces (Android:
+// netlink dump is denied). hint replaces the discovery.Eligible() call.
+func GatherHint(ctx context.Context, stunServers []string, timeout time.Duration, hint *discovery.Hint, log *logging.Logger) (*Gathered, error) {
+	return gather(ctx, stunServers, timeout, hint, true, log)
+}
+
+// GatherSTUNOnly collects only STUN candidates. Android cannot enumerate
+// interfaces when there is no Wi-Fi hint (netlink is denied), so cellular-only
+// devices use this instead of failing the whole gather.
+func GatherSTUNOnly(ctx context.Context, stunServers []string, timeout time.Duration, log *logging.Logger) (*Gathered, error) {
+	return gather(ctx, stunServers, timeout, nil, false, log)
+}
+
+func gather(ctx context.Context, stunServers []string, timeout time.Duration, hint *discovery.Hint, enumLAN bool, log *logging.Logger) (*Gathered, error) {
 	if timeout <= 0 {
 		timeout = time.Second
 	}
@@ -43,10 +60,18 @@ func Gather(ctx context.Context, stunServers []string, timeout time.Duration, lo
 
 	out := &Gathered{Conn: conn, Mapping: BehaviorUnknown}
 
-	ifaces, err := discovery.Eligible()
-	if err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("punch: list interfaces: %w", err)
+	var ifaces []discovery.Iface
+	if hint != nil {
+		if ifc, ok := hint.Resolve(); ok {
+			ifaces = []discovery.Iface{ifc}
+		}
+	} else if enumLAN {
+		var err error
+		ifaces, err = discovery.Eligible()
+		if err != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("punch: list interfaces: %w", err)
+		}
 	}
 	for _, ifc := range ifaces {
 		out.Candidates = append(out.Candidates, Candidate{

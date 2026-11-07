@@ -97,6 +97,9 @@ func (h Hint) iface() (Iface, bool) {
 	}, true
 }
 
+// Resolve exposes the hint as an Iface (used by candidate gathering).
+func (h Hint) Resolve() (Iface, bool) { return h.iface() }
+
 // Interfaces lists every up, non-loopback interface that has an IPv4 address.
 func Interfaces() ([]Iface, error) {
 	nifs, err := net.Interfaces()

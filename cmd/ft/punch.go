@@ -400,7 +400,7 @@ func recvViaPunch(ctx context.Context, o punchOptions) (summary, error) {
 		go g.Punch(punchCtx, peerLocal)
 
 		actx, cancelAccept := context.WithTimeout(ctx, 10*time.Second)
-		conn, err := q.Accept(actx)
+		conn, err := q.AcceptOrDial(actx, punch.Resolve(peerLocal))
 		cancelAccept()
 		if err != nil {
 			return summary{}, err

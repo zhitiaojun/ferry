@@ -183,6 +183,9 @@ func sendFile(s *session.Session, tid [16]byte, index uint32, path string, buf [
 			if err := waitAck(s, tid, index, uint64(off), cfg.timeout()); err != nil {
 				return zero, 0, 0, err
 			}
+			if cfg.OnProgress != nil {
+				cfg.OnProgress(off)
+			}
 		}
 		if rerr == io.EOF {
 			break

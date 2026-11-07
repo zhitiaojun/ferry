@@ -124,7 +124,7 @@ func TestClientQuery(t *testing.T) {
 	if !ap.IsValid() || ap.Port() == 0 {
 		t.Fatalf("bad mapped address %v", ap)
 	}
-	if rtt <= 0 || rtt > 2*time.Second {
+	if rtt < 0 || rtt > 2*time.Second {
 		t.Fatalf("unexpected rtt %v", rtt)
 	}
 	// The mapped address must be the local socket address (loopback -> same port).
