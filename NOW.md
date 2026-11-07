@@ -32,7 +32,11 @@
 - [x] M3 本地全链路：两台设备密钥经本机 `ft-server` 中继传 2.1MB/10MB，两端哈希一致（提交 `8059181`、`d7674a6`）。
 - [x] M3 BJ 部署（用户批准后）：`/opt/ft-server/ft-server` + systemd `ft-server`（`MemoryMax=256M`、`GOMEMLIMIT=160MiB`、只监听 `127.0.0.1:18790`）；`ft.cwlindean.cn` 站点（443 反代 `/signal`、`/relay`，复用通配符证书）；只 `nginx -t` + reload。运维回写已完成（`修改log.md` 2026-11-07 21:10）。
 - [x] M3-0 ESA 预检：公网 `healthz` 200、WSS 登录 250ms 级、Ping 38–41ms；**空闲 30s 即被断开**（keepalive=32/40s 均 ~30.3s EOF，28s 以下存活）→ 心跳取 15s；中继 2.1MB 6.1s、10MB 33.9s 哈希一致，`ft-server` 峰值内存 7.8MB（限额 256MB）。证据 `evidence/stage3/20261107-2118.log`、`20261107-2110-deploy.log`、`20261107-2136-esa-idle.log`（空闲 30s 断开与 15s 心跳 6 分钟存活）。
-- [ ] M3 剩余：扫码配对（`pair_begin` 载荷 + 已配对公钥表）、中继外层 TLS 1.3 钉定、客户端断线重连、VPN(T13) 实测、G3 报告。
+- [x] M3 配对：`ft pair --show/--add/--list` 生成与导入 `ftpair://v1/<device_id>/<pubkey>/<secret>?name=…`（`sha256(pub)==device_id` 校验），存 `~/.ft/paired.json`（0600）；6 位码 PAKE 按 protocol §8.6 留 M6。
+- [x] M3 中继内层 TLS 1.3 + 身份钉定：`core/identity/tls.go`（Ed25519 自签证书、`VerifyPeerCertificate` 比对已配对公钥、`MinVersion=TLS1.3`）；未配对对端被拒。2.1MB/10MB 经 BJ 中继双向哈希一致（10MB 19.9s，两端均有 `relay.tls pinned=true`）；证据 `evidence/stage3/20261107-2220-tls10m.log`。
+- [x] M3 断线重连：接收端信令断开后按 1→2→4→…→30s 指数退避重连（`signal.reconnect` 事件），重连后继续收；永久性错误（未配对、签名失败）不重试。证据 `evidence/stage3/20261107-2235-reconnect.log`（`M3_RECONNECT=PASS`）。
+- [x] M3 未授权拒绝：未配对设备发 `send_request` 时接收端拒绝（`peer … is not paired`），发送端收不到 `relay_ready`，接收目录无文件。证据 `evidence/stage3/20261107-2230-g3.log`（`G3_LOCAL=PASS`）。
+- [ ] M3 剩余：VPN(T13) 实测（需手机开 VPN，两端 TUN）与 G3 报告。
 
 可运行入口：`ft -version`、`ft whoami`、`ft send` / `ft recv`（`cmd/ft`；本机 TCP、LAN 发现、经 BJ 中继的 `--signal/--allow relay`）；`ft-server`（信令+中继）、`ft-probe`（登录与心跳探测）。`core/proto` 有金标向量单测，`core/session`、`core/transfer` 有单测与故障注入；`core/{identity,logging,pathmgr}` 已实现最小功能；`cmd/ft-desktop` 为投放小窗预研原型（非正式客户端）；`core/{punch,lanweb}` 仍为占位。
 
@@ -44,10 +48,8 @@
 
 M3 收尾（按 `PLAN.md` 任务卡）：
 
-1. 扫码配对：`ft pair` 生成 `ftpair://v1/<device_id>/<pubkey>/<secret>`，双方交换并保存已配对公钥表（6 位码 PAKE 按 protocol §8.6 留 M6）。
-2. 中继外层 TLS 1.3 + 证书钉定（身份密钥自签证书，已配对公钥校验）。
-3. 信令断线自动重连（指数退避），并补 T13（两端 TUN 开启）实测。
-4. 出 G3 报告；文档（MAP/RUNBOOK/README）同步。
+1. T13：手机与电脑同时开 VPN(TUN)，经 BJ 信令+中继传 2.1MB/10MB，记录两端 TUN 网卡、fake-ip、实际是否走中继；手机当前关机，等用户回来。
+2. 出 G3 报告（T2、T13、内存、未授权、其他站点、重连）；文档（MAP/RUNBOOK/README）收尾。
 
 ## 证据入口
 
@@ -57,7 +59,7 @@ M3 收尾（按 `PLAN.md` 任务卡）：
 | M1 本机 | `evidence/stage0/20261107-1835.log`（构建/测试/CLI×3 哈希/故障注入/续传/内存，`M1_EVIDENCE=PASS`） | 已有 |
 | M2 局域网 | `evidence/stage1/20261107-1909.log`（热点双向、哈希、TUN 过滤、端口 45321）、`20261107-1920.log`（学校网络：广播/组播被过滤、单播双向、4 轮哈希）、`20261107-2035.log`（投放小窗真实拖放）、`20261107-2040.log`（热点下手机→电脑 10MB） | 已有 |
 | M4 打洞 | 待建：`evidence/stage2/*.log` | 无 |
-| M3 中继 | `evidence/stage3/20261107-2118.log`（公网健康检查、probe、2.1MB/10MB 中继哈希、BJ 内存）、`20261107-2110-deploy.log`（systemd/站点/证书/端口状态） | 已有 |
+| M3 中继 | `evidence/stage3/20261107-2118.log`（公网健康检查、probe、2.1MB/10MB 中继哈希、BJ 内存）、`20261107-2110-deploy.log`（systemd/站点/证书/端口状态）、`20261107-2136-esa-idle.log`（ESA 空闲 30s 与 15s 心跳）、`20261107-2220-tls10m.log`（TLS1.3 钉定 + 10MB）、`20261107-2230-g3.log`（未配对拒绝 + 重连）、`20261107-2235-reconnect.log`（信令中断重连） | 已有 |
 
 规则：证据必须是带时间戳的原始输出（命令 + 输出），不放结论句；`evidence/` 建立前不要凭空引用。目录编号沿用原阶段号（stage2 = 打洞、stage3 = 中继），与里程碑顺序不同。
 

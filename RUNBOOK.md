@@ -86,15 +86,23 @@ nft list ruleset | head -40     # 确认本机是否有 INPUT 钩子（档案记
 ### E.1 客户端经中继使用（M3 当前形态）
 
 ```bash
-# 接收端：登录信令并等待 send_request（--allow relay 表示允许走服务器中继）
-.tools/bin/ft.exe recv --signal wss://ft.cwlindean.cn/signal --allow relay   --key ~/.ft/device.key --out ./recv/ --log recv.jsonl
+# 0) 互信：双方各自生成配对 URI，线下交换后导入（含对端公钥，防止中继冒充）
+.tools/bin/ft.exe pair --show --key ./recv.key --name phone    > phone.uri
+.tools/bin/ft.exe pair --show --key ./send.key --name laptop   > laptop.uri
+.tools/bin/ft.exe pair --add "$(cat laptop.uri)" --paired ./paired-recv.json
+.tools/bin/ft.exe pair --add "$(cat phone.uri)"  --paired ./paired-send.json
 
-# 发送端：先 whoami 取 device_id，再指定对端
-.tools/bin/ft.exe whoami --key ~/.ft/device.key
-.tools/bin/ft.exe send --signal wss://ft.cwlindean.cn/signal --allow relay   --key ~/.ft/device.key --to-id <对端 device_id> --file a.bin --log send.jsonl
+# 接收端：登录信令等待 send_request。接收端没有 --allow 参数（收到请求即接受）。
+.tools/bin/ft.exe recv --signal wss://ft.cwlindean.cn/signal   --key ./recv.key --paired ./paired-recv.json --out ./recv/ --log recv.jsonl
+
+# 发送端：先 whoami 取自己的 device_id；用 --to-id 指定对端
+.tools/bin/ft.exe whoami --key ./send.key
+.tools/bin/ft.exe send --signal wss://ft.cwlindean.cn/signal --allow relay   --key ./send.key --paired ./paired-send.json   --to-id <对端 device_id> --file a.bin --log send.jsonl
 ```
 
-验证：两端 JSON `"path":"relay"`，`bytes`/`chunks` 一致，接收目录内 SHA-256 与源相同；断开后重发应得到同样结果，证明中继可重复使用。
+验证：两端 JSON `"path":"relay"`、`bytes`/`chunks` 一致，接收目录内 SHA-256 与源相同；两端日志各有 `{"event":"relay.tls","pinned":true,"tls":"1.3"}`。未配对的对端会被拒绝（`peer … is not paired`），不会传输任何字节。
+
+信令断开时接收端按 1s→2s→4s…最多 30s 指数退避重连（日志 `signal.reconnect`），重连后可继续接收。
 
 注意：ESA 会把**空闲 30 s** 的 WSS 断开，客户端已按 15 s 心跳保活（`core/signaling.KeepaliveInterval`），不要再调大。
 

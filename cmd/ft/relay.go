@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -226,7 +227,50 @@ func sendViaRelay(ctx context.Context, o relayOptions) (summary, error) {
 
 // recvViaRelay logs in, auto-accepts the next transfer request, joins the relay
 // room and receives.
+// recvViaRelay waits for senders; when the signaling connection drops it
+// reconnects with an exponential backoff (1s..30s) until ctx expires.
 func recvViaRelay(ctx context.Context, o relayOptions) (summary, error) {
+	backoff := time.Second
+	for attempt := 1; ; attempt++ {
+		sum, err := recvOnce(ctx, o)
+		if err == nil || ctx.Err() != nil {
+			return sum, err
+		}
+		if !retryableRecvError(err) {
+			return sum, err
+		}
+		if o.Log != nil {
+			o.Log.Event("signal.reconnect", map[string]any{
+				"attempt": attempt, "backoff_ms": backoff.Milliseconds(), "error": err.Error(),
+			})
+		}
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return sum, err
+		}
+		if backoff < 15*time.Second {
+			backoff *= 2
+		}
+		if backoff > 30*time.Second {
+			backoff = 30 * time.Second
+		}
+	}
+}
+
+// retryableRecvError reports whether waiting again could help. Bad keys,
+// invalid pairings and protocol mistakes are permanent.
+func retryableRecvError(err error) bool {
+	msg := err.Error()
+	for _, s := range []string{"is not paired", "auth_failed", "signature", "invalid key"} {
+		if strings.Contains(msg, s) {
+			return false
+		}
+	}
+	return true
+}
+
+func recvOnce(ctx context.Context, o relayOptions) (summary, error) {
 	key, err := loadDeviceKey(o.KeyPath)
 	if err != nil {
 		return summary{}, err
@@ -272,6 +316,8 @@ func recvViaRelay(ctx context.Context, o relayOptions) (summary, error) {
 	case ready = <-readyCh:
 	case <-ctx.Done():
 		return summary{}, ctx.Err()
+	case <-client.Done():
+		return summary{}, fmt.Errorf("signaling connection dropped: %v", client.Err())
 	}
 	rc, err := relay.Dial(ctx, readyURL(o.SignalURL, ready))
 	if err != nil {
