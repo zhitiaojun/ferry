@@ -42,3 +42,18 @@ G0 判据之一「protocol.md 评审通过」需用户评审，重点为 `docs/s
 | M3 中继 | 待建：`evidence/stage3/*.log` | 无 |
 
 规则：证据必须是带时间戳的原始输出（命令 + 输出），不放结论句；`evidence/` 建立前不要凭空引用。目录编号沿用原阶段号（stage2 = 打洞、stage3 = 中继），与里程碑顺序不同。
+
+## 关卡 G0：申请验收（2026-11-07）
+
+1. 判据逐条对照（`PLAN.md` G0）
+
+| 判据 | 证据 | 结果 |
+|---|---|---|
+| `docs/spec/protocol.md` 评审通过 | `docs/spec/protocol.md` v1.0-draft；§12 列 5 项待定 | **待用户评审**（未通过前不开工 M1） |
+| `go build ./...` 通过 | `evidence/stage0/20261107-1800.log`：BUILD_OK / VET_OK / `go test ./...` 通过 | 通过 |
+| `MAP.md` 与实际目录一致 | `MAP.md` §1 与 `core/*`、`cmd/ft`、`cmd/ft-desktop`、`server`、`docs`、`android`、`web`、`tools`、`evidence`、`history` 逐一核对 | 通过 |
+
+2. “已通”要素：本关卡无网络链路结论，不涉及档位 / VPN 状态 / 回退排除。
+3. 未满足 / 待核实：`docs/spec/protocol.md` §12 五项——§6 全体超时数值（除 LAN 0.5 s）、`chunk_size` 上限 256 KiB、空文件是否支持、§8.3 信令字段、多文件是否流水线。
+4. 对决策 / 计划的建议：无（不改 DECISIONS / PLAN）。
+5. 文档更新：NOW、MAP、README 已更新；RUNBOOK、RISKS、infra-bj 本关卡无变化；BJ 无任何写入。提交：`7541c06`、`3e2c6da`、`719c8cc`。
