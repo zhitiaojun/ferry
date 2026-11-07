@@ -49,6 +49,8 @@ func main() {
 		os.Exit(runSend(os.Args[2:]))
 	case "recv":
 		os.Exit(runRecv(os.Args[2:]))
+	case "whoami":
+		os.Exit(runWhoami(os.Args[2:]))
 	case "help", "-h", "--help":
 		usage()
 		return
@@ -57,6 +59,22 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+}
+
+// runWhoami prints the signaling identity used by --signal (protocol §8.2).
+func runWhoami(args []string) int {
+	fs := flag.NewFlagSet("whoami", flag.ContinueOnError)
+	keyPath := fs.String("key", defaultKeyPath(), "device key file")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	k, err := loadDeviceKey(*keyPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ft whoami: %v\n", err)
+		return 1
+	}
+	fmt.Printf("device_id %s\npubkey %s\nkey %s\n", k.IDHex(), k.PubHex(), *keyPath)
+	return 0
 }
 
 func usage() {
@@ -121,6 +139,9 @@ func runSend(args []string) int {
 	logPath := fs.String("log", "", "JSONL log file")
 	timeout := fs.Duration("timeout", 30*time.Second, "per-frame wait")
 	chunk := fs.Int("chunk", int(proto.DefaultChunkSize), "chunk size in bytes")
+	signalURL := fs.String("signal", "", "signaling URL (wss://…/signal) to send via the relay")
+	toID := fs.String("to-id", "", "target device id (64 hex) for --signal")
+	keyPath := fs.String("key", defaultKeyPath(), "device key file for --signal")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -148,6 +169,23 @@ func runSend(args []string) int {
 		if err != nil {
 			return fail(logger, "discover", err)
 		}
+	}
+	if *signalURL != "" {
+		if *toID == "" {
+			fmt.Fprintln(os.Stderr, "ft send: --to-id is required with --signal")
+			return 2
+		}
+		cctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		sum, err := sendViaRelay(cctx, relayOptions{
+			SignalURL: *signalURL, KeyPath: *keyPath, Name: *name, ToID: *toID,
+			Files: files, Chunk: *chunk, Timeout: *timeout, Log: logger,
+		})
+		if err != nil {
+			return fail(logger, "relay", err)
+		}
+		printSummary(sum)
+		return 0
 	}
 	if target == "" {
 		fmt.Fprintln(os.Stderr, "ft send: --addr/--peer (or --discover) is required")
@@ -208,6 +246,8 @@ func runRecv(args []string) int {
 	logPath := fs.String("log", "", "JSONL log file")
 	timeout := fs.Duration("timeout", 30*time.Second, "per-frame wait")
 	chunk := fs.Int("chunk", int(proto.DefaultChunkSize), "chunk size in bytes")
+	signalURL := fs.String("signal", "", "signaling URL (wss://…/signal) to receive via the relay")
+	keyPath := fs.String("key", defaultKeyPath(), "device key file for --signal")
 	_ = fs.Bool("once", true, "accept one connection (kept for CLI stability)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -223,6 +263,20 @@ func runRecv(args []string) int {
 		return 1
 	}
 	defer closeLog()
+
+	if *signalURL != "" {
+		cctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		sum, err := recvViaRelay(cctx, relayOptions{
+			SignalURL: *signalURL, KeyPath: *keyPath, Name: *name, OutDir: *out,
+			Chunk: *chunk, Timeout: *timeout, Log: logger,
+		})
+		if err != nil {
+			return fail(logger, "relay", err)
+		}
+		printSummary(sum)
+		return 0
+	}
 
 	addr := *listen
 	if addr == "" {
@@ -312,10 +366,10 @@ func checkAllow(allow string) ([]string, int) {
 		switch p {
 		case "":
 			continue
-		case "lan":
+		case "lan", "relay":
 			paths = append(paths, p)
-		case "punch", "relay":
-			fmt.Fprintf(os.Stderr, "ft: path %q is not implemented in M1\n", p)
+		case "punch":
+			fmt.Fprintf(os.Stderr, "ft: path %q is not implemented yet\n", p)
 			return nil, 3
 		default:
 			fmt.Fprintf(os.Stderr, "ft: unknown path %q\n", p)
