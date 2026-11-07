@@ -183,7 +183,9 @@
 | `file_index` | u32 | 从哪个文件续传 |
 | `offset` | u64 | 该文件已确认的偏移 |
 
-M1 只定义格式、不实现；M7 实现时接收端必须先逐块复核已收数据，再发 RESUME。
+M1 起实现最小续传：接收端发现 `<name>.ftpart` 且大小 > 0 时，在 MANIFEST 之后、ACK(offset=0) 之前发 RESUME，`offset` 取该 part 文件的当前长度，随后从该偏移继续接收；发送端收到 RESUME 后从该偏移续传该文件（同一次 MANIFEST 内 `file_index` 之前的文件按已完成处理）。M1 不做逐块复核——若 part 内容已损坏，续传后整文件哈希校验会失败并回 `file_hash_mismatch`；逐块复核与跨 MANIFEST 的续传协商留待 M7。
+
+若 part 大小等于文件大小（数据已收完但未改名的极端情况），接收端发 RESUME 后直接进入 FIN 校验。
 
 ### 3.8 FIN（0x07）
 

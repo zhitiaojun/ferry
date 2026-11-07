@@ -17,9 +17,14 @@ filetransfer/
 ├─ PLAN.md              路线图与里程碑（直至完工）
 ├─ WORK_AGENT.md        work agent 执行规约（防偏航）
 ├─ go.mod               Go 模块 github.com/cwlindean/filetransfer
-├─ core/proto/          帧与消息编解码（M0 已实现，含金标向量单测）
-├─ core/{identity,discovery,signaling,punch,relay,session,transfer,pathmgr,lanweb}/  仅包说明，随后续里程碑填充
-├─ cmd/ft/              CLI（当前只有 -version）
+├─ core/proto/          帧与消息编解码（金标向量单测）
+├─ core/session/        HELLO 握手、ACK/PING/ERROR、连接封装（M1）
+├─ core/transfer/       发送/接收、分块校验、`.ftpart` 续传（M1）
+├─ core/pathmgr/        TCP Dial / Accept / Close（M1，仅 LAN）
+├─ core/logging/        JSONL 事件日志（M1）
+├─ core/identity/       device_id 派生（M1）
+├─ core/{discovery,signaling,punch,relay,lanweb}/  仅包说明，随后续里程碑填充
+├─ cmd/ft/              CLI：-version / send / recv（M1）
 ├─ cmd/ft-desktop/      Windows 客户端入口（占位）
 ├─ server/              ft-server（占位）
 ├─ docs/context/        专题：requirements / infra-bj / design / references / review
@@ -63,7 +68,7 @@ filetransfer/
 | 对象 | 版本 / 标识 | 来源 |
 |---|---|---|
 | 本文档集 | v0.5（2026-11-07：VPN / TUN 场景） | 本次任务 |
-| 代码 | M0 骨架：`core/proto` 可编译、金标向量单测通过；其余包仅占位 | `go.mod`、`evidence/stage0/` |
+| 代码 | M1：本机 TCP 互传可用（`ft send`/`ft recv`），`core/proto|session|transfer|pathmgr|logging|identity` 已实现；其余包占位 | `go.mod`、`evidence/stage0/20261107-1835.log` |
 | 开发机工具链 | Go 1.27.3 / JDK 17.0.21 / NDK r27c / gomobile（x/mobile v0.0.0-20261011034528） | `.tools/`（不入库） |
 | 运维档案 | 《服务器信息-BJ》2026-11-03 实测版 | 用户提供 |
 

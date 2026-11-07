@@ -1,0 +1,78 @@
+// Package transfer implements the M1 chunked transfer: MANIFEST, DATA with
+// per-chunk hashes, cumulative ACK, FIN with whole-file hashes.
+//
+// Memory use is bounded by the chunk size: files are streamed, never loaded
+// whole. Resume/path switching is layered on top by core/pathmgr (M1 only
+// defines the frames).
+package transfer
+
+import (
+	"crypto/rand"
+	"fmt"
+	"io"
+	"time"
+
+	"github.com/cwlindean/filetransfer/core/logging"
+	"github.com/cwlindean/filetransfer/core/proto"
+)
+
+// Config tunes a transfer. Zero values select the protocol defaults.
+type Config struct {
+	ChunkSize uint32
+	Timeout   time.Duration
+	Log       *logging.Logger
+}
+
+func (c Config) chunkSize() int {
+	if c.ChunkSize == 0 {
+		return int(proto.DefaultChunkSize)
+	}
+	return int(c.ChunkSize)
+}
+
+func (c Config) timeout() time.Duration {
+	if c.Timeout == 0 {
+		return sessionRecvTimeout
+	}
+	return c.Timeout
+}
+
+const sessionRecvTimeout = 30 * time.Second
+
+// Result summarises a completed transfer.
+type Result struct {
+	TransferID [16]byte
+	Files      []string
+	Bytes      int64
+	Chunks     int
+	Duration   time.Duration
+}
+
+func newTransferID() ([16]byte, error) {
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return id, fmt.Errorf("generate transfer id: %w", err)
+	}
+	return id, nil
+}
+
+// copyAll is io.Copy without the 32 KiB buffer surprise: the caller's buffer
+// stays the only large allocation.
+func copyAll(dst io.Writer, src io.Reader, buf []byte) (int64, error) {
+	var total int64
+	for {
+		n, err := src.Read(buf)
+		if n > 0 {
+			if _, werr := dst.Write(buf[:n]); werr != nil {
+				return total, werr
+			}
+			total += int64(n)
+		}
+		if err == io.EOF {
+			return total, nil
+		}
+		if err != nil {
+			return total, err
+		}
+	}
+}
