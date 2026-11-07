@@ -13,11 +13,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/cwlindean/filetransfer/core/discovery"
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/logging"
 	"github.com/cwlindean/filetransfer/core/pathmgr"
@@ -63,13 +66,17 @@ func usage() {
   ft version
 
 send options:
-  --allow lan|punch|relay   allowed paths (M1: only lan)
+  --discover                find the peer via LAN announcements instead of --addr
+  --to NAME                 with --discover: pick the device whose name contains NAME
+  --discover-timeout D      how long to wait for announcements (default 5s)
+  --allow lan|punch|relay   allowed paths (M2: only lan)
   --name NAME               device name shown to the peer (default: hostname)
   --log FILE                write JSONL events to FILE
   --timeout DURATION        per-frame wait (default 30s)
   --chunk BYTES             chunk size (default 65536)
 
 recv options:
+  --lan                     listen on all interfaces and announce on the LAN
   --out DIR                 output directory (created if missing)
   --once                    accept a single connection (default true)
   same --name/--log/--timeout/--chunk as send
@@ -90,6 +97,7 @@ func (f *fileList) Set(v string) error {
 type summary struct {
 	OK         bool     `json:"ok"`
 	Path       string   `json:"path"`
+	Topology   string   `json:"topology,omitempty"`
 	Peer       string   `json:"peer,omitempty"`
 	TransferID string   `json:"transfer_id,omitempty"`
 	Files      []string `json:"files,omitempty"`
@@ -104,6 +112,10 @@ func runSend(args []string) int {
 	var files fileList
 	fs.Var(&files, "file", "file to send (repeatable)")
 	addr := fs.String("addr", "", "peer address host:port")
+	peer := fs.String("peer", "", "peer address (alias of --addr)")
+	discover := fs.Bool("discover", false, "find the peer via LAN announcements")
+	to := fs.String("to", "", "with --discover: device name substring to pick")
+	discoverTimeout := fs.Duration("discover-timeout", 5*time.Second, "how long to wait for announcements")
 	allow := fs.String("allow", "lan", "allowed paths, comma separated")
 	name := fs.String("name", defaultName(), "device name")
 	logPath := fs.String("log", "", "JSONL log file")
@@ -116,11 +128,10 @@ func runSend(args []string) int {
 	if code != 0 {
 		return code
 	}
-	if *addr == "" || len(files) == 0 {
-		fmt.Fprintln(os.Stderr, "ft send: --addr and at least one --file are required")
+	if len(files) == 0 {
+		fmt.Fprintln(os.Stderr, "ft send: at least one --file is required")
 		return 2
 	}
-
 	logger, closeLog, err := openLog(*logPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ft send: %v\n", err)
@@ -128,7 +139,22 @@ func runSend(args []string) int {
 	}
 	defer closeLog()
 
-	p := pathmgr.NewTCPDial(*addr)
+	target := *addr
+	if target == "" {
+		target = *peer
+	}
+	if *discover {
+		target, err = discoverPeer(logger, *name, *to, *discoverTimeout)
+		if err != nil {
+			return fail(logger, "discover", err)
+		}
+	}
+	if target == "" {
+		fmt.Fprintln(os.Stderr, "ft send: --addr/--peer (or --discover) is required")
+		return 2
+	}
+
+	p := pathmgr.NewTCPDial(target)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	nc, err := p.Dial(ctx)
@@ -146,8 +172,9 @@ func runSend(args []string) int {
 	}
 	defer s.Close()
 
+	topology := topologyOf(target)
 	if logger != nil {
-		logger.Event("session.ready", map[string]any{"peer": s.Peer.Name, "path": paths[0]})
+		logger.Event("session.ready", map[string]any{"peer": s.Peer.Name, "path": paths[0], "topology": topology, "addr": target})
 	}
 
 	res, err := transfer.Send(s, files, transfer.Config{
@@ -161,6 +188,7 @@ func runSend(args []string) int {
 	printSummary(summary{
 		OK:         true,
 		Path:       paths[0],
+		Topology:   topology,
 		Peer:       s.Peer.Name,
 		TransferID: fmt.Sprintf("%x", res.TransferID),
 		Files:      res.Files,
@@ -173,7 +201,8 @@ func runSend(args []string) int {
 
 func runRecv(args []string) int {
 	fs := flag.NewFlagSet("recv", flag.ContinueOnError)
-	listen := fs.String("listen", "127.0.0.1:0", "listen address host:port")
+	listen := fs.String("listen", "", "listen address host:port")
+	lan := fs.Bool("lan", false, "listen on all interfaces and announce on the LAN")
 	out := fs.String("out", ".", "output directory")
 	name := fs.String("name", defaultName(), "device name")
 	logPath := fs.String("log", "", "JSONL log file")
@@ -195,7 +224,15 @@ func runRecv(args []string) int {
 	}
 	defer closeLog()
 
-	p, err := pathmgr.NewTCPListener(*listen)
+	addr := *listen
+	if addr == "" {
+		if *lan {
+			addr = "0.0.0.0:0"
+		} else {
+			addr = "127.0.0.1:0"
+		}
+	}
+	p, err := pathmgr.NewTCPListener(addr)
 	if err != nil {
 		return fail(logger, "listen", err)
 	}
@@ -203,9 +240,23 @@ func runRecv(args []string) int {
 
 	// The address line is how the evidence script discovers an ephemeral port.
 	if logger != nil {
-		logger.Event("path.listen", map[string]any{"addr": p.Addr(), "path": p.Name()})
+		logger.Event("path.listen", map[string]any{"addr": p.Addr(), "path": p.Name(), "lan": *lan})
 	}
 	fmt.Fprintf(os.Stderr, "listening %s\n", p.Addr())
+	// Optional LAN announcement: peers find this receiver without --addr.
+	announceCtx, stopAnnounce := context.WithCancel(context.Background())
+	defer stopAnnounce()
+	if *lan {
+		tcpPort := listenerPort(p.Addr())
+		go func() {
+			_ = discovery.Announce(announceCtx, discovery.Config{
+				DeviceID: identity.DeviceID(*name),
+				Name:     *name,
+				Port:     tcpPort,
+				Log:      logger,
+			})
+		}()
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -213,6 +264,7 @@ func runRecv(args []string) int {
 	if err != nil {
 		return fail(logger, "accept", err)
 	}
+	stopAnnounce()
 
 	s, err := session.Accept(nc, session.Params{
 		DeviceID:     identity.DeviceID(*name),
@@ -225,8 +277,9 @@ func runRecv(args []string) int {
 	}
 	defer s.Close()
 
+	topology := topologyOfRemote(nc)
 	if logger != nil {
-		logger.Event("session.ready", map[string]any{"peer": s.Peer.Name, "path": p.Name()})
+		logger.Event("session.ready", map[string]any{"peer": s.Peer.Name, "path": p.Name(), "topology": topology, "addr": nc.RemoteAddr().String()})
 	}
 
 	res, err := transfer.Receive(s, *out, transfer.Config{
@@ -240,6 +293,7 @@ func runRecv(args []string) int {
 	printSummary(summary{
 		OK:         true,
 		Path:       p.Name(),
+		Topology:   topology,
 		Peer:       s.Peer.Name,
 		TransferID: fmt.Sprintf("%x", res.TransferID),
 		Files:      res.Files,
@@ -310,3 +364,87 @@ func defaultName() string {
 }
 
 var _ io.Writer = os.Stderr
+
+// listenerPort extracts the TCP port from a listen address.
+func listenerPort(addr string) int {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// discoverPeer waits for a LAN announcement and returns its TCP address.
+func discoverPeer(logger *logging.Logger, name, want string, timeout time.Duration) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout+time.Second)
+	defer cancel()
+	l, err := discovery.Listen(discovery.Config{
+		DeviceID: identity.DeviceID(name),
+		Name:     name,
+		Log:      logger,
+	})
+	if err != nil {
+		return "", err
+	}
+	defer l.Close()
+	go func() { _ = l.Run(ctx) }()
+
+	want = strings.ToLower(strings.TrimSpace(want))
+	dev, err := l.WaitFor(func(d discovery.Device) bool {
+		return want == "" || strings.Contains(strings.ToLower(d.Name), want)
+	}, timeout)
+	if err != nil {
+		seen := make([]string, 0, 4)
+		for _, d := range l.Devices() {
+			seen = append(seen, fmt.Sprintf("%s@%s", d.Name, d.TCPAddr))
+		}
+		if len(seen) == 0 {
+			return "", fmt.Errorf("no device announced itself within %s", timeout)
+		}
+		return "", fmt.Errorf("no device matched %q within %s (seen: %s)", want, timeout, strings.Join(seen, ", "))
+	}
+	if logger != nil {
+		logger.Event("discovery.found", map[string]any{"peer": dev.Name, "addr": dev.TCPAddr, "iface": dev.Iface})
+	}
+	return dev.TCPAddr, nil
+}
+
+// topologyOf classifies an outbound peer address for diagnostics (D24/R6):
+// "local" for loopback, "hotspot" when the peer is our default gateway (the
+// phone that hosts the hotspot), otherwise "lan".
+func topologyOf(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return ""
+	}
+	return classifyIP(net.ParseIP(host))
+}
+
+// topologyOfRemote classifies the inbound peer seen on nc.
+func topologyOfRemote(nc net.Conn) string {
+	if nc == nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(nc.RemoteAddr().String())
+	if err != nil {
+		return ""
+	}
+	return classifyIP(net.ParseIP(host))
+}
+
+func classifyIP(ip net.IP) string {
+	if ip == nil {
+		return ""
+	}
+	if ip.IsLoopback() {
+		return "local"
+	}
+	if gw := discovery.GatewayIPv4(); gw != nil && gw.Equal(ip) {
+		return "hotspot"
+	}
+	return "lan"
+}

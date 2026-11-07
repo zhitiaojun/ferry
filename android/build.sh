@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Build the minimal M2 Android APK without Gradle.
+#
+#   ./android/build.sh
+#
+# Output: android/build/ft-debug.apk (arm64-v8a only).
+# Requires the local toolchain under .tools/ (JDK 17, Android SDK 34,
+# NDK r27c, Go, gomobile). Native tools get Windows-style paths (cygpath -m).
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+TOOLS=$ROOT/.tools
+JDK=$TOOLS/jdk/jdk-17.0.21+9
+SDK=$TOOLS/android-sdk
+BT=$SDK/build-tools/34.0.0
+AJAR=$SDK/platforms/android-34/android.jar
+OUT=$ROOT/android/build
+WORK=$TOOLS/android-build
+
+# Windows path (forward slashes) for native tools: javac, java, aapt2, zip...
+m() { cygpath -m "$1"; }
+
+export GOCACHE=$TOOLS/gocache GOPATH=$TOOLS/gopath GOTMPDIR=$TOOLS/tmp GOFLAGS=-buildvcs=false
+export ANDROID_HOME=$SDK ANDROID_NDK_HOME=$SDK/ndk/27.2.12479018 JAVA_HOME=$JDK
+export TMP=$TOOLS/tmp TEMP=$TOOLS/tmp
+export PATH="$TOOLS/go/bin:$TOOLS/gopath/bin:$JDK/bin:$PATH"
+
+echo "== go build =="
+(cd "$ROOT" && go build ./...)
+
+echo "== gomobile bind =="
+mkdir -p "$OUT"
+(cd "$ROOT" && gomobile.exe bind -target=android/arm64 -androidapi 21 -o android/ft.aar ./core/mobile)
+
+echo "== extract AAR =="
+rm -rf "$WORK"
+mkdir -p "$WORK/aar" "$WORK/classes" "$WORK/dex"
+(cd "$WORK/aar" && unzip -q -o "$ROOT/android/ft.aar" classes.jar)
+(cd "$WORK" && unzip -q -o "$ROOT/android/ft.aar" jni/arm64-v8a/libgojni.so)
+mkdir -p "$WORK/lib/arm64-v8a"
+cp "$WORK/jni/arm64-v8a/libgojni.so" "$WORK/lib/arm64-v8a/libgojni.so"
+
+echo "== javac =="
+cd "$ROOT"
+find android/src -name '*.java' >"$WORK/sources.txt"
+"$JDK/bin/javac" -encoding UTF-8 --release 8 -Xlint:-options \
+  -classpath "$(m "$AJAR");$(m "$WORK/aar/classes.jar")" \
+  -d "$(m "$WORK/classes")" @"$(m "$WORK/sources.txt")"
+
+echo "== d8 (dex) =="
+find .tools/android-build/classes -name '*.class' >"$WORK/classes.txt"
+"$JDK/bin/java" -cp "$(m "$BT/lib/d8.jar")" com.android.tools.r8.D8 \
+  --min-api 21 --lib "$(m "$AJAR")" --classpath "$(m "$WORK/aar/classes.jar")" \
+  --output "$(m "$WORK/dex")" @"$(m "$WORK/classes.txt")"
+
+echo "== aapt2 link =="
+"$BT/aapt2.exe" link -o "$(m "$WORK/base.apk")" \
+  --manifest "$(m "$ROOT/android/AndroidManifest.xml")" \
+  -I "$(m "$AJAR")" --min-sdk-version 21 --target-sdk-version 34
+
+echo "== package =="
+cp "$WORK/dex/classes.dex" "$WORK/classes.dex"
+(cd "$WORK" && python "$ROOT/android/zipadd.py" base.apk classes.dex=classes.dex lib/arm64-v8a/libgojni.so=lib/arm64-v8a/libgojni.so)
+
+echo "== zipalign =="
+"$BT/zipalign.exe" -f -p 4 "$(m "$WORK/base.apk")" "$(m "$WORK/aligned.apk")"
+
+echo "== key =="
+KS=$TOOLS/android-debug.keystore
+if [ ! -f "$KS" ]; then
+  "$JDK/bin/keytool" -genkeypair -keystore "$(m "$KS")" -alias androiddebugkey \
+    -keyalg RSA -keysize 2048 -validity 10000 \
+    -storepass android -keypass android \
+    -dname "CN=ft Debug,O=ft,C=CN" >/dev/null 2>&1
+fi
+
+echo "== sign =="
+"$JDK/bin/java" -jar "$(m "$BT/lib/apksigner.jar")" sign \
+  --ks "$(m "$KS")" --ks-key-alias androiddebugkey \
+  --ks-pass pass:android --key-pass pass:android \
+  --out "$(m "$OUT/ft-debug.apk")" "$(m "$WORK/aligned.apk")"
+
+"$JDK/bin/java" -jar "$(m "$BT/lib/apksigner.jar")" verify --print-certs "$(m "$OUT/ft-debug.apk")" | head -4
+
+echo
+echo "APK: $OUT/ft-debug.apk"
+ls -l "$OUT/ft-debug.apk"
