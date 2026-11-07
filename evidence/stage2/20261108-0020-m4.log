@@ -1,0 +1,87 @@
+
+=== env ===
+$ date -Iseconds
+2026-11-08T00:18:57+08:00
+[exit=0]
+$ '/c/project/filetransfer/.tools/go/bin/go.exe' version
+go version go1.27.3 windows/amd64
+[exit=0]
+$ go env GOOS GOARCH 2>/dev/null || true
+[exit=0]
+
+=== pc network ===
+$ /c/Windows/System32/ipconfig.exe | sed -n '/WLAN/,+6p'
+无线局域网适配器 WLAN 2:
+
+   媒体状态  . . . . . . . . . . . . : 媒体已断开连接
+   连接特定的 DNS 后缀 . . . . . . . : 
+
+无线局域网适配器 WLAN 5:
+
+无线局域网适配器 WLAN:
+
+   连接特定的 DNS 后缀 . . . . . . . : 
+   IPv4 地址 . . . . . . . . . . . . : 10.201.2.127
+   子网掩码  . . . . . . . . . . . . : 255.255.128.0
+   默认网关. . . . . . . . . . . . . : 10.201.0.1
+
+[exit=0]
+$ /c/Windows/System32/route.exe print -4 | grep -E '0.0.0.0 +0.0.0.0' | head -3
+          0.0.0.0          0.0.0.0       10.201.0.1     10.201.2.127     35
+[exit=0]
+$ /c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command "Get-NetIPAddress -AddressFamily IPv6 | Where-Object {\$_.IPAddress -notlike 'fe80*' -and \$_.PrefixOrigin -ne 'WellKnown'} | Select-Object InterfaceAlias,IPAddress | Format-Table -AutoSize"
+[exit=0]
+
+=== stun (public) ===
+$ python tools/stunprobe.py 123.57.253.208:40000 123.57.253.208:40001
+123.57.253.208:40000 -> ('59.45.22.140', 52450) (txn 5cd37a9c501e000f815fbfd5, 48 bytes)
+123.57.253.208:40001 -> ('59.45.22.140', 52451) (txn 35a0d52b7c0f84aab2a675e5, 48 bytes)
+mapping: symmetric (port changes per destination)
+[exit=0]
+
+=== phone ===
+$ adb shell getprop ro.product.model; adb shell getprop ro.build.version.sdk
+M332BF
+37
+[exit=0]
+$ adb shell ip -o addr show | grep -E 'wlan|rmnet|tun' | awk '{print $2, $4}'
+rmnet_data1 240e:50c:9d00:4480:b8ee:c8ff:fe10:e09f/64
+rmnet_data1 fe80::b8ee:c8ff:fe10:e09f/64
+rmnet_data0 fe80::240c:efff:fee0:acf0/64
+rmnet_data3 10.21.130.7/32
+rmnet_data3 240e:40e:9d02:55ad:2097:99ff:fe6a:2c3e/64
+rmnet_data3 fe80::2097:99ff:fe6a:2c3e/64
+tun0 198.51.100.1/30
+tun0 fe80::9b6c:e93d:8114:e2fd/64
+[exit=0]
+$ adb shell ip route get 123.57.253.208 | head -1
+123.57.253.208 dev tun0 table 1047 src 198.51.100.1 uid 2000 
+[exit=0]
+
+=== local punch (loopback candidates) ===
+{"ok":true,"path":"punch","peer":"eabd863d0057","transfer_id":"e27ed53c3a56cc43a4ec577531894d9c","files":["test-2.1m.bin"],"bytes":2100000,"chunks":33,"duration_ms":29}
+d-send.json --to-id a7fd14b608f4041fb9a546d634e93790f16c30bb4c5290120d24a1272393b859 --file .tools/testdata/test-2.1m.bin --log .tools/m4ev-send.jsonl
+{"ok":true,"path":"punch","peer":"a7fd14b608f4","transfer_id":"e27ed53c3a56cc43a4ec577531894d9c","files":["test-2.1m.bin"],"bytes":2100000,"chunks":33,"duration_ms":30}
+[exit=0]
+$ sha256sum .tools/testdata/test-2.1m.bin .tools/m4ev-recv/test-2.1m.bin
+58bbe9ba2521cf5e457db4bfd7cdb5c79734e3ead7f88727e563dc44de735a10 *.tools/testdata/test-2.1m.bin
+58bbe9ba2521cf5e457db4bfd7cdb5c79734e3ead7f88727e563dc44de735a10 *.tools/m4ev-recv/test-2.1m.bin
+[exit=0]
+$ tail -3 .tools/m4ev-recv.jsonl
+{"event":"path.selected","path":"punch","peer":"eabd863d0057","ts":"2026-11-07T16:19:02.6230155Z"}
+{"bytes":2100000,"chunk_size":65536,"event":"transfer.accept","files":1,"peer":"HyperX","resume_file":0,"resume_from":0,"ts":"2026-11-07T16:19:02.6262756Z"}
+{"bytes":2100000,"chunks":33,"duration_ms":29,"event":"transfer.done","files":1,"transfer_id":"e27ed53c3a56cc43a4ec577531894d9c","ts":"2026-11-07T16:19:02.6527172Z"}
+[exit=0]
+
+=== recent real-network attempts ===
+$ tail -4 .tools/t6c-recv.jsonl 2>/dev/null || true
+{"candidates":["lan=10.201.2.127:61567","stun=59.45.22.140:61567"],"event":"punch.gathered","mapping":"cone","ts":"2026-11-07T16:17:40.8499636Z"}
+{"device_id":"91695a021bdb36720c30ccd36327f2adb9d2e6997d48fbd49cc166e8e72c8bf7","event":"signal.login","peers":0,"server_time":1794068264063,"ts":"2026-11-07T16:17:41.0756238Z"}
+{"device_id":"91695a021bdb","event":"race.ready","ts":"2026-11-07T16:17:41.0756238Z"}
+[exit=0]
+$ tail -2 .tools/punch-server.jsonl 2>/dev/null || true
+{"device_id":"eabd863d0057","event":"server.login","online":2,"ts":"2026-11-07T16:19:02.6174561Z"}
+{"device_id":"eabd863d0057","event":"server.logout","online":1,"ts":"2026-11-07T16:19:02.6537448Z"}
+[exit=0]
+
+=== done ===

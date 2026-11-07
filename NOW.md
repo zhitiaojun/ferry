@@ -43,7 +43,9 @@
 - [x] M4 竞速原语：`core/pathmgr.Race`（并发尝试，首个成功者胜出，其余经 context 取消并等待退出；全败时汇总错误），单测覆盖首胜/全败/已取消/空列表。
 - [x] M4 IPv6 环境核查：本机当前只有链路本地地址（`fe80::` 于 WLAN/以太网，PrefixOrigin=WellKnown），**没有全局 IPv6**；校园网/热点是否下发全局 v6 待手机侧确认，若无则按“环境不具备”记录，不伪造直连结果。
 - [x] M4 路径竞速：`--punch --allow punch,relay` 时 punch 与 relay 在 t=0 并发（`pathmgr.Race`，先完成会话握手者胜，败者取消，日志 `path.selected`）；证据 `evidence/stage2/20261107-2326-race.log`：case A 10MB punch 96ms、case B（`FT_PUNCH_BLOCK=1` 模拟打洞失败）relay 28ms，两端路径一致、哈希一致，`PATH_RACE=PASS`。
-- [ ] M4 剩余：真实 NAT 实测（手机↔电脑热点/校园网，记录候选、NAT 类型、最终档位）、路径竞速与 0.5s/3s 升级降级、IPv6 直连与 PMTUD 复核、G4 报告。
+- [x] M4 T5 跨 NAT 打洞（电脑→手机）：手机走蜂窝（VPN 开）时电脑用手机 STUN 候选 `123.244.181.175:34098` 打通，2.1MB `2069ms`、10MB `14938ms`，手机端 sha256 与源一致；手机 `mapping=cone`。
+- [ ] M4 T6 手机→电脑：手机 VPN 开着时其 STUN 候选是 VPN 出口，电脑回拨被丢，`punch.Connect` 25s 超时；待手机关闭 VPN 后重测（对称握手 `core/punch/connect.go`：两侧都监听、按设备 ID 分工先拨/先听，8s 后双方都拨）。
+- [ ] M4 剩余：竞速升级/降级（0.5s/3s 判据）与中途切流的范围确认、IPv6 直连与 PMTUD 复核（本机无全局 v6，环境不具备需如实记录）、G4 报告。
 
 可运行入口：`ft -version`、`ft whoami`、`ft send` / `ft recv`（`cmd/ft`；本机 TCP、LAN 发现、经 BJ 中继的 `--signal/--allow relay`、UDP 打洞的 `--signal --punch`）；`ft-server`（信令+中继+STUN）、`ft-probe`（登录/心跳探测；`-gather` 打印打洞候选与 NAT 行为）。`core/proto` 有金标向量单测，`core/session`、`core/transfer`、`core/punch`、`core/pathmgr` 有单测；`cmd/ft-desktop` 为投放小窗预研原型（非正式客户端）；`core/lanweb` 仍为占位。
 
@@ -82,6 +84,7 @@ M4（按 `PLAN.md` 任务卡）：
 | M4 STUN | `evidence/stage2/20261107-2247-stun.log`（BJ 端口、unit、公网映射与 NAT 判定） | 已有 |
 | M4 打洞 | `evidence/stage2/20261107-2318-punch.log`（本机 punch 2.1MB/10MB 哈希一致） | 已有 |
 | M4 竞速 | `evidence/stage2/20261107-2326-race.log`（punch 胜出 / 打洞失败时 relay 胜出，两端路径与哈希一致） | 已有 |
+| M4 环境与真机 | `evidence/stage2/20261108-0020-m4.log`（PC 网络/手机网络与 VPN、STUN 探测、本机 punch、真机尝试记录；`tools/m4-evidence.sh` 可重跑） | 已有 |
 | M3 中继 | `evidence/stage3/20261107-2118.log`（公网健康检查、probe、2.1MB/10MB 中继哈希、BJ 内存）、`20261107-2110-deploy.log`（systemd/站点/证书/端口状态）、`20261107-2136-esa-idle.log`（ESA 空闲 30s 与 15s 心跳）、`20261107-2220-tls10m.log`（TLS1.3 钉定 + 10MB）、`20261107-2230-g3.log`（未配对拒绝 + 重连）、`20261107-2235-reconnect.log`（信令中断重连）、`20261107-2240-t13.log`（两端 TUN + fake-ip + 中继 2.1MB/10MB + 重启重连） | 已有 |
 
 规则：证据必须是带时间戳的原始输出（命令 + 输出），不放结论句；`evidence/` 建立前不要凭空引用。目录编号沿用原阶段号（stage2 = 打洞、stage3 = 中继），与里程碑顺序不同。
