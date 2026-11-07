@@ -54,6 +54,8 @@ public class MainActivity extends Activity {
     private Button discoverBtn;
     private Button sendBtn;
     private Button relayBtn;
+    private Button webBtn;
+    private TextView webInfo;
     private TextView relayInfo;
     private EditText pairField;
     private Button punchBtn;
@@ -186,6 +188,18 @@ public class MainActivity extends Activity {
         receiverRow.addView(relayBtn);
         receiverRow.addView(punchBtn);
         root.addView(receiverRow);
+
+        LinearLayout webRow = new LinearLayout(this);
+        webRow.setOrientation(LinearLayout.HORIZONTAL);
+        webBtn = new Button(this);
+        webBtn.setText("网页分享");
+        webBtn.setOnClickListener(v -> startWebShare());
+        webInfo = new TextView(this);
+        webInfo.setTextSize(12);
+        webInfo.setText("网页分享：未启动（同一 Wi-Fi 用浏览器打开）");
+        webRow.addView(webBtn);
+        root.addView(webRow);
+        root.addView(webInfo);
 
         relayInfo = new TextView(this);
         relayInfo.setTextSize(13);
@@ -381,12 +395,40 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    private void startWebShare() {
+        webBtn.setEnabled(false);
+        new Thread(() -> {
+            try {
+                File dir = new File(getExternalFilesDir(null), "received");
+                String info = Mobile.startWebShare(dir.getAbsolutePath(), 0L, lanHint());
+                String url = info;
+                try {
+                    url = new org.json.JSONObject(info).optString("url", info);
+                } catch (Exception ignored) {
+                }
+                final String shown = url;
+                ui.post(() -> {
+                    webBtn.setEnabled(true);
+                    webInfo.setText("网页分享中（同一 Wi-Fi）：\n" + shown);
+                    status.setText("浏览器打开：" + shown);
+                });
+            } catch (Exception e) {
+                Log.e(TAG, "startWebShare", e);
+                ui.post(() -> {
+                    webBtn.setEnabled(true);
+                    toast("网页分享失败：" + e.getMessage());
+                });
+            }
+        }).start();
+    }
+
     private void stopReceiver() {
         new Thread(() -> {
             try {
                 Mobile.stopReceiver();
                 Mobile.stopRelayReceiver();
                 Mobile.stopPunchReceiver();
+                Mobile.stopWebShare();
             } catch (Exception e) {
                 Log.e(TAG, "stopReceiver", e);
             }

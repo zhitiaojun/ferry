@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/cwlindean/filetransfer/core/discovery"
-	qrcode "github.com/skip2/go-qrcode"
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/lanweb"
 	"github.com/cwlindean/filetransfer/core/logging"
@@ -29,6 +28,7 @@ import (
 	"github.com/cwlindean/filetransfer/core/proto"
 	"github.com/cwlindean/filetransfer/core/session"
 	"github.com/cwlindean/filetransfer/core/transfer"
+	qrcode "github.com/skip2/go-qrcode"
 )
 
 var version = "0.0.0-dev"
@@ -337,7 +337,6 @@ func runRecv(args []string) int {
 		}
 		return 0
 	}
-
 
 	if *signalURL != "" {
 		cctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
