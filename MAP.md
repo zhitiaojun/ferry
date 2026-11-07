@@ -27,7 +27,7 @@ filetransfer/
 ├─ core/mobile/         gomobile 绑定面（StartReceiver/Discover/SendFiles，M2）
 ├─ core/{signaling,punch,relay,lanweb}/  仅包说明，随后续里程碑填充
 ├─ cmd/ft/              CLI：-version / send / recv（M1）
-├─ cmd/ft-desktop/      Windows 客户端入口（占位）
+├─ cmd/ft-desktop/      投放小窗预研原型（Win32 拖放，M2）
 ├─ server/              ft-server（占位）
 ├─ docs/context/        专题：requirements / infra-bj / design / references / review
 ├─ docs/spec/           protocol.md + vectors/（金标向量）

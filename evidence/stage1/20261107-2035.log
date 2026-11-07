@@ -1,0 +1,27 @@
+[2026-11-07T20:32:00+08:00] 投放小窗预研实测（Windows 11 / 2560x1600 / 150% 缩放）
+[2026-11-07T20:32:00+08:00] $ .tools/go/bin/go.exe version
+go version go1.27.3 windows/amd64
+[2026-11-07T20:32:00+08:00] $ .tools/go/bin/gofmt.exe -l cmd/ft-desktop
+(空输出)
+[2026-11-07T20:32:00+08:00] $ .tools/go/bin/go.exe vet ./cmd/ft-desktop
+(空输出，exit 0)
+[2026-11-07T20:32:00+08:00] $ .tools/go/bin/go.exe build -o .tools/bin/ft-desktop.exe ./cmd/ft-desktop
+(exit 0)
+[2026-11-07T20:32:00+08:00] $ sha256sum .tools/bin/ft-desktop.exe
+4c10539aeb99da4dbaaf9f04ef7a39e3b8b9460abacc13f3ef43f0d3dbd15bb3  .tools/bin/ft-desktop.exe (4,489,216 B)
+[2026-11-07T20:32:22+08:00] $ .tools/bin/ft-desktop.exe -pos 1,2,3
+ft-desktop: invalid -pos "1,2,3": want X,Y, e.g. 100,200 (two numbers separated by ',')
+exit=2
+
+[2026-11-07T20:35:16+08:00] $ .tools/bin/ft-desktop.exe -pos 1000,560 -size 420x160 -log evidence/stage1/dropwindow.jsonl
+[2026-11-07T20:35:16+08:00] 窗口检查（PowerShell user32）：FindWindowW("ftDropWindow", ...) 命中，rect=1000,560,1420,720（420x160），IsWindowVisible=True
+[2026-11-07T20:35:16+08:00] 截图 .tools/shots/drop-live.png sha256 24d8311dccd686848aa0ac24cd1b86cd3c8b8734d092c01095e250ff6c8819d3
+
+[2026-11-07T20:35:38+08:00] 用户从资源管理器拖入 C:\project\filetransfer\.tools\testdata\test-2.1m.bin（真实拖放，非合成）
+[2026-11-07T20:35:38+08:00] 程序 stdout 与 evidence/stage1/dropwindow.jsonl：
+{"event":"drop","ts":"2026-11-07T20:35:38+08:00","files":["C:\\project\\filetransfer\\.tools\\testdata\\test-2.1m.bin"]}
+[2026-11-07T20:36:29+08:00] 窗口标题（GetWindowTextW）= "收到 1 个文件"；截图 .tools/shots/drop-done.png sha256 7c9fee48c392b0e13f9cce62e013fdbdee2e6e1f4bf0eae6b4011009590da343
+[2026-11-07T20:36:29+08:00] $ sha256sum evidence/stage1/dropwindow.jsonl
+d27ced4328ca7f5d88c5e05b8056e5b84bfcdb35b5c24d862adc28760b6255d3  evidence/stage1/dropwindow.jsonl
+
+[2026-11-07T20:36:40+08:00] 结论：真实资源管理器拖放在 Windows 11 桌面触发 WM_DROPFILES，路径完整且 JSON 转义正确；窗口位置可由 -pos 指定（默认右下角会被桌面悬浮窗遮挡）。原型关闭（taskkill），未常驻。

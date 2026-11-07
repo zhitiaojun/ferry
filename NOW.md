@@ -4,7 +4,7 @@
 
 ## 当前目标
 
-以“我的手机 ↔ 我的电脑”之间的最佳传输体验为主、兼顾陌生设备（D12），按 `PLAN.md` 的 M0–M9 推进至 v1.0。当前处于 **M2 局域网 + 安卓最小 APK**，由 work agent 执行（D25，规约见 `WORK_AGENT.md`）：M0（G0 已关闭）、M1（代码与 G1 证据完成）之后，M2 的发现、LAN 直连、最小 APK、热点双向传输与学校网络实测均已完成；剩下安卓前台服务与投放小窗预研。
+以“我的手机 ↔ 我的电脑”之间的最佳传输体验为主、兼顾陌生设备（D12），按 `PLAN.md` 的 M0–M9 推进至 v1.0。当前处于 **M2 局域网 + 安卓最小 APK**，由 work agent 执行（D25，规约见 `WORK_AGENT.md`）：M0（G0 已关闭）、M1（G1 证据齐备）之后，M2 的发现、LAN 直连、最小 APK、热点双向传输、学校网络实测、安卓前台服务与投放小窗预研均已完成；待出 G2 报告。
 
 ## 进展（截至 2026-11-07）
 
@@ -27,10 +27,10 @@
 - [x] M2 学校网络实测（T1）：2026-11-07 19:20–19:25，DLUT-PanJin（PC 10.201.2.127 / 手机 10.201.2.123，同一 /24）。广播与组播发现**双向均被 AP 过滤**（PC 公告 8s、手机公告 8s 均搜不到；PC 定向广播探针 3 次、手机 0/3 收到），但**单播 TCP 双向可达**：手机→PC 2.1MB×2、10MB 与 PC→手机 2.1MB 全部哈希一致、`topology=lan`。记录 `evidence/stage1/20261107-1920.log`；结论已写入 `RISKS.md` R6（LAN 直连依赖手动/信令单播地址）。
 - [x] M2 VPN(TUN) 诊断（T10）：热点与学校网络两次实测均在 PC 开 Meta TUN（198.18.0.1/30 Up）时完成，LAN 直连成功、`discovery.announce.start.interfaces` 只含物理网卡（Meta 被过滤）。手机侧无 VPN。
 - [x] M2 安卓前台服务（M2-5）：`TransferService`（`foregroundServiceType=dataSync`、通知渠道 `ft-transfer`、未决通知），接收与发送期间启动、停止时退出；按 HOME 退到后台后 PC→手机 10MB 仍完成且哈希一致（`evidence/stage1/20261107-1920.log`）。`targetSdk=34` 在 Android 17 上未触发本地网络权限拦截（实测）；若日后升到 SDK 36+ 需复核 `LOCAL_NETWORK` 类权限。
-- [ ] M2 投放小窗预研（Go + Win32 拖拽原型，结论进 `design.md` §8）。
+- [x] M2 投放小窗预研（M2-6）：`cmd/ft-desktop` Win32 原型（置顶工具窗、`DragAcceptFiles`、每次投放输出一行 JSON、`-size/-margin/-pos/-log`）；合成 HDROP 用例与**真实资源管理器拖放**均通过（2026-11-07 拖入 `test-2.1m.bin`，窗口显示「收到 1 个文件」）；结论写入 `docs/context/design.md` §8.1（接收可行；“拖拽即弹窗”无官方 API，v1 用常驻小窗/边缘条/托盘投放区），证据 `evidence/stage1/20261107-2035.log`。
 - [ ] M3–M9 —— 未开始。
 
-可运行入口：`ft -version`、`ft send` / `ft recv`（`cmd/ft`；本机 TCP、LAN 发现与热点直连）。`core/proto` 有金标向量单测，`core/session`、`core/transfer` 有单测与故障注入；`core/{identity,logging,pathmgr}` 已实现最小功能；`core/{discovery,signaling,punch,relay,lanweb}`、`server/`、`cmd/ft-desktop/` 仍为占位。
+可运行入口：`ft -version`、`ft send` / `ft recv`（`cmd/ft`；本机 TCP、LAN 发现与热点直连）。`core/proto` 有金标向量单测，`core/session`、`core/transfer` 有单测与故障注入；`core/{identity,logging,pathmgr}` 已实现最小功能；`cmd/ft-desktop` 为投放小窗预研原型（非正式客户端）；`core/{signaling,punch,relay,lanweb}`、`server/` 仍为占位。
 
 ## 阻塞 / 待确认
 
@@ -38,10 +38,10 @@
 
 ## 下一步（按优先级，由 work agent 执行）
 
-M2 剩余（按 `PLAN.md` 任务卡）：
+M2 收尾（按 `PLAN.md` 任务卡）：
 
-1. 投放小窗预研：Go + Win32 最小原型（Explorer 拖拽 → 右下角置顶窗 → 接收 `CF_HDROP` → 收起），结论写 `docs/context/design.md` §8。
-2. 收尾：G2 报告 + 证据归档 + 提交。
+1. 出 G2 报告 + 证据归档 + 提交。
+2. 之后进 M3（信令 + 中继；涉及 BJ 写操作，执行前先请示用户）。
 
 ## 证据入口
 
@@ -49,7 +49,7 @@ M2 剩余（按 `PLAN.md` 任务卡）：
 |---|---|---|
 | M0 | `evidence/stage0/20261107-1745.log`（向量生成 + 构建 + 测试）、`20261107-1800.log`（Android 工具链 + AAR）、`20261107-1805.log`（规范定稿 + 向量重生成） | 已有 |
 | M1 本机 | `evidence/stage0/20261107-1835.log`（构建/测试/CLI×3 哈希/故障注入/续传/内存，`M1_EVIDENCE=PASS`） | 已有 |
-| M2 局域网 | `evidence/stage1/20261107-1909.log`（热点双向、哈希、TUN 过滤、端口 45321）、`20261107-1920.log`（学校网络：广播/组播被过滤、单播双向、4 轮哈希） | 已有 |
+| M2 局域网 | `evidence/stage1/20261107-1909.log`（热点双向、哈希、TUN 过滤、端口 45321）、`20261107-1920.log`（学校网络：广播/组播被过滤、单播双向、4 轮哈希）、`20261107-2035.log`（投放小窗真实拖放） | 已有 |
 | M4 打洞 | 待建：`evidence/stage2/*.log` | 无 |
 | M3 中继 | 待建：`evidence/stage3/*.log` | 无 |
 

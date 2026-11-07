@@ -52,7 +52,11 @@ ft send --addr <手机IP>:<端口> --file ./test-2.1m.bin --log send.jsonl
 3. 对照：关掉 Wi-Fi/热点后同样操作应失败（证明没有静默走服务器；M2 尚无中继可回退）；
 4. 日志里 `discovery.announce.start.interfaces` 只含物理网卡（TUN/VPN 被过滤）；原始输出写 `evidence/stage1/`。
 
-已知限制：手机侧 Go 不能读 netlink，接口信息由 Java 枚举后经 `discovery.Hint` 传入；Android 前台服务尚未加入，传输时请保持应用在前台。
+已知限制：
+
+- 手机侧 Go 不能读 netlink，接口信息由 Java 枚举后经 `discovery.Hint` 传入。
+- 校园网 / 部分企业 Wi-Fi 会在 AP 上过滤客户端之间的广播与组播（DLUT-PanJin 实测：双向发现失败、定向广播探针 0/3，但单播 TCP 正常）。这类网络下用 `--peer/--addr <ip:port>` 直连；失败时先确认两台设备是否在同一子网，再判断是不是 AP 隔离（`ping` + 手动地址都不通）。
+- 接收/发送期间 App 启动前台服务（`dataSync`）保活；Android 13+ 首次会请求通知权限，拒绝只是看不到通知，传输本身不受影响。
 
 ## D. BJ 服务器核验（只读，未执行；依据运维档案）
 
