@@ -45,6 +45,7 @@
 - [x] M4 路径竞速：`--punch --allow punch,relay` 时 punch 与 relay 在 t=0 并发（`pathmgr.Race`，先完成会话握手者胜，败者取消，日志 `path.selected`）；证据 `evidence/stage2/20261107-2326-race.log`：case A 10MB punch 96ms、case B（`FT_PUNCH_BLOCK=1` 模拟打洞失败）relay 28ms，两端路径一致、哈希一致，`PATH_RACE=PASS`。
 - [x] M4 T5 跨 NAT 打洞（电脑→手机）：手机走蜂窝（VPN 开）时电脑用手机 STUN 候选 `123.244.181.175:34098` 打通，2.1MB `2069ms`、10MB `14938ms`，手机端 sha256 与源一致；手机 `mapping=cone`。
 - [ ] M4 T6 手机→电脑：手机 VPN 开着时其 STUN 候选是 VPN 出口，电脑回拨被丢，`punch.Connect` 25s 超时；待手机关闭 VPN 后重测（对称握手 `core/punch/connect.go`：两侧都监听、按设备 ID 分工先拨/先听，8s 后双方都拨）。
+- [x] M5 lanweb（LAN 浏览器收发）：`core/lanweb`（token 路径、multipart 流式上传、SHA-256、列表/下载、路径穿越拦截）+ `ft recv --web --web-port/--web-token`；证据 `evidence/stage2/20261108-0100-lanweb.log`，`M5_LANWEB=PASS`。
 - [x] M4 竞速与降级：`pathmgr.Race` 并发打洞/中继，`FT_PUNCH_BLOCK=1` 时干净回退中继（证据 `evidence/stage2/20261107-2326-race.log`）。
 - [x] M4 真实 NAT：T5（电脑→手机，蜂窝）打洞成功；T6（手机→电脑）在同一校园 AP 下因客户端间 UDP 过滤不可达，按 D3 回退中继（证据 `evidence/stage2/20261108-0034-t6.txt`）。
 - [x] M4 G4 报告：`evidence/stage2/20261108-0045-g4.txt`（T2/T5/T6/竞速结果、T11 环境不具备、T8 未测说明）。

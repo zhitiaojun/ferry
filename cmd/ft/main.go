@@ -22,6 +22,7 @@ import (
 
 	"github.com/cwlindean/filetransfer/core/discovery"
 	"github.com/cwlindean/filetransfer/core/identity"
+	"github.com/cwlindean/filetransfer/core/lanweb"
 	"github.com/cwlindean/filetransfer/core/logging"
 	"github.com/cwlindean/filetransfer/core/pathmgr"
 	"github.com/cwlindean/filetransfer/core/proto"
@@ -285,6 +286,9 @@ func runRecv(args []string) int {
 	noTLS := fs.Bool("no-tls", false, "relay without the pinned TLS 1.3 layer (debug only)")
 	punchPath := fs.Bool("punch", false, "with --signal: receive over a UDP hole-punched QUIC tunnel")
 	stunServers := fs.String("stun", defaultSTUN, "comma separated STUN servers for --punch")
+	web := fs.Bool("web", false, "serve a browser page on the LAN instead of the file protocol")
+	webPort := fs.Int("web-port", 0, "LAN web listen port (0 = random)")
+	webToken := fs.String("web-token", "", "LAN web path token (random by default)")
 	_ = fs.Bool("once", true, "accept one connection (kept for CLI stability)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -300,6 +304,32 @@ func runRecv(args []string) int {
 		return 1
 	}
 	defer closeLog()
+
+	if *web {
+		if err := os.MkdirAll(*out, 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "ft recv: %v\n", err)
+			return 1
+		}
+		srv, err := lanweb.New(*out, *webToken, logger)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ft recv: %v\n", err)
+			return 1
+		}
+		ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", *webPort))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ft recv: %v\n", err)
+			return 1
+		}
+		port := ln.Addr().(*net.TCPAddr).Port
+		urls := lanURLs(srv.Token(), port)
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true, "mode": "lanweb", "dir": *out, "port": port, "token": srv.Token(), "urls": urls})
+		if err := srv.ListenAndServe("", ln); err != nil {
+			fmt.Fprintf(os.Stderr, "ft recv: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
 
 	if *signalURL != "" {
 		cctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -584,6 +614,31 @@ func splitCSV(s string) []string {
 		if p = strings.TrimSpace(p); p != "" {
 			out = append(out, p)
 		}
+	}
+	return out
+}
+
+// lanURLs lists browser URLs for every non-loopback IPv4 address so the page
+// is reachable from whatever network the machine is currently on.
+func lanURLs(token string, port int) []string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return []string{fmt.Sprintf("http://127.0.0.1:%d/%s/", port, token)}
+	}
+	var out []string
+	for _, a := range addrs {
+		ipnet, ok := a.(*net.IPNet)
+		if !ok || ipnet.IP.IsLoopback() {
+			continue
+		}
+		ip4 := ipnet.IP.To4()
+		if ip4 == nil || ip4.IsLinkLocalUnicast() {
+			continue
+		}
+		out = append(out, fmt.Sprintf("http://%s:%d/%s/", ip4.String(), port, token))
+	}
+	if len(out) == 0 {
+		out = append(out, fmt.Sprintf("http://127.0.0.1:%d/%s/", port, token))
 	}
 	return out
 }
