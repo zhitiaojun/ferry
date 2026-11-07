@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -21,15 +24,64 @@ import (
 
 // relayOptions carries what both relay directions need.
 type relayOptions struct {
-	SignalURL string
-	KeyPath   string
-	Name      string
-	ToID      string
-	Files     []string
-	OutDir    string
-	Chunk     int
-	Timeout   time.Duration
-	Log       *logging.Logger
+	SignalURL  string
+	KeyPath    string
+	PairedPath string
+	Name       string
+	ToID       string
+	Files      []string
+	OutDir     string
+	Chunk      int
+	Timeout    time.Duration
+	NoTLS      bool
+	Log        *logging.Logger
+}
+
+// pairedPeer returns the pinned public key of a peer from the trusted table.
+func pairedPeer(path, id string) (ed25519.PublicKey, error) {
+	store, err := identity.LoadPaired(path)
+	if err != nil {
+		return nil, err
+	}
+	d, ok := store.Get(id)
+	if !ok {
+		return nil, fmt.Errorf("peer %s is not paired; import its URI with: ft pair --add <uri>", truncHex(id))
+	}
+	return d.PublicKeyBytes()
+}
+
+// clientTLS wraps the relay stream with the pinned TLS 1.3 client channel
+// (D26). The certificate is our identity key's self-signed cert; the pin is the
+// paired peer key, so neither the server nor the relay room can impersonate.
+func clientTLS(ctx context.Context, rc net.Conn, key *identity.Key, peer ed25519.PublicKey) (net.Conn, error) {
+	cfg, err := identity.ClientTLS(key, peer)
+	if err != nil {
+		return nil, err
+	}
+	tc := tls.Client(rc, cfg)
+	hctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := tc.HandshakeContext(hctx); err != nil {
+		_ = rc.Close()
+		return nil, fmt.Errorf("tls handshake with relay peer: %w", err)
+	}
+	return tc, nil
+}
+
+// serverTLS is the accepting side of clientTLS.
+func serverTLS(ctx context.Context, rc net.Conn, key *identity.Key, peer ed25519.PublicKey) (net.Conn, error) {
+	cfg, err := identity.ServerTLS(key, peer)
+	if err != nil {
+		return nil, err
+	}
+	tc := tls.Server(rc, cfg)
+	hctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := tc.HandshakeContext(hctx); err != nil {
+		_ = rc.Close()
+		return nil, fmt.Errorf("tls handshake with relay peer: %w", err)
+	}
+	return tc, nil
 }
 
 // defaultKeyPath is ~/.ft/device.key.
@@ -135,7 +187,22 @@ func sendViaRelay(ctx context.Context, o relayOptions) (summary, error) {
 	if err != nil {
 		return summary{}, err
 	}
-	s, err := session.Dial(rc, sessionParams(key, o.Name))
+	conn := net.Conn(rc)
+	if !o.NoTLS {
+		peer, err := pairedPeer(o.PairedPath, o.ToID)
+		if err != nil {
+			_ = rc.Close()
+			return summary{}, err
+		}
+		conn, err = clientTLS(ctx, conn, key, peer)
+		if err != nil {
+			return summary{}, err
+		}
+		if o.Log != nil {
+			o.Log.Event("relay.tls", map[string]any{"peer": truncHex(o.ToID), "tls": "1.3", "pinned": true})
+		}
+	}
+	s, err := session.Dial(conn, sessionParams(key, o.Name))
 	if err != nil {
 		_ = rc.Close()
 		return summary{}, fmt.Errorf("handshake over relay: %w", err)
@@ -171,6 +238,8 @@ func recvViaRelay(ctx context.Context, o relayOptions) (summary, error) {
 	defer client.Close()
 
 	var reqID string // transfer id chosen by the sender's send_request
+	var fromMu sync.Mutex
+	var fromID string
 	readyCh := make(chan signaling.RelayReady, 1)
 	client.On(signaling.TypeRelayReady, func(e *signaling.Envelope) {
 		r, err := signaling.Decode[signaling.RelayReady](e)
@@ -187,6 +256,9 @@ func recvViaRelay(ctx context.Context, o relayOptions) (summary, error) {
 			return
 		}
 		reqID = req.TransferID
+		fromMu.Lock()
+		fromID = req.FromDevice
+		fromMu.Unlock()
 		if o.Log != nil {
 			o.Log.Event("signal.request", map[string]any{"from": truncHex(req.FromDevice), "files": len(req.Files)})
 		}
@@ -205,7 +277,29 @@ func recvViaRelay(ctx context.Context, o relayOptions) (summary, error) {
 	if err != nil {
 		return summary{}, err
 	}
-	s, err := session.Accept(rc, sessionParams(key, o.Name))
+	conn := net.Conn(rc)
+	if !o.NoTLS {
+		fromMu.Lock()
+		peerID := fromID
+		fromMu.Unlock()
+		if peerID == "" {
+			_ = rc.Close()
+			return summary{}, fmt.Errorf("relay: no send_request seen, cannot pin the peer key")
+		}
+		peer, err := pairedPeer(o.PairedPath, peerID)
+		if err != nil {
+			_ = rc.Close()
+			return summary{}, err
+		}
+		conn, err = serverTLS(ctx, conn, key, peer)
+		if err != nil {
+			return summary{}, err
+		}
+		if o.Log != nil {
+			o.Log.Event("relay.tls", map[string]any{"peer": truncHex(peerID), "tls": "1.3", "pinned": true})
+		}
+	}
+	s, err := session.Accept(conn, sessionParams(key, o.Name))
 	if err != nil {
 		_ = rc.Close()
 		return summary{}, fmt.Errorf("handshake over relay: %w", err)

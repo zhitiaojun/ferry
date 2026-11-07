@@ -144,6 +144,8 @@ func runSend(args []string) int {
 	signalURL := fs.String("signal", "", "signaling URL (wss://…/signal) to send via the relay")
 	toID := fs.String("to-id", "", "target device id (64 hex) for --signal")
 	keyPath := fs.String("key", defaultKeyPath(), "device key file for --signal")
+	pairedPath := fs.String("paired", defaultPairedPath(), "trusted peer table for --signal")
+	noTLS := fs.Bool("no-tls", false, "relay without the pinned TLS 1.3 layer (debug only)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -180,7 +182,8 @@ func runSend(args []string) int {
 		cctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 		sum, err := sendViaRelay(cctx, relayOptions{
-			SignalURL: *signalURL, KeyPath: *keyPath, Name: *name, ToID: *toID,
+			SignalURL: *signalURL, KeyPath: *keyPath, PairedPath: *pairedPath,
+			Name: *name, ToID: *toID, NoTLS: *noTLS,
 			Files: files, Chunk: *chunk, Timeout: *timeout, Log: logger,
 		})
 		if err != nil {
@@ -250,6 +253,8 @@ func runRecv(args []string) int {
 	chunk := fs.Int("chunk", int(proto.DefaultChunkSize), "chunk size in bytes")
 	signalURL := fs.String("signal", "", "signaling URL (wss://…/signal) to receive via the relay")
 	keyPath := fs.String("key", defaultKeyPath(), "device key file for --signal")
+	pairedPath := fs.String("paired", defaultPairedPath(), "trusted peer table for --signal")
+	noTLS := fs.Bool("no-tls", false, "relay without the pinned TLS 1.3 layer (debug only)")
 	_ = fs.Bool("once", true, "accept one connection (kept for CLI stability)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -270,7 +275,8 @@ func runRecv(args []string) int {
 		cctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 		sum, err := recvViaRelay(cctx, relayOptions{
-			SignalURL: *signalURL, KeyPath: *keyPath, Name: *name, OutDir: *out,
+			SignalURL: *signalURL, KeyPath: *keyPath, PairedPath: *pairedPath,
+			Name: *name, OutDir: *out, NoTLS: *noTLS,
 			Chunk: *chunk, Timeout: *timeout, Log: logger,
 		})
 		if err != nil {
