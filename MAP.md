@@ -16,29 +16,28 @@ filetransfer/
 ├─ RISKS.md             风险与验证缺口
 ├─ PLAN.md              路线图与里程碑（直至完工）
 ├─ WORK_AGENT.md        work agent 执行规约（防偏航）
+├─ go.mod               Go 模块 github.com/cwlindean/filetransfer
+├─ core/proto/          帧与消息编解码（M0 已实现，含金标向量单测）
+├─ core/{identity,discovery,signaling,punch,relay,session,transfer,pathmgr,lanweb}/  仅包说明，随后续里程碑填充
+├─ cmd/ft/              CLI（当前只有 -version）
+├─ cmd/ft-desktop/      Windows 客户端入口（占位）
+├─ server/              ft-server（占位）
 ├─ docs/context/        专题：requirements / infra-bj / design / references / review
+├─ docs/spec/           protocol.md + vectors/（金标向量）
+├─ android/             APK 外壳（占位，M0 工具链在此验证）
+├─ web/                 浏览器页面（占位）
+├─ tools/               gen_vectors.py（证据整理脚本不进入产品路径）
+├─ evidence/            证据日志（stage0..stage3）
 └─ history/             历史归档索引
 ```
 
-计划目录（**尚未创建，属于方案**，M0 建立，见 `docs/context/design.md` §1）：
-
-```
-   docs/spec/       协议规范与测试向量
-   core/            Go 核心（identity / discovery / signaling / punch / relay / session / transfer / pathmgr / lanweb）
-   cmd/ft/          CLI（测试与证据采集）
-   cmd/ft-desktop/  Windows 客户端（托盘、投放小窗、右键菜单、WebView 主界面）
-   server/          ft-server（BJ：信令 + 中继 + STUN + Web）
-   android/         Kotlin 外壳 + gomobile AAR
-   web/             浏览器页面
-   tools/           证据整理等脚本（不进入产品路径）
-   evidence/        证据日志（stage0..stage3）
-```
+目录职责与模块边界见 `docs/context/design.md` §1；上表只反映实际存在的目录。
 
 ## 2. 运行环境
 
 | 角色 | 环境 | 说明 |
 |---|---|---|
-| 开发机 | Windows 11（日常在学校网络） | 需装 Go、gomobile、Android SDK/NDK（M0）；APK 在此构建，不在 BJ 构建 |
+| 开发机 | Windows 11（日常在学校网络） | Go 1.27.3 已就位（`.tools/go`，不入库）；gomobile、Android SDK/NDK 待装（M0）；APK 在此构建，不在 BJ 构建 |
 | 手机 | 安卓（小米 22081212C，HyperOS，Android 17 / SDK 37） | 测试网络：电信蜂窝；学校网络（部分隔离）；手机开热点供电脑连入（R6） |
 | 服务器 | BJ（阿里云 ECS） | 内网 `172.24.52.162`，公网 `123.57.253.208` |
 
@@ -64,7 +63,7 @@ filetransfer/
 | 对象 | 版本 / 标识 | 来源 |
 |---|---|---|
 | 本文档集 | v0.5（2026-11-07：VPN / TUN 场景） | 本次任务 |
-| 代码 | 无 | — |
+| 代码 | M0 骨架：`core/proto` 可编译、金标向量单测通过；其余包仅占位 | `go.mod`、`evidence/stage0/` |
 | 运维档案 | 《服务器信息-BJ》2026-11-03 实测版 | 用户提供 |
 
 ## 5. 文件与事实的对应关系

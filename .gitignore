@@ -1,0 +1,6 @@
+# Local toolchains downloaded into the workspace (not part of the project).
+.tools/
+
+# Build output.
+/bin/
+*.exe

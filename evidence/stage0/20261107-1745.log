@@ -1,0 +1,101 @@
+# M0 evidence: protocol vectors + Go skeleton
+# host: MINGW64_NT-10.0-26300 3.6.10-5a1665c8.x86_64 x86_64 / Python 3.15.2
+
+## 2026-11-07T17:45:31+08:00 go version
+go version go1.27.3 windows/amd64
+
+## 2026-11-07T17:45:31+08:00 gofmt -l core cmd server (empty = formatted)
+exit=0
+
+## 2026-11-07T17:45:31+08:00 go build ./...
+exit=0
+
+## 2026-11-07T17:45:31+08:00 go vet ./...
+exit=0
+
+## 2026-11-07T17:45:32+08:00 go test -count=1 ./...
+?   	github.com/cwlindean/filetransfer/cmd/ft	[no test files]
+?   	github.com/cwlindean/filetransfer/cmd/ft-desktop	[no test files]
+?   	github.com/cwlindean/filetransfer/core/discovery	[no test files]
+?   	github.com/cwlindean/filetransfer/core/identity	[no test files]
+?   	github.com/cwlindean/filetransfer/core/lanweb	[no test files]
+?   	github.com/cwlindean/filetransfer/core/pathmgr	[no test files]
+ok  	github.com/cwlindean/filetransfer/core/proto	1.930s
+?   	github.com/cwlindean/filetransfer/core/punch	[no test files]
+?   	github.com/cwlindean/filetransfer/core/relay	[no test files]
+?   	github.com/cwlindean/filetransfer/core/session	[no test files]
+?   	github.com/cwlindean/filetransfer/core/signaling	[no test files]
+?   	github.com/cwlindean/filetransfer/core/transfer	[no test files]
+?   	github.com/cwlindean/filetransfer/server	[no test files]
+exit=0
+
+## 2026-11-07T17:45:34+08:00 python tools/gen_vectors.py (regenerate)
+wrote C:\project\filetransfer\docs\spec\vectors\frames.json
+wrote C:\project\filetransfer\docs\spec\vectors\invalid.json
+exit=0
+
+## 2026-11-07T17:45:34+08:00 sha256 of generated vectors
+a9d7006e7ef76fc08a1745ad713b12ab46801a49d86f4eb1d3bd3aec7f03b82f *docs/spec/vectors/frames.json
+8cc01a9d2f44165e3bb1439ec3c5da8b18387d1f5b2741384591d96fbcf4012e *docs/spec/vectors/invalid.json
+
+## 2026-11-07T17:45:34+08:00 ft -version
+ft 0.0.0-dev
+protocol 1
+go go1.27.3
+platform windows/amd64
+exit=0
+
+## 2026-11-07T17:45:37+08:00 ft-desktop (expected stub, exit 2)
+ft-desktop: not implemented yet (see PLAN.md)
+exit status 2
+exit=1
+
+## 2026-11-07T17:45:39+08:00 source tree (tracked + untracked, .tools excluded)
+"history/20261107-\351\230\266\346\256\265\351\241\272\345\272\217\350\260\203\346\225\264.md"
+.gitignore
+AGENTS.md
+DECISIONS.md
+MAP.md
+NOW.md
+PLAN.md
+PROJECT_INDEX.md
+README.md
+RISKS.md
+RUNBOOK.md
+WORK_AGENT.md
+android/README.md
+cmd/ft-desktop/main.go
+cmd/ft/main.go
+core/discovery/doc.go
+core/identity/doc.go
+core/lanweb/doc.go
+core/pathmgr/doc.go
+core/proto/decode.go
+core/proto/doc.go
+core/proto/errors.go
+core/proto/frame.go
+core/proto/messages.go
+core/proto/vectors_test.go
+core/proto/wire.go
+core/punch/doc.go
+core/relay/doc.go
+core/session/doc.go
+core/signaling/doc.go
+core/transfer/doc.go
+docs/context/design.md
+docs/context/infra-bj.md
+docs/context/references.md
+docs/context/requirements.md
+docs/context/review.md
+docs/spec/protocol.md
+docs/spec/vectors/.gitkeep
+docs/spec/vectors/frames.json
+docs/spec/vectors/invalid.json
+evidence/README.md
+evidence/stage0/20261107-1745.log
+go.mod
+history/README.md
+server/doc.go
+tools/gen_vectors.py
+web/README.md
+
