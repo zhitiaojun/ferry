@@ -15,6 +15,7 @@ filetransfer/
 ├─ DECISIONS.md         已确认决策
 ├─ RISKS.md             风险与验证缺口
 ├─ PLAN.md              路线图与里程碑（直至完工）
+├─ WORK_AGENT.md        work agent 执行规约（防偏航）
 ├─ docs/context/        专题：requirements / infra-bj / design / references / review
 └─ history/             历史归档索引
 ```
@@ -37,8 +38,8 @@ filetransfer/
 
 | 角色 | 环境 | 说明 |
 |---|---|---|
-| 开发机 | Windows 11 | 需装 Go、gomobile、Android SDK/NDK、iperf3（M0）；APK 在此构建，不在 BJ 构建 |
-| 手机 | 安卓（小米 22081212C，HyperOS，Android 17 / SDK 37） | 测试网络：电信蜂窝；家中 Wi-Fi 有客户端隔离（R6） |
+| 开发机 | Windows 11（日常在学校网络） | 需装 Go、gomobile、Android SDK/NDK（M0）；APK 在此构建，不在 BJ 构建 |
+| 手机 | 安卓（小米 22081212C，HyperOS，Android 17 / SDK 37） | 测试网络：电信蜂窝；学校网络（部分隔离）；手机开热点供电脑连入（R6） |
 | 服务器 | BJ（阿里云 ECS） | 内网 `172.24.52.162`，公网 `123.57.253.208` |
 
 细节与端口占用见 `docs/context/infra-bj.md`。
@@ -52,7 +53,7 @@ filetransfer/
 | ft-server 程序 | BJ `/opt/ft-server/` |
 | 进程管理 | systemd 常驻单元 `ft-server.service`（`MemoryMax=256M`，D15） |
 | 监听 | `127.0.0.1:18790/tcp`；`0.0.0.0:40000-40001/udp` |
-| 对外入口 | `https://ft.cwlindean.cn`（子域名暂定，Q1）→ openresty 反代 → 18790 |
+| 对外入口 | `https://ft.cwlindean.cn`（已解析到 ESA，D22）→ 回源 openresty 443 → 18790；UDP 直连 `123.57.253.208:40000-40001` |
 | 站点配置 | `/opt/1panel/www/conf.d/<子域名>.conf` + `sites/<子域名>/proxy/ft.conf` |
 | 日志 | journald（`journalctl -u ft-server`） |
 
@@ -62,7 +63,7 @@ filetransfer/
 
 | 对象 | 版本 / 标识 | 来源 |
 |---|---|---|
-| 本文档集 | v0.3（2026-11-07：审查 + 路线图 + 第二轮决策） | 本次任务 |
+| 本文档集 | v0.4（2026-11-07：第三轮决策 + work agent 规约） | 本次任务 |
 | 代码 | 无 | — |
 | 运维档案 | 《服务器信息-BJ》2026-11-03 实测版 | 用户提供 |
 

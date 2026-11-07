@@ -9,7 +9,6 @@
 ```bash
 go version
 gomobile version
-iperf3 --version
 ```
 
 验证：均打印版本号（M0 安装后执行）；实际版本记入 `MAP.md` §4。
@@ -33,7 +32,7 @@ go run ./cmd/ft send --to 127.0.0.1:47000 --file ./test-2.1m.bin
 
 ## C. M2：局域网直传（未执行）
 
-前置：Win 与手机同网段且可互通（家中 Wi-Fi 有隔离，用手机热点或有线 / 无隔离网络，R6）；手机侧 APK 已构建安装（构建方式见 `docs/context/design.md` §6，尚属待定项）。
+前置：Win 与手机同网段（热点场景必通；学校网络有概率，R6）；手机侧 APK 已构建安装（构建方式见 `docs/context/design.md` §6，尚属待定项）。
 
 ```bash
 # Win 侧：确认本机在局域网内的地址
@@ -60,17 +59,17 @@ nft list ruleset | head -40     # 确认本机是否有 INPUT 钩子（档案记
 
 ## E. BJ 部署 ft-server（未执行，M3）
 
-前置：子域名与接入方式已定（Q1）；读运维档案；`ss -lntup` 复核 18790/tcp、40000-40001/udp 空闲；`free -m` 记录部署前可用内存；**改 openresty 前把具体变更告知用户**（D16）。
+前置：M3 ESA 预检已完成（`PLAN.md` M3 任务 0）；读运维档案；`ss -lntup` 复核 18790/tcp、40000-40001/udp 空闲；`free -m` 记录部署前可用内存；**改 openresty 前把具体变更告知用户**（D16）。
 
 步骤（草案，沿用 battery-alert 一键脚本模式）：
 
 1. 开发机交叉编译 `GOOS=linux GOARCH=amd64`，上传到 `/opt/ft-server/`。
 2. 写 `/etc/systemd/system/ft-server.service`：`MemoryMax=256M`、`Environment=GOMEMLIMIT=180MiB`、`Restart=on-failure`；`systemctl enable --now ft-server`。
-3. DNS：新增子域名记录（推荐直连 `123.57.253.208`）；1Panel 申请证书并导出到 `sites/<子域名>/ssl/`。
+3. DNS：`ft.cwlindean.cn` 已解析到 ESA（D22），无需改动；在 ESA 侧确认回源到 BJ 443 并启用 WebSocket（用户操作）；1Panel 申请证书并导出到 `sites/ft.cwlindean.cn/ssl/`。
 4. 新建站点 conf + `proxy/ft.conf`（反代 `127.0.0.1:18790`，开启 WebSocket 升级头、长超时）。
 5. `nginx -t` 通过后 reload（**禁止 restart**）。
 
-验证：`ss -lntup` 见监听；`curl https://<子域名>/health` 200；WSS 连通；现有 6 个站点公网探活不变；`systemctl show ft-server -p MemoryPeak` < 256 MB；回写运维仓库 `修改log.md` 与《服务器信息-BJ》。
+验证：`ss -lntup` 见监听；`curl https://ft.cwlindean.cn/health` 200；WSS 连通；现有 6 个站点公网探活不变；`systemctl show ft-server -p MemoryPeak` < 256 MB；回写运维仓库 `修改log.md` 与《服务器信息-BJ》。
 
 回滚：`systemctl disable --now ft-server`；删 unit 与 `/opt/ft-server`；删站点 conf → `nginx -t` → reload。
 

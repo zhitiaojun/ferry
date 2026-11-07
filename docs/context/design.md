@@ -1,7 +1,7 @@
 # 系统设计（design）v0.2
 
 > 状态：**建议，部分已被决策约束**。已确认的约束以 `DECISIONS.md` 为准（D1–D21）；本文件讨论“怎么做”，可被推翻。问题来源与理由见 `review.md`；里程碑见 `../../PLAN.md`。
-> 更新：2026-11-07，吸收 review 意见与第二轮问卷（D12–D21）。
+> 更新：2026-11-07，吸收 review 意见与第二、三轮问卷（D12–D27）。实现由 work agent 执行，约束见 `../../WORK_AGENT.md`。
 
 ## 1. 总体架构
 
@@ -12,7 +12,7 @@
 │ identity │ discovery │ signaling │ punch │ relay │      │ ── Go 核心 AAR ── │
 │ session  │ transfer  │ pathmgr   │ lanweb(给浏览器)│      │ （同一份 core/）  │
 └──────────────────────────────────────────────┘      └──────────────────┘
-                 │ wss://ft.<域名>（443）       │ UDP 40000/40001
+                 │ wss://ft.cwlindean.cn（443，经 ESA）│ UDP 直连 123.57.253.208:40000/40001
                  ▼                              ▼
         ┌──────── BJ：ft-server（Go，systemd，MemoryMax=256M）────────┐
         │ 信令（在线表、配对、候选交换） │ 中继（WSS 字节流拼接） │ STUN │
@@ -26,7 +26,7 @@ Go 模块划分（D13）：
 core/identity    设备身份：Ed25519 密钥、设备 ID、已配对设备表
 core/discovery   局域网发现（UDP 广播 + 组播），带身份签名
 core/signaling   与 ft-server 的 WSS 长连接：上线、在线状态、配对、候选交换、唤醒
-core/punch       STUN、NAT 映射判定、IPv4 打洞、IPv6 直连、NAT 回环
+core/punch       STUN、NAT 映射判定、IPv4 打洞、IPv6 直连
 core/relay       中继客户端（WSS 内承载端到端加密流）
 core/session     会话层：session_id、偏移确认、路径切换、续传
 core/transfer    清单、分块、SHA-256、流式读写、.part 文件
@@ -52,7 +52,7 @@ web/             浏览器页面（中继版由 ft-server 提供，局域网版�
 
 | 方式 | 流程 | 链路 |
 |---|---|---|
-| 浏览器链接 / 二维码 | 发送端生成链接 `https://ft.<域名>/r/<房间ID>#<密钥>`；`#` 后的密钥不会发给服务器，浏览器用 Web Crypto（ECDH/AES-GCM）端到端加解密 | 中继（WSS）；同局域网时优先 `http://<局域网IP>:<端口>`（lanweb） |
+| 浏览器链接 / 二维码 | 发送端生成链接 `https://ft.cwlindean.cn/r/<房间ID>#<密钥>`；`#` 后的密钥不会发给服务器，浏览器用 Web Crypto（ECDH/AES-GCM）端到端加解密 | 中继（WSS）；同局域网时优先 `http://<局域网IP>:<端口>`（lanweb） |
 | 局域网附近设备 | 广播列出附近已安装 App 的设备，点选后对方弹窗确认 | LAN |
 | 一次性会话码 | 6 位码 + PAKE 派生临时密钥，用后作废 | 三档竞速 |
 
@@ -63,7 +63,7 @@ web/             浏览器页面（中继版由 ft-server 提供，局域网版�
 四层结构（自下而上）：
 
 ```
-路径层     LAN: TCP+TLS | NAT 回环: QUIC | 打洞: QUIC(IPv4/IPv6) | 中继: WSS 内 TLS
+路径层     LAN: TCP+TLS | 打洞: QUIC(IPv4/IPv6) | 中继: WSS 内 TLS
 会话层     session_id、累计偏移确认、去重、路径切换
 传输层     清单（多文件）、64 KiB 分块、每块 SHA-256、整文件 SHA-256
 选路层     竞速、升级、降级
@@ -71,11 +71,14 @@ web/             浏览器页面（中继版由 ft-server 提供，局域网版�
 
 候选路径（按优先级）：
 
-1. **LAN 直连**：广播发现或信令交换的局域网地址。
-2. **NAT 回环**：双方外网 IPv4 相同（同一路由器后），尝试经路由器回环直连——用于家中 Wi-Fi 开了客户端隔离的情况（R6），需实测。
-3. **IPv6 直连**：双方全局 IPv6 地址，同时发包穿过有状态防火墙。
-4. **IPv4 打洞**：STUN 观测地址 + 同时发包（DCUtR 思路）；STUN 与 QUIC 共用同一 UDP socket。
-5. **中继**：WSS 经 443 到 ft-server，按会话拼接。
+1. **LAN 直连**：地址来源三路并用——UDP 广播、组播、信令交换的局域网单播地址（学校网络常过滤广播但单播可能可达，R6）。
+2. **IPv6 直连**：双方全局 IPv6，同时发包穿过有状态防火墙（学校教育网可能有 IPv6）。
+3. **IPv4 打洞**：STUN 观测地址 + 同时发包（DCUtR 思路）；STUN 与 QUIC 共用同一 UDP socket；STUN 目标为 `123.57.253.208:40000/40001`（不经 ESA）。
+4. **中继**：WSS 经 `ft.cwlindean.cn`（ESA）到 ft-server，按会话拼接。
+
+**热点场景**（D24）：电脑连手机热点时，对端是网关地址；此时 LAN 必须成功；LAN 失败时**默认不让数据回退到中继**（否则手机蜂窝流量双倍消耗）——中继只保持信令，弹出提示，由用户手动确认后才走中继，绝不静默回退。
+
+LAN 失败诊断：日志区分“未收到广播 / 组播”“单播不可达”“TLS 握手失败”，便于判断学校网络的隔离行为。
 
 ## 5. 竞速状态机
 
@@ -118,14 +121,15 @@ magic(4) | version(1) | type(1) | flags(2) | session_id(16) | seq(8) | len(4) | 
 ## 9. 安卓客户端（D6、D19）
 
 - 目标设备：小米 22081212C，HyperOS，**Android 17 / SDK 37**（来自 battery-alert 档案）。
-- 后台接收：前台服务（常驻通知）保持 WSS 长连接；心跳间隔按蜂窝 NAT 超时实测（初值 60 s）；必须引导用户打开 HyperOS「自启动」与「省电策略：无限制」（battery-alert 已验证此为必要条件）。
+- 后台接收：前台服务（常驻通知）保持 WSS 长连接；心跳间隔取“蜂窝 NAT 超时”与“ESA 空闲超时”中较小者（M3 实测，初值 30 s）；必须引导用户打开 HyperOS「自启动」与「省电策略：无限制」（battery-alert 已验证此为必要条件）。
 - 前台服务类型、Android 17 的本地网络权限要求、`MulticastLock`：M2 内实测确定（R10）。
 - 分享菜单：`ACTION_SEND` / `SEND_MULTIPLE`；为每台已配对设备发布 Direct Share 快捷方式，实现“一点就发到电脑”。
 - 构建：在 Windows 开发机构建（gomobile + Gradle 或手工工具链），**不在 BJ 上构建**。
 
 ## 10. ft-server（BJ）
 
-- 单个 Go 进程，监听 `127.0.0.1:18790`（HTTP/WSS，经 openresty 443 反代）与 `0.0.0.0:40000-40001/udp`（STUN）。
+- 单个 Go 进程，监听 `127.0.0.1:18790`（HTTP/WSS；ESA → openresty 443 → 此端口）与 `0.0.0.0:40000-40001/udp`（STUN，客户端直连公网 IP）。
+- 限频、日志中的客户端 IP 取 ESA 透传的真实 IP 头（具体头名 M3 实测确认）。
 - 中继：两端各一条 WSS，校验会话令牌后拼接；每会话固定缓冲（约 2×64 KiB），空闲 60 s 断开；全局会话上限（初值 50）防内存失控。
 - 无持久化业务数据（在线表在内存）；日志进 journald。
 - systemd：`MemoryMax=256M`、`GOMEMLIMIT=180MiB`、`Restart=on-failure`。

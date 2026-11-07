@@ -26,7 +26,7 @@
 | M7 | 产品化（托盘、投放小窗、右键、后台、续传） | 未开始 |
 | M8–M9 | 运维发布与验收 | 未开始 |
 
-完整路线图见 `PLAN.md`；需求与判据见 `docs/context/requirements.md`。
+完整路线图见 `PLAN.md`；需求与判据见 `docs/context/requirements.md`；实现由 work agent 按 `WORK_AGENT.md` 执行。
 
 > ⚠ 在 M6 完成前不可用于真实数据（R8）。
 

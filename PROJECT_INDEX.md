@@ -12,6 +12,7 @@
 |---|---|
 | 了解项目用途、当前能做什么 | `README.md` |
 | 接续工作，看目标 / 进展 / 阻塞 / 下一步 | `NOW.md` |
+| **作为 work agent 执行实现任务**（执行循环、围栏、请示、汇报） | `WORK_AGENT.md` |
 | 确认长期规则与读写纪律 | `AGENTS.md` |
 | 明确需求、三档定义、验收判据、测试矩阵 | `docs/context/requirements.md` |
 | 改服务器（BJ）前，了解主机事实、端口、权限边界 | `docs/context/infra-bj.md` |
@@ -28,5 +29,5 @@
 ## 快速判断
 
 - 只想知道「现在到哪一步了」→ 只读 `NOW.md`。
-- 要写代码 → `AGENTS.md`（规则）+ `docs/context/design.md`（设计）+ `DECISIONS.md`（已定约束）。
+- 要写代码 → `AGENTS.md`（规则）+ `WORK_AGENT.md`（执行规约）+ `PLAN.md` 当前里程碑 + `docs/context/design.md`（设计）+ `DECISIONS.md`（已定约束）。
 - 要碰 BJ → `docs/context/infra-bj.md` + `RUNBOOK.md` + `RISKS.md`，缺一不可。
