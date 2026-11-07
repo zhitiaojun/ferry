@@ -174,4 +174,5 @@ magic(4) | version(1) | type(1) | flags(2) | session_id(16) | seq(8) | len(4) | 
 - 口令由部署方经环境变量 `FT_WEB_PASSWORD` 注入，服务器只存 SHA-256，错误尝试按 IP 限速并固定延迟；解锁成功后下发 HMAC 签名 cookie（2 h，`HttpOnly`，TLS 下 `Secure`）。
 - 伪装页不出现“传文件”字样，需在页脚连点 5 次才出现口令框；`/app` 未解锁一律 404。这层只是降低被顺手发现的概率，不是安全边界（D 系列审查对抗见 `RISKS.md`）。
 - `ft share` 负责把设备登记到服务器：起 lanweb、注册 6 位码、打印码/房间/LAN 地址/二维码、每 2 分钟心跳，并保持 `/web/<room>` 的 host 连接。
-- 目录片段（`#key`）留给 M6：浏览器到设备的中继载荷加密在 M5 暂用服务器可见的明文（与 M6 PAKE 一并收紧）；中继模式的文件传输载荷尚未接入。
+- 目录片段（`#key`）留给 M6：浏览器到设备的中继载荷加密在 M5 暂用服务器可见的明文（与 M6 PAKE 一并收紧）。
+- 中继模式的文件传输由设备侧 `cmd/ft/webhost.go` 承担：文本帧走 JSON 控制（`list`/`get`/`put.begin`/`put.end`），二进制帧是 64 KiB 载荷，`put` 先写 `.part` 再按大小与 SHA-256 校验后改名登记；`coder/websocket` 默认读上限 32 KiB，设备侧必须 `SetReadLimit(4 MiB)`，否则第一块就断。

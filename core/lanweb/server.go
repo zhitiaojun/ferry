@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -321,4 +322,56 @@ func cleanName(name string) string {
 		return ""
 	}
 	return name
+}
+
+// Snapshot returns the current file index, sorted by name. The relay host
+// serves the same listing to browsers that cannot reach the LAN address.
+func (s *Server) Snapshot() []File {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]File, 0, len(s.files))
+	for _, f := range s.files {
+		out = append(out, f)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// Path resolves a browser-supplied name to a path inside the directory. It
+// returns "" when the name is unsafe or outside the root.
+func (s *Server) Path(name string) string {
+	name = cleanName(name)
+	if name == "" {
+		return ""
+	}
+	return filepath.Join(s.dir, name)
+}
+
+// UniqueName returns name, or name-2, name-3... while the directory holds a
+// file under that name.
+func (s *Server) UniqueName(name string) string {
+	base := cleanName(name)
+	if base == "" {
+		base = "file"
+	}
+	ext := filepath.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	candidate := base
+	for i := 2; ; i++ {
+		if _, ok := s.files[candidate]; !ok {
+			return candidate
+		}
+		candidate = fmt.Sprintf("%s-%d%s", stem, i, ext)
+	}
+}
+
+// Register indexes a file written through another channel (the relay host).
+func (s *Server) Register(name string, size int64, sum string) File {
+	f := File{Name: name, Size: size, SHA256: sum, ModTime: time.Now().UnixMilli()}
+	s.mu.Lock()
+	s.files[name] = f
+	s.mu.Unlock()
+	return f
 }

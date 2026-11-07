@@ -101,7 +101,7 @@ func shareMain(o shareOptions) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go heartbeat(ctx, client, o.BaseURL, code, o.Name, lans, reg.Token)
-	if err := serveRelay(ctx, o.BaseURL, reg, log); err != nil {
+	if err := serveRelay(ctx, o.BaseURL, reg, srv, log); err != nil {
 		return err
 	}
 	return nil
@@ -160,7 +160,7 @@ func heartbeat(ctx context.Context, client *http.Client, base, code, name string
 	}
 }
 
-func serveRelay(ctx context.Context, base string, reg *shareReg, log *logging.Logger) error {
+func serveRelay(ctx context.Context, base string, reg *shareReg, srv *lanweb.Server, log *logging.Logger) error {
 	wsURL := strings.Replace(strings.Replace(strings.TrimRight(base, "/"), "https://", "wss://", 1), "http://", "ws://", 1)
 	u := wsURL + "/web/" + reg.Room + "?role=host"
 	c, _, err := websocket.Dial(ctx, u, &websocket.DialOptions{
@@ -171,13 +171,7 @@ func serveRelay(ctx context.Context, base string, reg *shareReg, log *logging.Lo
 	}
 	defer c.Close(websocket.StatusNormalClosure, "bye")
 	log.Event("share.relay_ready", map[string]any{"room": reg.Room})
-	for {
-		typ, data, err := c.Read(ctx)
-		if err != nil {
-			return nil
-		}
-		log.Event("share.relay_msg", map[string]any{"type": typ, "bytes": len(data)})
-	}
+	return serveWebHost(ctx, c, srv.Dir(), srv, log)
 }
 
 func randomCode() string {

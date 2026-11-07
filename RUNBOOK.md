@@ -151,6 +151,17 @@ FT_WEB_PASSWORD=test123 ./.tools/bin/ft-server.exe -listen 127.0.0.1:18791 -log 
 - 浏览器上传 1 MiB 生成文件后，设备目录内文件哈希与浏览器显示一致。
 - 证据脚本：`bash tools/m5-web.sh evidence/stage2/$(date +%Y%m%d-%H%M)-web.log`（`M5_WEB=PASS`）。
 
+中继模式（跳过 LAN，验证 `/web/<room>` 的设备侧载荷）：
+
+```bash
+# 浏览器打开 http://127.0.0.1:18791/app#code=<码>&relay=1
+```
+
+- 页面应显示「服务器中继」并列出设备目录文件。
+- 下载任一文件，状态栏出现「下载完成：<名>（大小），哈希校验通过」。
+- 上传任意文件，设备目录出现同名文件，`sha256sum` 与页面显示一致。
+- 参考证据：`evidence/stage2/20261108-0117-web-relay.log`（`M5_WEB_RELAY=PASS`）。
+
 ## F. 证据归档
 
 每次验证后，把原始输出写入 `evidence/stageN/YYYYMMDD-HHMM.log`，并在 `NOW.md` 的「证据入口」表登记路径。

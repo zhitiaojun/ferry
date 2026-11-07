@@ -53,6 +53,7 @@
 - [x] M5 服务器 web 端：`server/web.go`（伪装页 `/`、口令解锁 `/api/unlock`、设备注册 `/api/devices`、6 位码解析 `/api/resolve`、房间 WS `/web/<room>`）、`server/webroom.go`（guest/host 双向转发，单 pump）、`server/assets/{index,app}.html`（伪装随笔页 + 传输 UI，LAN 优先竞速 1.2s 宽限）；`server/web_test.go` 覆盖口令延迟、cookie、劫持、WS 透传。
 - [x] M5 `ft share`：`cmd/ft/share.go`（解锁→起 lanweb→注册 6 位码→打印码/房间/LAN 地址/二维码→心跳→保活 `/web/<room>`），`lanURLs()` 用 `discovery.Eligible()` 过滤 VPN/TUN。
 - [x] M5 浏览器实测（本机栈 127.0.0.1:18791 + `FT_WEB_PASSWORD=test123`）：伪装页 200、无 cookie `/app` 404、错误口令 403、正确口令 200；`/app` 连接后显示「局域网直连」；浏览器下载 2.1MB sha256 `58bbe9ba…`、上传 1MB `06b7bbfb…` 与本机 python 计算一致；证据 `evidence/stage2/20261108-0115-web.log`（`M5_WEB=PASS`）。
+- [x] M5 中继模式浏览器收发：`cmd/ft/webhost.go` 设备侧协议（list/get/put，64KiB 帧）接入 `/web/<room>`；浏览器强制 `#relay=1` 实测 mode=服务器中继、下载 `browser-up.bin` 哈希校验通过、上传 262144B `relay-up2.bin` 后设备侧 sha256 `2312394b…` 与源一致；修 `coder/websocket` 默认 32KiB 读上限（`SetReadLimit(4MiB)`）；证据 `evidence/stage2/20261108-0117-web-relay.log`（`M5_WEB_RELAY=PASS`）。
 
 可运行入口：`ft -version`、`ft whoami`、`ft send` / `ft recv`（`cmd/ft`；本机 TCP、LAN 发现、经 BJ 中继的 `--signal/--allow relay`、UDP 打洞的 `--signal --punch`）；`ft-server`（信令+中继+STUN）、`ft-probe`（登录/心跳探测；`-gather` 打印打洞候选与 NAT 行为）。`core/proto` 有金标向量单测，`core/session`、`core/transfer`、`core/punch`、`core/pathmgr` 有单测；`cmd/ft-desktop` 为投放小窗预研原型（非正式客户端）；`core/lanweb`（浏览器 LAN 收发）、`ft share`（服务器 web 端注册与保活）。
 
@@ -62,7 +63,7 @@
 
 ## 下一步（按优先级，由 work agent 执行）
 
-M5 剩余：把 web 端部署到 BJ（`FT_WEB_PASSWORD` + 新二进制），然后按 G5 做 T3（同网浏览器）/T4（外网浏览器经中继）验收；中继模式的浏览器文件传输载荷仍待实现（当前 `/web/<room>` 只转发消息，UI 显示“文件传输层下一步接入”）。
+M5 剩余：把 web 端部署到 BJ（新二进制 + `FT_WEB_PASSWORD` 环境变量 + 站点 `/` 反代 `/app`/`/api`/`/web`），然后按 G5 做 T3（同网浏览器）/T4（外网浏览器经中继）验收并出 G5 报告。
 
 ## 关卡 G4（准备中，2026-11-07）
 

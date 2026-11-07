@@ -1,0 +1,25 @@
+# M5 web 端中继模式浏览器收发（Chrome，本机栈 127.0.0.1:18791）
+
+## 环境
+2026-11-08T01:16:03+08:00
+ft-server 0.4.0-dev
+protocol 1
+
+## 中继下载
+页面(relay)：mode=服务器中继，列表 5 个文件
+点击下载 browser-up.bin → 页面显示：「下载完成：browser-up.bin（1.0 MB），哈希校验通过」
+
+## 中继上传
+页面(relay)：DataTransfer 造 262144B relay-up2.bin → 上传
+页面显示：「上传完成：relay-up2.bin，SHA-256 2312394bd995…」，列表变为 6 个文件
+
+设备侧落盘：
+2312394bd99545d9de131c24efb781e765ac1aec243f2ed9347597a793a415e9 *.tools/testdata/relay-up2.bin
+期望值（python 生成源数据）：
+2312394bd99545d9de131c24efb781e765ac1aec243f2ed9347597a793a415e9
+
+## 修复记录
+首次上传断线：coder/websocket 客户端默认读上限 32768B，webChunk=65536B 超限 → 设备侧读失败关闭房间
+修复：cmd/ft/webhost.go serveWebHost 开头 conn.SetReadLimit(4 << 20)
+
+M5_WEB_RELAY=PASS
