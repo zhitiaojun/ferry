@@ -45,7 +45,7 @@
 - [x] M4 路径竞速：`--punch --allow punch,relay` 时 punch 与 relay 在 t=0 并发（`pathmgr.Race`，先完成会话握手者胜，败者取消，日志 `path.selected`）；证据 `evidence/stage2/20261107-2326-race.log`：case A 10MB punch 96ms、case B（`FT_PUNCH_BLOCK=1` 模拟打洞失败）relay 28ms，两端路径一致、哈希一致，`PATH_RACE=PASS`。
 - [ ] M4 剩余：真实 NAT 实测（手机↔电脑热点/校园网，记录候选、NAT 类型、最终档位）、路径竞速与 0.5s/3s 升级降级、IPv6 直连与 PMTUD 复核、G4 报告。
 
-可运行入口：`ft -version`、`ft whoami`、`ft send` / `ft recv`（`cmd/ft`；本机 TCP、LAN 发现、经 BJ 中继的 `--signal/--allow relay`、UDP 打洞的 `--signal --punch`）；`ft-server`（信令+中继+STUN）、`ft-probe`（登录与心跳探测）。`core/proto` 有金标向量单测，`core/session`、`core/transfer`、`core/punch`、`core/pathmgr` 有单测；`cmd/ft-desktop` 为投放小窗预研原型（非正式客户端）；`core/lanweb` 仍为占位。
+可运行入口：`ft -version`、`ft whoami`、`ft send` / `ft recv`（`cmd/ft`；本机 TCP、LAN 发现、经 BJ 中继的 `--signal/--allow relay`、UDP 打洞的 `--signal --punch`）；`ft-server`（信令+中继+STUN）、`ft-probe`（登录/心跳探测；`-gather` 打印打洞候选与 NAT 行为）。`core/proto` 有金标向量单测，`core/session`、`core/transfer`、`core/punch`、`core/pathmgr` 有单测；`cmd/ft-desktop` 为投放小窗预研原型（非正式客户端）；`core/lanweb` 仍为占位。
 
 ## 阻塞 / 待确认
 
@@ -59,6 +59,18 @@ M4（按 `PLAN.md` 任务卡）：
 2. 路径竞速：`t=0` 并发 LAN/打洞/中继，LAN ≤0.5s 直用、0.5s 未通先中继承载、升级需确认、3s 无进展降级；日志记录最终与切换路径。
 3. IPv6 候选与 PMTUD 复核（若无公网 IPv6 则记录“环境不具备”）。
 4. 出 G4 报告（T2/T5–T8/T11/T12），更新 MAP/RUNBOOK/README。
+
+## 关卡 G4（准备中，2026-11-07）
+
+| 判据 | 状态 | 证据 / 说明 |
+|---|---|---|
+| T2 中继（对照组） | 已具备 | M3 起经 BJ 中继 2.1MB/10MB 哈希一致；`evidence/stage3/…` |
+| T5/T6/T7/T8 打洞与切路径 | 本机已验，真实网络待测 | 本机 punch 与竞速通过：`evidence/stage2/20261107-2318-punch.log`、`20261107-2326-race.log`（punch 胜出 / 打洞失败 relay 胜出，两端一致、哈希一致） |
+| T11 IPv6 直连 | 环境不具备 | 本机只有 `fe80::` 链路本地地址，无全局 IPv6；待手机蜂窝/热点侧确认 |
+| T12 VPN 下打洞 | 部分 | 电脑开 Meta TUN 时 STUN 映射为 VPN 出口 `59.45.22.140`、判 `cone`、LAN 候选仍为本机 `10.201.2.127`；打洞传输待与手机联测 |
+| 记录项：NAT 类型/候选/最终档位/中继字节 | 待手机联测 | `ft-probe -gather` 可一键打印候选与 NAT 行为；`ft-server` 已有 `relay.close` 字节计数 |
+
+**待用户决定**：PLAN M4-3 要求“升级判据、按偏移切流、3 秒降级”（传输中途换路）。当前 M4 实现为“t=0 竞速 + 单路径失败回退”，中途切流与 M7 的续传/切流体验同源。建议把中途切流移到 M7，G4 报告作为偏离项写明；若要求留在 M4，则需改传输层支持换连接后按偏移续发。
 
 ## 证据入口
 

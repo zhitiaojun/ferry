@@ -67,11 +67,21 @@ func Gather(ctx context.Context, stunServers []string, timeout time.Duration, lo
 			continue
 		}
 		mappings = append(mappings, mapped)
-		out.Candidates = append(out.Candidates, Candidate{
-			Kind:     "stun",
-			Addr:     mapped.String(),
-			Priority: 80,
-		})
+		// Both STUN servers usually see the same mapping; keep it once.
+		dup := false
+		for _, c := range out.Candidates {
+			if c.Addr == mapped.String() {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			out.Candidates = append(out.Candidates, Candidate{
+				Kind:     "stun",
+				Addr:     mapped.String(),
+				Priority: 80,
+			})
+		}
 	}
 	// STUN queries left a read deadline in the past; the QUIC listener that
 	// later reads this socket would fail every read. Clear it before returning.
