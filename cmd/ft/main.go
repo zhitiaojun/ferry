@@ -146,6 +146,8 @@ func runSend(args []string) int {
 	keyPath := fs.String("key", defaultKeyPath(), "device key file for --signal")
 	pairedPath := fs.String("paired", defaultPairedPath(), "trusted peer table for --signal")
 	noTLS := fs.Bool("no-tls", false, "relay without the pinned TLS 1.3 layer (debug only)")
+	punchPath := fs.Bool("punch", false, "with --signal: send over a UDP hole-punched QUIC tunnel")
+	stunServers := fs.String("stun", defaultSTUN, "comma separated STUN servers for --punch")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -181,6 +183,18 @@ func runSend(args []string) int {
 		}
 		cctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
+		if *punchPath {
+			sum, err := sendViaPunch(cctx, punchOptions{
+				SignalURL: *signalURL, KeyPath: *keyPath, PairedPath: *pairedPath,
+				Name: *name, ToID: *toID, Files: files, Chunk: *chunk,
+				Timeout: *timeout, STUN: splitCSV(*stunServers), Log: logger,
+			})
+			if err != nil {
+				return fail(logger, "punch", err)
+			}
+			printSummary(sum)
+			return 0
+		}
 		sum, err := sendViaRelay(cctx, relayOptions{
 			SignalURL: *signalURL, KeyPath: *keyPath, PairedPath: *pairedPath,
 			Name: *name, ToID: *toID, NoTLS: *noTLS,
@@ -255,6 +269,8 @@ func runRecv(args []string) int {
 	keyPath := fs.String("key", defaultKeyPath(), "device key file for --signal")
 	pairedPath := fs.String("paired", defaultPairedPath(), "trusted peer table for --signal")
 	noTLS := fs.Bool("no-tls", false, "relay without the pinned TLS 1.3 layer (debug only)")
+	punchPath := fs.Bool("punch", false, "with --signal: receive over a UDP hole-punched QUIC tunnel")
+	stunServers := fs.String("stun", defaultSTUN, "comma separated STUN servers for --punch")
 	_ = fs.Bool("once", true, "accept one connection (kept for CLI stability)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -274,6 +290,18 @@ func runRecv(args []string) int {
 	if *signalURL != "" {
 		cctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
+		if *punchPath {
+			sum, err := recvViaPunch(cctx, punchOptions{
+				SignalURL: *signalURL, KeyPath: *keyPath, PairedPath: *pairedPath,
+				Name: *name, OutDir: *out, Chunk: *chunk, Timeout: *timeout,
+				STUN: splitCSV(*stunServers), Log: logger,
+			})
+			if err != nil {
+				return fail(logger, "punch", err)
+			}
+			printSummary(sum)
+			return 0
+		}
 		sum, err := recvViaRelay(cctx, relayOptions{
 			SignalURL: *signalURL, KeyPath: *keyPath, PairedPath: *pairedPath,
 			Name: *name, OutDir: *out, NoTLS: *noTLS,
@@ -374,11 +402,8 @@ func checkAllow(allow string) ([]string, int) {
 		switch p {
 		case "":
 			continue
-		case "lan", "relay":
+		case "lan", "relay", "punch":
 			paths = append(paths, p)
-		case "punch":
-			fmt.Fprintf(os.Stderr, "ft: path %q is not implemented yet\n", p)
-			return nil, 3
 		default:
 			fmt.Fprintf(os.Stderr, "ft: unknown path %q\n", p)
 			return nil, 2
@@ -509,4 +534,18 @@ func classifyIP(ip net.IP) string {
 		return "hotspot"
 	}
 	return "lan"
+}
+
+// defaultSTUN is the BJ STUN service published in docs/spec/protocol.md §8.4.
+const defaultSTUN = "123.57.253.208:40000,123.57.253.208:40001"
+
+// splitCSV splits a comma separated flag value, trimming blanks.
+func splitCSV(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

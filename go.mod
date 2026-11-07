@@ -4,6 +4,8 @@ go 1.27.0
 
 require (
 	github.com/coder/websocket v1.8.15 // indirect
+	github.com/quic-go/quic-go v0.65.0 // indirect
+	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/mobile v0.0.0-20261011034528-197770444867 // indirect
 	golang.org/x/mod v0.42.0 // indirect
 	golang.org/x/net v0.61.0 // indirect
