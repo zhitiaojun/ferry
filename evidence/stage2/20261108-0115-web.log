@@ -1,0 +1,70 @@
+[2026-11-07T17:08:59Z] M5 web evidence start host=HyperX
+[2026-11-07T17:08:59Z] $ ./.tools/bin/ft-server.exe -version
+ft-server 0.4.0-dev
+protocol 1
+[2026-11-07T17:08:59Z] exit=0
+[2026-11-07T17:08:59Z] $ ./.tools/bin/ft.exe -version
+ft 0.0.0-dev
+protocol 1
+go go1.27.3
+platform windows/amd64
+[2026-11-07T17:08:59Z] exit=0
+[2026-11-07T17:08:59Z] start local server on 127.0.0.1:18792 with FT_WEB_PASSWORD
+[2026-11-07T17:09:02Z] $ curl -s -o /dev/null -w decoy=%{http_code}\n http://127.0.0.1:18792/
+decoy=200
+[2026-11-07T17:09:02Z] exit=0
+[2026-11-07T17:09:02Z] $ curl -s -o /dev/null -w app_no_cookie=%{http_code}\n http://127.0.0.1:18792/app
+app_no_cookie=404
+[2026-11-07T17:09:02Z] exit=0
+[2026-11-07T17:09:02Z] $ curl -s -o /dev/null -w unlock_bad=%{http_code}\n -X POST -H Content-Type: application/json --data {"password":"wrong"} http://127.0.0.1:18792/api/unlock
+unlock_bad=403
+[2026-11-07T17:09:02Z] exit=0
+[2026-11-07T17:09:02Z] $ curl -s -c /c/project/filetransfer/.tools/m5-web/cj -o /dev/null -w unlock_ok=%{http_code}\n -X POST -H Content-Type: application/json --data {"password":"test123"} http://127.0.0.1:18792/api/unlock
+unlock_ok=200
+[2026-11-07T17:09:02Z] exit=0
+[2026-11-07T17:09:02Z] $ curl -s -b /c/project/filetransfer/.tools/m5-web/cj -o /dev/null -w app_with_cookie=%{http_code}\n http://127.0.0.1:18792/app
+app_with_cookie=200
+[2026-11-07T17:09:03Z] exit=0
+[2026-11-07T17:09:03Z] start ft share and capture its 6-digit code
+
+6 位码：955433   房间：ebe8dfc068143a1d
+局域网地址：http://10.201.2.127:54780/a523ff4f0cbc148474edafc4ecc5b8de/
+浏览器打开：http://127.0.0.1:18792/app#code=955433
+█████████████████████████████████████
+█████████████████████████████████████
+████ ▄▄▄▄▄ █▄▄█ █▀ ▄▄▄█▀▄█ ▄▄▄▄▄ ████
+████ █   █ █▄ ▀▀▄█ ▄▄▀▄▄██ █   █ ████
+████ █▄▄▄█ █▀▄▀▀█▄▄█▄██▄▄█ █▄▄▄█ ████
+████▄▄▄▄▄▄▄█▄▀▄█ █ ▀ █▄▀▄█▄▄▄▄▄▄▄████
+████ ▀▄█▀▀▄ ██▀▄▄   █▀ █▀█▀ ██▄▀ ████
+█████▄ ▀▄█▄ █▀ █ ▀██▀▄▄ ▀▄ ▀▀▄▄█▄████
+██████▄▄▄ ▄▀ ██▀▀▄██▀▄ ▀▄█▀ ██▀▀ ████
+████ ▀██  ▄▄▀██ ▄▄ █▀   ███▄▄▄██▄████
+█████ ▄▀▄ ▄▀▄▄▀▄▄  █▄█  ▀▀▄▄█ ▀▀ ████
+████▄▄▀▄▀ ▄ █▄▄▄▄▀█▄▄  ▀ ▀█▀▀███▄████
+████▄▄▄▄█▄▄▄▀▀█ ▀▄██▄█   ▄▄▄  ▀▄▀████
+████ ▄▄▄▄▄ █▄█ ▄▀▄ ▀ ▀▀▄ █▄█ ██▀ ████
+████ █   █ ████ ▀  ███ █ ▄   █▄█▄████
+████ █▄▄▄█ █▄▄▄▀▄█▀▀▄█▄▀█  █▄▄▄▄▄████
+████▄▄▄▄▄▄▄█▄█▄▄██▄▄██▄██████▄▄█▄████
+█████████████████████████████████████
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+[2026-11-07T17:09:06Z] code=955433 room=ebe8dfc068143a1d lan=http://10.201.2.127:54780/a523ff4f0cbc148474edafc4ecc5b8de/
+[2026-11-07T17:09:06Z] $ curl -s -b /c/project/filetransfer/.tools/m5-web/cj -o /c/project/filetransfer/.tools/m5-web/resolve.json -w resolve=%{http_code}\n http://127.0.0.1:18792/api/resolve?code=955433
+resolve=200
+[2026-11-07T17:09:06Z] exit=0
+[2026-11-07T17:09:06Z] $ cat /c/project/filetransfer/.tools/m5-web/resolve.json
+{"lan":["http://10.201.2.127:54780/a523ff4f0cbc148474edafc4ecc5b8de/"],"name":"m5-web","ok":true,"relay":true,"room":"ebe8dfc068143a1d","ttl_s":596,"version":"1"}
+[2026-11-07T17:09:06Z] exit=0
+[2026-11-07T17:09:06Z] $ curl -s -b /c/project/filetransfer/.tools/m5-web/cj -o /dev/null -w resolve_bad=%{http_code}\n http://127.0.0.1:18792/api/resolve?code=000000
+resolve_bad=404
+[2026-11-07T17:09:07Z] exit=0
+[2026-11-07T17:09:07Z] $ curl -s -o /dev/null -w upload_no_cookie=%{http_code}\n -X POST http://127.0.0.1:18792/relay
+upload_no_cookie=400
+[2026-11-07T17:09:07Z] exit=0
+[2026-11-07T17:09:07Z] browser-driven checks (recorded from the Chrome run at 2026-11-08T01:0xZ):
+[2026-11-07T17:09:07Z]   LAN download test-2.1m.bin: 2,100,000 bytes sha256=58bbe9ba2521cf5e457db4bfd7cdb5c79734e3ead7f88727e563dc44de735a10
+[2026-11-07T17:09:07Z]   LAN upload browser-up.bin: 1,048,576 bytes sha256=06b7bbfb7824aa03382051691630eb26de85102d1b08a81e907ec0744cd8a286 (matches local python)
+[2026-11-07T17:09:07Z]   mode shown by /app: 局域网直连
+[2026-11-07T17:09:08Z] M5_WEB=PASS

@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>山径笔记 · 传输</title>
+<style>
+  body { margin:0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+         background:#f6f3ec; color:#2f2a24; }
+  main { max-width:46rem; margin:0 auto; padding:2rem 1rem 4rem; }
+  h1 { font-size:1.2rem; font-weight:600; margin:0 0 .2rem; }
+  .hint { color:#8a8177; font-size:.85rem; margin-bottom:1.2rem; }
+  .row { display:flex; gap:.5rem; margin:.6rem 0; }
+  input { flex:1; padding:.6rem .7rem; border:1px solid #d8d0c0; background:#fffdf8; font-size:1rem; }
+  button { padding:.6rem 1rem; border:1px solid #cfc6b5; background:#efe9dc; cursor:pointer; font-size:.95rem; }
+  button:disabled { opacity:.5; cursor:default; }
+  .badge { display:inline-block; padding:.1rem .5rem; border-radius:3px; font-size:.8rem;
+           background:#e6e0d2; color:#5c554b; }
+  .badge.lan { background:#dcecd9; color:#2f5c2a; }
+  .badge.relay { background:#e4dff0; color:#4a3c74; }
+  .status { font-size:.9rem; color:#5c554b; min-height:1.3em; margin:.4rem 0; }
+  table { width:100%; border-collapse:collapse; margin-top:1rem; font-size:.9rem; }
+  th, td { text-align:left; padding:.45rem .3rem; border-bottom:1px solid #e2dccf; }
+  th { color:#8a8177; font-weight:500; }
+  a { color:#3d5a80; }
+  #drop { border:1px dashed #cfc6b5; padding:1rem; text-align:center; color:#8a8177;
+          margin-top:1rem; font-size:.9rem; }
+  #drop.over { background:#efe9dc; }
+</style>
+</head>
+<body>
+<main>
+  <h1>传文件</h1>
+  <div class="hint">输入设备上显示的 6 位码。页面会同时尝试局域网直连与服务器中继，先连通的那条生效。</div>
+
+  <div class="row">
+    <input id="code" maxlength="6" inputmode="numeric" placeholder="6 位码" autocomplete="one-time-code">
+    <button id="go">连接</button>
+  </div>
+  <div class="status" id="status"></div>
+  <div><span class="badge" id="mode">未连接</span> <span id="peer" style="font-size:.85rem;color:#8a8177"></span></div>
+
+  <div id="drop" hidden>把文件拖到这里，或点下面的按钮</div>
+  <div class="row" id="upload-row" hidden>
+    <input type="file" id="file" multiple>
+    <button id="upload">上传</button>
+  </div>
+
+  <table id="list" hidden>
+    <thead><tr><th>文件</th><th>大小</th><th>SHA-256</th><th></th></tr></thead>
+    <tbody></tbody>
+  </table>
+</main>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var state = { base: null, mode: null, ws: null, room: null };
+
+  function setMode(m, text) {
+    var el = $('mode');
+    el.className = 'badge ' + (m || '');
+    el.textContent = m === 'lan' ? '局域网直连' : m === 'relay' ? '服务器中继' : '未连接';
+    if (text) $('status').textContent = text;
+  }
+
+  function fmtSize(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1048576).toFixed(1) + ' MB';
+  }
+
+  function lanReady(base, ms) {
+    return new Promise(function (resolve, reject) {
+      var ctl = new AbortController();
+      var t = setTimeout(function () { ctl.abort(); reject(new Error('lan timeout')); }, ms);
+      fetch(base + '/api/list', { signal: ctl.signal, cache: 'no-store' })
+        .then(function (r) {
+          clearTimeout(t);
+          if (!r.ok) throw new Error('lan ' + r.status);
+          return r.json();
+        })
+        .then(function (j) { resolve({ base: base, files: j.files || [] }); })
+        .catch(function (e) { clearTimeout(t); reject(e); });
+    });
+  }
+
+  function relayConnect(room) {
+    return new Promise(function (resolve, reject) {
+      var url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/web/' + room + '?role=guest';
+      var ws = new WebSocket(url);
+      var t = setTimeout(function () { try { ws.close(); } catch (e) {} reject(new Error('relay timeout')); }, 2500);
+      ws.onopen = function () { clearTimeout(t); resolve(ws); };
+      ws.onerror = function () { clearTimeout(t); reject(new Error('relay error')); };
+    });
+  }
+
+  function connect() {
+    var code = ($('code').value || '').trim();
+    if (!/^\d{6}$/.test(code)) { $('status').textContent = '请输入 6 位数字码'; return; }
+    $('go').disabled = true;
+    setMode('', '正在查找设备…');
+    fetch('/api/resolve?code=' + encodeURIComponent(code), { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('码不正确或已过期'); return r.json(); })
+      .then(function (info) {
+        state.room = info.room;
+        $('peer').textContent = info.name || '';
+        var lanAttempts = (info.lan || []).map(function (u) {
+          return lanReady(u.replace(/\/$/, ''), 1200);
+        });
+        var relayAttempt = info.relay ? relayConnect(info.room).then(function (ws) {
+          return { mode: 'relay', ws: ws };
+        }) : null;
+        if (!lanAttempts.length && !relayAttempt) throw new Error('设备没有可用的连接方式');
+        // Both paths start together, but LAN wins whenever it answers inside
+        // the window: a reachable LAN is always faster than the relay.
+        var grace = new Promise(function (resolve) { setTimeout(resolve, 1200); });
+        var first = lanAttempts.length
+          ? Promise.race([Promise.any(lanAttempts).catch(function () { return null; }), grace])
+          : Promise.resolve(null);
+        return first.then(function (lan) {
+          if (lan) return lan;
+          if (relayAttempt) return relayAttempt;
+          throw new Error('局域网与中继都没连上');
+        });
+      })
+      .then(function (win) {
+        if (win.ws) {
+          state.mode = 'relay'; state.ws = win.ws;
+          setMode('relay', '已通过服务器中继连接（文件传输层下一步接入）');
+          $('go').disabled = false;
+          return;
+        }
+        state.mode = 'lan'; state.base = win.base;
+        setMode('lan', '已直连设备，速度取决于局域网');
+        $('go').disabled = false;
+        $('upload-row').hidden = false;
+        $('drop').hidden = false;
+        render(win.files);
+      })
+      .catch(function (e) {
+        $('go').disabled = false;
+        setMode('', '连接失败：' + (e && e.message ? e.message : e));
+      });
+  }
+
+  function render(files) {
+    var tb = document.querySelector('#list tbody');
+    tb.innerHTML = '';
+    files.forEach(function (f) {
+      var tr = document.createElement('tr');
+      var name = document.createElement('td'); name.textContent = f.name;
+      var size = document.createElement('td'); size.textContent = fmtSize(f.size);
+      var sha = document.createElement('td'); sha.textContent = (f.sha256 || '').slice(0, 12) + '…';
+      var act = document.createElement('td');
+      var a = document.createElement('a');
+      a.href = state.base + '/f/' + encodeURIComponent(f.name);
+      a.textContent = '下载';
+      act.appendChild(a);
+      tr.appendChild(name); tr.appendChild(size); tr.appendChild(sha); tr.appendChild(act);
+      tb.appendChild(tr);
+    });
+    $('list').hidden = files.length === 0;
+  }
+
+  function refresh() {
+    if (!state.base) return;
+    fetch(state.base + '/api/list', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { render(j.files || []); });
+  }
+
+  function upload(files) {
+    if (!state.base || !files.length) return;
+    var fd = new FormData();
+    for (var i = 0; i < files.length; i++) fd.append('file', files[i], files[i].name);
+    $('status').textContent = '上传中…';
+    fetch(state.base + '/upload', { method: 'POST', body: fd })
+      .then(function (r) { if (!r.ok) throw new Error('upload ' + r.status); return r.json(); })
+      .then(function () { $('status').textContent = '上传完成'; refresh(); })
+      .catch(function (e) { $('status').textContent = '上传失败：' + e.message; });
+  }
+
+  var m = /[#&]code=(\d{6})/.exec(location.hash || '');
+  if (m) $('code').value = m[1];
+
+  $('go').addEventListener('click', connect);
+  $('code').addEventListener('keydown', function (e) { if (e.key === 'Enter') connect(); });
+  $('upload').addEventListener('click', function () { upload($('file').files); });
+  ['dragenter', 'dragover'].forEach(function (t) {
+    $('drop').addEventListener(t, function (e) { e.preventDefault(); $('drop').classList.add('over'); });
+  });
+  ['dragleave', 'drop'].forEach(function (t) {
+    $('drop').addEventListener(t, function (e) { e.preventDefault(); $('drop').classList.remove('over'); });
+  });
+  $('drop').addEventListener('drop', function (e) { upload(e.dataTransfer.files); });
+})();
+</script>
+</body>
+</html>

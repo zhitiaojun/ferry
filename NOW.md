@@ -4,7 +4,7 @@
 
 ## 当前目标
 
-以“我的手机 ↔ 我的电脑”之间的最佳传输体验为主、兼顾陌生设备（D12），按 `PLAN.md` 的 M0–M9 推进至 v1.0。当前处于 **M4 已完成（G4 报告已出）、准备进入 M5**，由 work agent 执行（D25，规约见 `WORK_AGENT.md`）：M0（G0 关闸）、M1（G1）、M2（G2）、M3（G3）之后，M4 的 STUN 服务端、候选收集、UDP 打洞（QUIC，TLS 1.3 钉定）、路径竞速与降级均已落地，真实 NAT 实测按环境如实记录（T5 成功、T6 因校园网 UDP 过滤回退中继）。
+以“我的手机 ↔ 我的电脑”之间的最佳传输体验为主、兼顾陌生设备（D12），按 `PLAN.md` 的 M0–M9 推进至 v1.0。当前处于 **M5 进行中（lanweb 与服务器 web 端已落地，待部署与浏览器真机验收）**，由 work agent 执行（D25，规约见 `WORK_AGENT.md`）：M0（G0 关闸）、M1（G1）、M2（G2）、M3（G3）之后，M4 的 STUN 服务端、候选收集、UDP 打洞（QUIC，TLS 1.3 钉定）、路径竞速与降级均已落地，真实 NAT 实测按环境如实记录（T5 成功、T6 因校园网 UDP 过滤回退中继）。
 
 ## 进展（截至 2026-11-07）
 
@@ -50,8 +50,11 @@
 - [x] M4 竞速与降级：`pathmgr.Race` 并发打洞/中继，`FT_PUNCH_BLOCK=1` 时干净回退中继（证据 `evidence/stage2/20261107-2326-race.log`）。
 - [x] M4 真实 NAT：T5（电脑→手机，蜂窝）打洞成功；T6（手机→电脑）在同一校园 AP 下因客户端间 UDP 过滤不可达，按 D3 回退中继（证据 `evidence/stage2/20261108-0034-t6.txt`）。
 - [x] M4 G4 报告：`evidence/stage2/20261108-0045-g4.txt`（T2/T5/T6/竞速结果、T11 环境不具备、T8 未测说明）。
+- [x] M5 服务器 web 端：`server/web.go`（伪装页 `/`、口令解锁 `/api/unlock`、设备注册 `/api/devices`、6 位码解析 `/api/resolve`、房间 WS `/web/<room>`）、`server/webroom.go`（guest/host 双向转发，单 pump）、`server/assets/{index,app}.html`（伪装随笔页 + 传输 UI，LAN 优先竞速 1.2s 宽限）；`server/web_test.go` 覆盖口令延迟、cookie、劫持、WS 透传。
+- [x] M5 `ft share`：`cmd/ft/share.go`（解锁→起 lanweb→注册 6 位码→打印码/房间/LAN 地址/二维码→心跳→保活 `/web/<room>`），`lanURLs()` 用 `discovery.Eligible()` 过滤 VPN/TUN。
+- [x] M5 浏览器实测（本机栈 127.0.0.1:18791 + `FT_WEB_PASSWORD=test123`）：伪装页 200、无 cookie `/app` 404、错误口令 403、正确口令 200；`/app` 连接后显示「局域网直连」；浏览器下载 2.1MB sha256 `58bbe9ba…`、上传 1MB `06b7bbfb…` 与本机 python 计算一致；证据 `evidence/stage2/20261108-0115-web.log`（`M5_WEB=PASS`）。
 
-可运行入口：`ft -version`、`ft whoami`、`ft send` / `ft recv`（`cmd/ft`；本机 TCP、LAN 发现、经 BJ 中继的 `--signal/--allow relay`、UDP 打洞的 `--signal --punch`）；`ft-server`（信令+中继+STUN）、`ft-probe`（登录/心跳探测；`-gather` 打印打洞候选与 NAT 行为）。`core/proto` 有金标向量单测，`core/session`、`core/transfer`、`core/punch`、`core/pathmgr` 有单测；`cmd/ft-desktop` 为投放小窗预研原型（非正式客户端）；`core/lanweb` 仍为占位。
+可运行入口：`ft -version`、`ft whoami`、`ft send` / `ft recv`（`cmd/ft`；本机 TCP、LAN 发现、经 BJ 中继的 `--signal/--allow relay`、UDP 打洞的 `--signal --punch`）；`ft-server`（信令+中继+STUN）、`ft-probe`（登录/心跳探测；`-gather` 打印打洞候选与 NAT 行为）。`core/proto` 有金标向量单测，`core/session`、`core/transfer`、`core/punch`、`core/pathmgr` 有单测；`cmd/ft-desktop` 为投放小窗预研原型（非正式客户端）；`core/lanweb`（浏览器 LAN 收发）、`ft share`（服务器 web 端注册与保活）。
 
 ## 阻塞 / 待确认
 
@@ -59,11 +62,7 @@
 
 ## 下一步（按优先级，由 work agent 执行）
 
-M4 已收口（G4 报告见 `evidence/stage2/20261108-0045-g4.txt`）。下一步按 `PLAN.md` 进入 **M5 浏览器端**：
-
-1. `core/lanweb`：LAN 直连的浏览器页面（上传/下载、二维码/链接），与 `cmd/ft` 共用传输层。
-2. 中继 Web 页（依赖 M3 已就绪）：短链接/二维码换取一次性会话，端到端加密（M6 收紧）。
-3. 文档与证据：`evidence/stage2/`，更新 MAP/RUNBOOK/README。
+M5 剩余：把 web 端部署到 BJ（`FT_WEB_PASSWORD` + 新二进制），然后按 G5 做 T3（同网浏览器）/T4（外网浏览器经中继）验收；中继模式的浏览器文件传输载荷仍待实现（当前 `/web/<room>` 只转发消息，UI 显示“文件传输层下一步接入”）。
 
 ## 关卡 G4（准备中，2026-11-07）
 

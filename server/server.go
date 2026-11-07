@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -47,6 +48,7 @@ func DefaultLimits() Limits {
 type Server struct {
 	limits Limits
 	log    *logging.Logger
+	web    *Web
 	start  time.Time
 
 	mu     sync.Mutex
@@ -107,6 +109,7 @@ func New(log *logging.Logger) *Server {
 	return &Server{
 		limits: DefaultLimits(),
 		log:    log,
+		web:    NewWeb(os.Getenv("FT_WEB_PASSWORD"), DefaultWebLimits(), log),
 		start:  time.Now(),
 		peers:  make(map[string]*peer),
 		rooms:  make(map[string]*room),
@@ -119,6 +122,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/signal", s.handleSignal)
 	mux.HandleFunc("/relay", s.handleRelay)
 	mux.HandleFunc("/healthz", s.handleHealth)
+	if s.web != nil {
+		s.web.registerRoutes(mux)
+	}
 	return mux
 }
 

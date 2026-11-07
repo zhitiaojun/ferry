@@ -55,6 +55,8 @@ func main() {
 		os.Exit(runWhoami(os.Args[2:]))
 	case "pair":
 		os.Exit(runPair(os.Args[2:]))
+	case "share":
+		os.Exit(runShare(os.Args[2:]))
 	case "help", "-h", "--help":
 		usage()
 		return
@@ -63,6 +65,29 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+}
+
+// runShare serves a directory to the public web UI (protocol §8.6): a browser
+// on ft.cwlindean.cn enters the six-digit code, tries the LAN address first and
+// falls back to this host's relay socket.
+func runShare(args []string) int {
+	fs := flag.NewFlagSet("share", flag.ContinueOnError)
+	base := fs.String("base", "https://ft.cwlindean.cn", "public site base URL")
+	password := fs.String("password", os.Getenv("FT_WEB_PASSWORD"), "web password (or FT_WEB_PASSWORD)")
+	dir := fs.String("dir", ".", "directory to share")
+	name := fs.String("name", defaultName(), "device name shown to the browser")
+	port := fs.Int("port", 0, "LAN web port (0 = random)")
+	logPath := fs.String("log", "", "JSONL log file")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if err := shareMain(shareOptions{
+		BaseURL: *base, Password: *password, Name: *name, Dir: *dir, Port: *port, LogPath: *logPath,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "ft share: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 // runWhoami prints the signaling identity used by --signal (protocol §8.2).
@@ -628,21 +653,13 @@ func splitCSV(s string) []string {
 // lanURLs lists browser URLs for every non-loopback IPv4 address so the page
 // is reachable from whatever network the machine is currently on.
 func lanURLs(token string, port int) []string {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return []string{fmt.Sprintf("http://127.0.0.1:%d/%s/", port, token)}
-	}
 	var out []string
-	for _, a := range addrs {
-		ipnet, ok := a.(*net.IPNet)
-		if !ok || ipnet.IP.IsLoopback() {
-			continue
+	// discovery.Eligible already drops VPN/TUN adapters and fake-ip ranges;
+	// advertising those to a browser would only produce dead LAN candidates.
+	if ifaces, err := discovery.Eligible(); err == nil {
+		for _, ifc := range ifaces {
+			out = append(out, fmt.Sprintf("http://%s:%d/%s/", ifc.IP.String(), port, token))
 		}
-		ip4 := ipnet.IP.To4()
-		if ip4 == nil || ip4.IsLinkLocalUnicast() {
-			continue
-		}
-		out = append(out, fmt.Sprintf("http://%s:%d/%s/", ip4.String(), port, token))
 	}
 	if len(out) == 0 {
 		out = append(out, fmt.Sprintf("http://127.0.0.1:%d/%s/", port, token))

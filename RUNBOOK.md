@@ -131,6 +131,26 @@ ft send --signal ws://127.0.0.1:18790/signal --punch --allow punch,relay        
 - `FT_PUNCH_BLOCK=1` 仅用于验证“打洞失败 → 中继胜出”的降级路径，不要用于真实传输。
 - 单机双进程调试：`FT_PUNCH_LOOPBACK=1` 追加回环候选，绕过 Windows 入站防火墙。
 
+## H. M5 浏览器端（2026-11-08 本机已执行，`evidence/stage2/20261108-0115-web.log`）
+
+本机一键复现：
+
+```bash
+FT_WEB_PASSWORD=test123 ./.tools/bin/ft-server.exe -listen 127.0.0.1:18791 -log out.jsonl &
+./.tools/bin/ft.exe share --base http://127.0.0.1:18791 --password test123   --dir ./testdata --name m5-web --log share.jsonl
+```
+
+`ft share` 会打印 6 位码、房间、LAN 地址、浏览器链接（含 `#code=`）与 ASCII 二维码。
+浏览器打开链接 → 页脚连点 5 次 → 输入口令 → `/app` 输入 6 位码 → 连接。
+页面应显示「局域网直连」（LAN 可达时优先）或「服务器中继」；LAN 模式下可上传/下载并显示 SHA-256。
+
+验收检查：
+
+- 未解锁直接访问 `/app` 返回 404；错误口令 403 且明显延迟。
+- 浏览器下载 `test-2.1m.bin` 后哈希：`58bbe9ba2521cf5e457db4bfd7cdb5c79734e3ead7f88727e563dc44de735a10`。
+- 浏览器上传 1 MiB 生成文件后，设备目录内文件哈希与浏览器显示一致。
+- 证据脚本：`bash tools/m5-web.sh evidence/stage2/$(date +%Y%m%d-%H%M)-web.log`（`M5_WEB=PASS`）。
+
 ## F. 证据归档
 
 每次验证后，把原始输出写入 `evidence/stageN/YYYYMMDD-HHMM.log`，并在 `NOW.md` 的「证据入口」表登记路径。

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>山径笔记</title>
+<style>
+  :root { color-scheme: light; }
+  body { margin:0; font-family: "Iowan Old Style", Georgia, "Songti SC", serif;
+         background:#f6f3ec; color:#2f2a24; line-height:1.75; }
+  header { padding:2.4rem 1.2rem 1rem; max-width:44rem; margin:0 auto; }
+  h1 { font-size:1.7rem; letter-spacing:.04em; margin:0 0 .3rem; }
+  .sub { color:#8a8177; font-size:.9rem; }
+  main { max-width:44rem; margin:0 auto; padding:0 1.2rem 4rem; }
+  article { border-top:1px solid #e2dccf; padding:1.1rem 0; }
+  article h2 { font-size:1.05rem; margin:0 0 .3rem; font-weight:600; }
+  article p { margin:.2rem 0; color:#5c554b; font-size:.95rem; }
+  footer { max-width:44rem; margin:2rem auto 3rem; padding:0 1.2rem; color:#a39a8d;
+           font-size:.8rem; display:flex; justify-content:space-between; }
+  .dot { color:#c9c0b1; cursor:default; user-select:none; }
+  #gate { display:none; position:fixed; inset:0; background:rgba(246,243,236,.97);
+          place-items:center; }
+  #gate.on { display:grid; }
+  #gate form { width:min(20rem,80vw); text-align:center; }
+  #gate input { width:100%; box-sizing:border-box; padding:.6rem .7rem; margin:.6rem 0;
+                border:1px solid #d8d0c0; background:#fffdf8; font-size:1rem; }
+  #gate button { width:100%; padding:.6rem; border:1px solid #cfc6b5; background:#efe9dc;
+                 font-size:.95rem; cursor:pointer; }
+  #gate .msg { color:#a4533f; font-size:.85rem; min-height:1.2em; }
+</style>
+</head>
+<body>
+<header>
+  <h1>山径笔记</h1>
+  <div class="sub">一些路上的记录 · 不定期更新</div>
+</header>
+<main>
+  <article>
+    <h2>在雨里走过的那段石阶</h2>
+    <p>雨后的石头很滑，脚下要慢一点。走到半山回望，云正从谷底往上爬。</p>
+  </article>
+  <article>
+    <h2>关于旧相机</h2>
+    <p>它测光不太准，但快门声很好听。拍坏的照片比拍好的多，留着的却都是后者。</p>
+  </article>
+  <article>
+    <h2>冬夜的一碗面</h2>
+    <p>加一枚蛋，两片青菜。热气上来的时候，窗外的风好像也没那么冷了。</p>
+  </article>
+</main>
+<footer>
+  <span>© 2019–2026 山径笔记</span>
+  <span class="dot" id="dot">·</span>
+</footer>
+
+<div id="gate">
+  <form id="gate-form" autocomplete="off">
+    <div style="font-size:.95rem;color:#6b6256">请输入访问口令</div>
+    <input id="pw" type="password" inputmode="text" autocomplete="current-password">
+    <button type="submit">进入</button>
+    <div class="msg" id="msg"></div>
+  </form>
+</div>
+
+<script>
+(function () {
+  // The gate opens only after five taps on the footer dot. There is no link,
+  // no shortcut and no hint in the markup: a crawler sees a plain notes site.
+  var taps = 0, last = 0;
+  var dot = document.getElementById('dot');
+  var gate = document.getElementById('gate');
+  var form = document.getElementById('gate-form');
+  var msg = document.getElementById('msg');
+  dot.addEventListener('click', function () {
+    var now = Date.now();
+    if (now - last > 1200) taps = 0;
+    last = now;
+    if (++taps < 5) return;
+    taps = 0;
+    gate.classList.add('on');
+    document.getElementById('pw').focus();
+  });
+  gate.addEventListener('click', function (e) {
+    if (e.target === gate) gate.classList.remove('on');
+  });
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    msg.textContent = '';
+    fetch('/api/unlock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: document.getElementById('pw').value })
+    }).then(function (r) {
+      if (r.ok) { location.href = '/app'; return; }
+      msg.textContent = '口令不对';
+    }).catch(function () { msg.textContent = '网络错误'; });
+  });
+})();
+</script>
+</body>
+</html>
