@@ -186,13 +186,10 @@ func (r *punchReceiver) serveOnce(ctx context.Context, name, outDir, signalURL, 
 	defer cancel()
 	go g.Punch(punchCtx, localCandidates(peer))
 
-	conn, err := q.AcceptOrDial(ctx, punch.Resolve(localCandidates(peer)))
+	cctx, ccancel := context.WithTimeout(ctx, 25*time.Second)
+	sess, err := punch.Connect(cctx, q, punch.Resolve(localCandidates(peer)), key.ID(), parseDeviceID(req.FromDevice), sessionParams(key, name))
+	ccancel()
 	if err != nil {
-		return err
-	}
-	sess, err := session.Accept(conn, sessionParams(key, name))
-	if err != nil {
-		_ = conn.Close()
 		return err
 	}
 	defer sess.Drain(2 * time.Second)
@@ -308,11 +305,6 @@ func SendViaPunch(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSO
 					return "", fmt.Errorf("peer declined: %s", r.Reason)
 				}
 				accepted = true
-				if err := client.Send(ctx, signaling.TypeCandidates, signaling.Candidates{
-					ToDevice: toID, SessionID: sid, Candidates: signalingCandidates(g.Candidates),
-				}); err != nil {
-					return "", err
-				}
 			case signaling.TypeCandidates:
 				c, err := signaling.Decode[signaling.Candidates](e)
 				if err != nil {
@@ -325,25 +317,30 @@ func SendViaPunch(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSO
 		}
 	}
 
-	tlsCfg, err := identity.ClientTLS(key, peerPub)
+	tlsCfg, err := identity.ServerTLS(key, peerPub)
 	if err != nil {
 		return "", err
 	}
 	q := pathmgr.NewQUIC(g.Conn, tlsCfg)
 	defer q.Close()
+	if err := q.PrepareListen(ctx); err != nil {
+		return "", err
+	}
+	if err := client.Send(ctx, signaling.TypeCandidates, signaling.Candidates{
+		ToDevice: toID, SessionID: sid, Candidates: signalingCandidates(g.Candidates),
+	}); err != nil {
+		return "", err
+	}
 
 	punchCtx, pcancel := context.WithCancel(ctx)
 	defer pcancel()
 	go g.Punch(punchCtx, localCandidates(peer))
 
-	conn, err := dialRace(ctx, q, punch.Resolve(localCandidates(peer)), 12*time.Second)
+	cctx, ccancel := context.WithTimeout(ctx, 25*time.Second)
+	sess, err := punch.Connect(cctx, q, punch.Resolve(localCandidates(peer)), key.ID(), parseDeviceID(toID), sessionParams(key, name))
+	ccancel()
 	if err != nil {
 		return "", fmt.Errorf("punch: %w", err)
-	}
-	sess, err := session.Dial(conn, sessionParams(key, name))
-	if err != nil {
-		_ = conn.Close()
-		return "", err
 	}
 	defer sess.Drain(2 * time.Second)
 
@@ -480,4 +477,14 @@ func sessionParams(key *identity.Key, name string) session.Params {
 		Name:         name,
 		Capabilities: proto.CapResume,
 	}
+}
+
+// parseDeviceID turns the hex device id carried by signaling into the array
+// form used by the punch role selection.
+func parseDeviceID(hexID string) [32]byte {
+	var id [32]byte
+	if b, err := hex.DecodeString(hexID); err == nil && len(b) == 32 {
+		copy(id[:], b)
+	}
+	return id
 }

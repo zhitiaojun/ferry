@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
@@ -11,7 +12,6 @@ import (
 	"github.com/cwlindean/filetransfer/core/logging"
 	"github.com/cwlindean/filetransfer/core/pathmgr"
 	"github.com/cwlindean/filetransfer/core/punch"
-	"github.com/cwlindean/filetransfer/core/session"
 	"github.com/cwlindean/filetransfer/core/signaling"
 	"github.com/cwlindean/filetransfer/core/transfer"
 )
@@ -151,13 +151,6 @@ func sendViaPunch(ctx context.Context, o punchOptions) (summary, error) {
 					return summary{}, fmt.Errorf("peer declined: %s", r.Reason)
 				}
 				accepted = true
-				if err := client.Send(ctx, signaling.TypeCandidates, signaling.Candidates{
-					ToDevice:   o.ToID,
-					SessionID:  sid,
-					Candidates: signalingCandidates(g.Candidates),
-				}); err != nil {
-					return summary{}, fmt.Errorf("send candidates: %w", err)
-				}
 			case signaling.TypeCandidates:
 				c, err := signaling.Decode[signaling.Candidates](e)
 				if err != nil {
@@ -185,28 +178,35 @@ func sendViaPunch(ctx context.Context, o punchOptions) (summary, error) {
 	defer cancelPunch()
 	go g.Punch(punchCtx, peerLocal)
 
-	clientTLS, err := identity.ClientTLS(key, peerPub)
+	serverTLS, err := identity.ServerTLS(key, peerPub)
 	if err != nil {
 		return summary{}, err
 	}
-	q := pathmgr.NewQUIC(g.Conn, clientTLS)
+	q := pathmgr.NewQUIC(g.Conn, serverTLS)
 	defer q.Close()
 	q.SetPeer(peerAddr.String())
-
+	if err := q.PrepareListen(ctx); err != nil {
+		return summary{}, err
+	}
+	// Listen before publishing: the peer dials the mapping we advertise, and
+	// on a symmetric NAT it is our outbound packets that open it.
+	if err := client.Send(ctx, signaling.TypeCandidates, signaling.Candidates{
+		ToDevice:   o.ToID,
+		SessionID:  sid,
+		Candidates: signalingCandidates(g.Candidates),
+	}); err != nil {
+		return summary{}, fmt.Errorf("send candidates: %w", err)
+	}
 	if o.Log != nil {
 		o.Log.Event("punch.dial", map[string]any{"local": g.Conn.LocalAddr().String(), "candidates": len(peerLocal)})
 	}
-	conn, err := punchRaceDial(ctx, q, peerLocal, 12*time.Second)
+	actx, cancelAccept := context.WithTimeout(ctx, 25*time.Second)
+	sess, err := punch.Connect(actx, q, punch.Resolve(peerLocal), key.ID(), parseDeviceID(o.ToID), sessionParams(key, o.Name))
+	cancelAccept()
 	if err != nil {
 		return summary{}, fmt.Errorf("hole punching (%s): %w", peerAddr, err)
 	}
 	cancelPunch()
-
-	sess, err := session.Dial(conn, sessionParams(key, o.Name))
-	if err != nil {
-		_ = conn.Close()
-		return summary{}, err
-	}
 	cfg := transfer.Config{
 		ChunkSize:  uint32(o.Chunk),
 		Timeout:    o.Timeout,
@@ -399,19 +399,13 @@ func recvViaPunch(ctx context.Context, o punchOptions) (summary, error) {
 		defer cancelPunch()
 		go g.Punch(punchCtx, peerLocal)
 
-		actx, cancelAccept := context.WithTimeout(ctx, 10*time.Second)
-		conn, err := q.AcceptOrDial(actx, punch.Resolve(peerLocal))
+		actx, cancelAccept := context.WithTimeout(ctx, 25*time.Second)
+		sess, err := punch.Connect(actx, q, punch.Resolve(peerLocal), key.ID(), parseDeviceID(req.FromDevice), sessionParams(key, o.Name))
 		cancelAccept()
 		if err != nil {
 			return summary{}, err
 		}
 		cancelPunch()
-
-		sess, err := session.Accept(conn, sessionParams(key, o.Name))
-		if err != nil {
-			_ = conn.Close()
-			return summary{}, err
-		}
 		start := time.Now()
 		res, err := transfer.Receive(sess, o.OutDir, transfer.Config{
 			ChunkSize:  uint32(o.Chunk),
@@ -433,4 +427,14 @@ func recvViaPunch(ctx context.Context, o punchOptions) (summary, error) {
 			DurationMS: time.Since(start).Milliseconds(),
 		}, nil
 	}
+}
+
+// parseDeviceID turns the hex device id carried by signaling into the array
+// form used by identity and the punch role selection.
+func parseDeviceID(hexID string) [32]byte {
+	var id [32]byte
+	if b, err := hex.DecodeString(hexID); err == nil && len(b) == 32 {
+		copy(id[:], b)
+	}
+	return id
 }

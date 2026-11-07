@@ -9,6 +9,7 @@ import (
 
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/pathmgr"
+	"github.com/cwlindean/filetransfer/core/punch"
 	"github.com/cwlindean/filetransfer/core/relay"
 	"github.com/cwlindean/filetransfer/core/session"
 	"github.com/cwlindean/filetransfer/core/signaling"
@@ -296,16 +297,13 @@ func recvViaRace(ctx context.Context, po punchOptions, ro relayOptions) (summary
 			punchCtx, cancel := context.WithCancel(actx)
 			defer cancel()
 			go g.Punch(punchCtx, peerLocal)
-			conn, err := q.Accept(actx)
+			cctx, ccancel := context.WithTimeout(actx, 25*time.Second)
+			s, err := punch.Connect(cctx, q, punch.Resolve(peerLocal), key.ID(), parseDeviceID(req.FromDevice), sessionParams(key, po.Name))
+			ccancel()
 			if err != nil {
 				return nil, err
 			}
 			cancel()
-			s, err := session.Accept(conn, sessionParams(key, po.Name))
-			if err != nil {
-				_ = conn.Close()
-				return nil, err
-			}
 			return s, nil
 		},
 	}
