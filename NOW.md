@@ -4,7 +4,7 @@
 
 ## 当前目标
 
-以“我的手机 ↔ 我的电脑”之间的最佳传输体验为主、兼顾陌生设备（D12），按 `PLAN.md` 的 M0–M9 推进至 v1.0。当前处于 **M5 进行中（lanweb 与服务器 web 端已落地，待部署与浏览器真机验收）**，由 work agent 执行（D25，规约见 `WORK_AGENT.md`）：M0（G0 关闸）、M1（G1）、M2（G2）、M3（G3）之后，M4 的 STUN 服务端、候选收集、UDP 打洞（QUIC，TLS 1.3 钉定）、路径竞速与降级均已落地，真实 NAT 实测按环境如实记录（T5 成功、T6 因校园网 UDP 过滤回退中继）。
+以“我的手机 ↔ 我的电脑”之间的最佳传输体验为主、兼顾陌生设备（D12），按 `PLAN.md` 的 M0–M9 推进至 v1.0。当前处于 **M5 已收口（lanweb 与服务器 web 端已部署，G5 证据齐备，待确认）**，由 work agent 执行（D25，规约见 `WORK_AGENT.md`）：M0（G0 关闸）、M1（G1）、M2（G2）、M3（G3）之后，M4 的 STUN 服务端、候选收集、UDP 打洞（QUIC，TLS 1.3 钉定）、路径竞速与降级均已落地，真实 NAT 实测按环境如实记录（T5 成功、T6 因校园网 UDP 过滤回退中继）。
 
 ## 进展（截至 2026-11-07）
 
@@ -63,7 +63,14 @@
 
 ## 下一步（按优先级，由 work agent 执行）
 
-M5 剩余：T3（同网浏览器走 LAN）与 T4（外网浏览器经中继、已在本机浏览器实测通过）按 G5 整理证据并出报告。
+M5 结论（G5）：
+
+- T3（浏览器与设备同网）：走**设备自己的局域网地址** `http://<设备IP>:<端口>/<token>/`（lanweb，同源），已由 `evidence/stage2/20261108-0042-lanweb.log` 与浏览器实测（下载 2.1MB 哈希一致、上传 1MiB 哈希一致）满足。
+- T4（浏览器在外网）：`https://ft.cwlindean.cn` → 伪装页 → 口令 → 6 位码 → ESA 中继（`/web/<room>`），已通过并留证 `evidence/stage2/20261108-0123-web-public.log`。
+- 已知限制（浏览器安全策略）：HTTPS 公网页面无法 `fetch` 设备的 `http://<LAN IP>`（混合内容被 Chrome 阻止），因此公网页面的“LAN 优先”只在 http 页面/本机调试时生效，公网页面实际固定走中继；需要 LAN 直连时用设备二维码/局域网地址打开。
+- 服务器端只转运密文之外的帧数据，`/app` 需口令 cookie；10MB 级传输内存不随文件线性增长（中继按 64KiB 帧转发）。
+
+M5 剩余：无（G5 待用户确认）。
 
 - [x] M5 部署与公网验收：BJ 换新二进制（sha256 `6ebd7cbd…`，备份 `ft-server.bak-20261108-web`）、`/opt/ft-server/web.env`（0600）、unit 增 `EnvironmentFile`、站点 `/` 与 `/web/` 反代后 `nginx -t` + reload；公网 `/` 200 伪装页、`/app` 无 cookie 404、`/healthz` 200；浏览器经 ESA 中继连接、列表、下载（哈希通过）、上传 200,000B（设备侧 sha256 `2abed853…` 一致）；证据 `evidence/stage2/20261108-0123-web-public.log`（`M5_WEB_PUBLIC=PASS`）。ESA 约 30s 断空闲 WS，`ft share` 已加 20s ping 与 1→15s 重连退避。
 
