@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/cwlindean/filetransfer/core/discovery"
+	qrcode "github.com/skip2/go-qrcode"
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/lanweb"
 	"github.com/cwlindean/filetransfer/core/logging"
@@ -289,6 +290,7 @@ func runRecv(args []string) int {
 	web := fs.Bool("web", false, "serve a browser page on the LAN instead of the file protocol")
 	webPort := fs.Int("web-port", 0, "LAN web listen port (0 = random)")
 	webToken := fs.String("web-token", "", "LAN web path token (random by default)")
+	webQR := fs.Bool("qr", false, "print an ASCII QR code for the LAN web URL")
 	_ = fs.Bool("once", true, "accept one connection (kept for CLI stability)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -323,6 +325,12 @@ func runRecv(args []string) int {
 		port := ln.Addr().(*net.TCPAddr).Port
 		urls := lanURLs(srv.Token(), port)
 		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true, "mode": "lanweb", "dir": *out, "port": port, "token": srv.Token(), "urls": urls})
+		if *webQR && len(urls) > 0 {
+			if qr, err := qrcode.New(urls[0], qrcode.Medium); err == nil {
+				fmt.Fprintln(os.Stderr, qr.ToSmallString(false))
+				fmt.Fprintf(os.Stderr, "扫这个二维码：%s\n", urls[0])
+			}
+		}
 		if err := srv.ListenAndServe("", ln); err != nil {
 			fmt.Fprintf(os.Stderr, "ft recv: %v\n", err)
 			return 1
