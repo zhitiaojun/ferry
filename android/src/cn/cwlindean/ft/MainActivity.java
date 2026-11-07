@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
 import android.net.wifi.WifiManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -62,6 +63,9 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         deviceName = defaultName();
         setContentView(buildUi());
+        if (Build.VERSION.SDK_INT >= 33) {
+            requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 7);
+        }
         status.setText("未启动。先在电脑上运行 ft recv --lan，再点“开始接收”。");
     }
 
@@ -150,6 +154,19 @@ public class MainActivity extends Activity {
         return n.isEmpty() ? deviceName : n;
     }
 
+    private void startKeepAlive(String text) {
+        Intent i = new Intent(this, TransferService.class).putExtra("text", text);
+        if (Build.VERSION.SDK_INT >= 26) {
+            startForegroundService(i);
+        } else {
+            startService(i);
+        }
+    }
+
+    private void stopKeepAlive() {
+        stopService(new Intent(this, TransferService.class));
+    }
+
     private void startReceiver() {
         if (receiverRunning) {
             toast("已经在接收");
@@ -167,6 +184,7 @@ public class MainActivity extends Activity {
                     startBtn.setEnabled(true);
                     status.setText("正在接收：" + addr + "\n收到：" + dir.getAbsolutePath());
                     acquireMulticastLock();
+                    startKeepAlive("正在接收，端口 " + addr);
                 });
             } catch (Exception e) {
                 Log.e(TAG, "startReceiver", e);
@@ -189,6 +207,7 @@ public class MainActivity extends Activity {
                 receiverRunning = false;
                 status.setText("已停止");
                 releaseMulticastLock();
+                stopKeepAlive();
             });
         }).start();
     }
@@ -328,6 +347,7 @@ public class MainActivity extends Activity {
         final String name = currentName();
         status.setText("准备发送 " + uris.size() + " 个文件…");
         sendBtn.setEnabled(false);
+        startKeepAlive("正在发送 " + uris.size() + " 个文件");
         new Thread(() -> {
             try {
                 JSONArray paths = new JSONArray();
@@ -337,12 +357,14 @@ public class MainActivity extends Activity {
                 String summary = Mobile.sendFiles(peer, name, paths.toString());
                 ui.post(() -> {
                     sendBtn.setEnabled(true);
+                    stopKeepAlive();
                     status.setText("发送结果：" + summary);
                 });
             } catch (Exception e) {
                 Log.e(TAG, "send", e);
                 ui.post(() -> {
                     sendBtn.setEnabled(true);
+                    stopKeepAlive();
                     status.setText("发送失败：" + e.getMessage());
                 });
             }

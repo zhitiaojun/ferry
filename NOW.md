@@ -26,6 +26,7 @@
 - [x] M2 两个平台缺陷已修：Android 17 禁止应用读取 netlink（`route ip+net: netlinkrib: permission denied`）→ 改为 Java 枚举 Wi-Fi 网卡并把 `{name,index,ip,prefix}` 经 gomobile 传给 Go（`discovery.Hint`）；Android 保留端口含 40002（`ip_local_reserved_ports`）导致 bind 失败 → 发现端口改为 **45321**（Windows 侧 50000-50059 也被排除）。
 - [x] M2 学校网络实测（T1）：2026-11-07 19:20–19:25，DLUT-PanJin（PC 10.201.2.127 / 手机 10.201.2.123，同一 /24）。广播与组播发现**双向均被 AP 过滤**（PC 公告 8s、手机公告 8s 均搜不到；PC 定向广播探针 3 次、手机 0/3 收到），但**单播 TCP 双向可达**：手机→PC 2.1MB×2、10MB 与 PC→手机 2.1MB 全部哈希一致、`topology=lan`。记录 `evidence/stage1/20261107-1920.log`；结论已写入 `RISKS.md` R6（LAN 直连依赖手动/信令单播地址）。
 - [x] M2 VPN(TUN) 诊断（T10）：热点与学校网络两次实测均在 PC 开 Meta TUN（198.18.0.1/30 Up）时完成，LAN 直连成功、`discovery.announce.start.interfaces` 只含物理网卡（Meta 被过滤）。手机侧无 VPN。
+- [x] M2 安卓前台服务（M2-5）：`TransferService`（`foregroundServiceType=dataSync`、通知渠道 `ft-transfer`、未决通知），接收与发送期间启动、停止时退出；按 HOME 退到后台后 PC→手机 10MB 仍完成且哈希一致（`evidence/stage1/20261107-1920.log`）。`targetSdk=34` 在 Android 17 上未触发本地网络权限拦截（实测）；若日后升到 SDK 36+ 需复核 `LOCAL_NETWORK` 类权限。
 - [ ] M2 投放小窗预研（Go + Win32 拖拽原型，结论进 `design.md` §8）。
 - [ ] M3–M9 —— 未开始。
 
@@ -39,9 +40,8 @@
 
 M2 剩余（按 `PLAN.md` 任务卡）：
 
-1. 安卓前台服务：传输期间保活（`PLAN.md` M2-5），确认 Android 17 本地网络权限对 targetSdk 34 无影响并记入风险。
-2. 投放小窗预研：Go + Win32 最小原型（Explorer 拖拽 → 右下角置顶窗 → 接收 `CF_HDROP` → 收起），结论写 `docs/context/design.md` §8。
-3. 收尾：G2 报告 + 证据归档 + 提交。
+1. 投放小窗预研：Go + Win32 最小原型（Explorer 拖拽 → 右下角置顶窗 → 接收 `CF_HDROP` → 收起），结论写 `docs/context/design.md` §8。
+2. 收尾：G2 报告 + 证据归档 + 提交。
 
 ## 证据入口
 
