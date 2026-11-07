@@ -21,6 +21,9 @@ type Config struct {
 	ChunkSize uint32
 	Timeout   time.Duration
 	Log       *logging.Logger
+	// TransferID overrides the random id when the caller already committed to
+	// one (e.g. the signaling transfer id); zero means "generate".
+	TransferID [16]byte
 }
 
 func (c Config) chunkSize() int {

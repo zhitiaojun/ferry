@@ -145,6 +145,7 @@ func sendViaRelay(ctx context.Context, o relayOptions) (summary, error) {
 	start := time.Now()
 	res, err := transfer.Send(s, o.Files, transfer.Config{
 		ChunkSize: uint32(o.Chunk), Timeout: o.Timeout, Log: o.Log,
+		TransferID: hex16(transferID),
 	})
 	if err != nil {
 		return summary{}, err
@@ -169,6 +170,7 @@ func recvViaRelay(ctx context.Context, o relayOptions) (summary, error) {
 	}
 	defer client.Close()
 
+	var reqID string // transfer id chosen by the sender's send_request
 	readyCh := make(chan signaling.RelayReady, 1)
 	client.On(signaling.TypeRelayReady, func(e *signaling.Envelope) {
 		r, err := signaling.Decode[signaling.RelayReady](e)
@@ -184,6 +186,7 @@ func recvViaRelay(ctx context.Context, o relayOptions) (summary, error) {
 		if err != nil {
 			return
 		}
+		reqID = req.TransferID
 		if o.Log != nil {
 			o.Log.Event("signal.request", map[string]any{"from": truncHex(req.FromDevice), "files": len(req.Files)})
 		}
@@ -212,6 +215,7 @@ func recvViaRelay(ctx context.Context, o relayOptions) (summary, error) {
 	start := time.Now()
 	res, err := transfer.Receive(s, o.OutDir, transfer.Config{
 		ChunkSize: uint32(o.Chunk), Timeout: o.Timeout, Log: o.Log,
+		TransferID: hex16(reqID),
 	})
 	if err != nil {
 		return summary{}, err
@@ -264,6 +268,19 @@ func describeFiles(paths []string) ([]signaling.FileInfo, int64, error) {
 		total += st.Size()
 	}
 	return out, total, nil
+}
+
+// hex16 decodes a 32-hex transfer id; invalid input yields the zero id so the
+// transfer generates its own.
+func hex16(s string) [16]byte {
+	var out [16]byte
+	if len(s) != 32 {
+		return out
+	}
+	if _, err := hex.Decode(out[:], []byte(s)); err != nil {
+		return [16]byte{}
+	}
+	return out
 }
 
 func truncHex(id string) string {

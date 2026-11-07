@@ -41,9 +41,13 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 		})
 	}
 
-	tid, err := newTransferID()
-	if err != nil {
-		return nil, err
+	tid := cfg.TransferID
+	if tid == ([16]byte{}) {
+		var err error
+		tid, err = newTransferID()
+		if err != nil {
+			return nil, err
+		}
 	}
 	manifest := &proto.Manifest{
 		TransferID: tid,
