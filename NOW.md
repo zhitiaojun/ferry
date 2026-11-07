@@ -41,6 +41,7 @@
 - [x] M4 STUN：`core/punch`（Binding 请求/响应编解码、`Client.Query`、映射行为判定）、`server/stun.go`（`-stun` 监听）、BJ 已部署（unit 追加 `-stun 0.0.0.0:40000,0.0.0.0:40001`）；公网探测通过（`evidence/stage2/20261107-2247-stun.log`）。
 - [x] M4 打洞路径：`core/punch/gather.go`（LAN + STUN 候选，同一 UDP socket 复用）、`core/pathmgr/quic.go`（共享 socket 的 QUIC 隧道、单 Transport 多候选并发拨号）、`cmd/ft send/recv --signal --punch`（经信令交换 `candidates`，QUIC 上跑既有 session/transfer）；本机 2.1MB 24ms、10MB 109ms，哈希一致（`evidence/stage2/20261107-2318-punch.log`）。
 - [x] M4 竞速原语：`core/pathmgr.Race`（并发尝试，首个成功者胜出，其余经 context 取消并等待退出；全败时汇总错误），单测覆盖首胜/全败/已取消/空列表。
+- [x] M4 IPv6 环境核查：本机当前只有链路本地地址（`fe80::` 于 WLAN/以太网，PrefixOrigin=WellKnown），**没有全局 IPv6**；校园网/热点是否下发全局 v6 待手机侧确认，若无则按“环境不具备”记录，不伪造直连结果。
 - [ ] M4 剩余：真实 NAT 实测（手机↔电脑热点/校园网，记录候选、NAT 类型、最终档位）、路径竞速与 0.5s/3s 升级降级、IPv6 直连与 PMTUD 复核、G4 报告。
 
 可运行入口：`ft -version`、`ft whoami`、`ft send` / `ft recv`（`cmd/ft`；本机 TCP、LAN 发现、经 BJ 中继的 `--signal/--allow relay`、UDP 打洞的 `--signal --punch`）；`ft-server`（信令+中继+STUN）、`ft-probe`（登录与心跳探测）。`core/proto` 有金标向量单测，`core/session`、`core/transfer`、`core/punch`、`core/pathmgr` 有单测；`cmd/ft-desktop` 为投放小窗预研原型（非正式客户端）；`core/lanweb` 仍为占位。
