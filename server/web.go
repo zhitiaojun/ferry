@@ -323,7 +323,7 @@ func (w *Web) handleWebSocket(rw http.ResponseWriter, r *http.Request) {
 	c.SetReadLimit(1 << 20)
 	w.mu.Lock()
 	wr := w.rooms[room]
-	if wr == nil {
+	if wr == nil || wr.isClosed() {
 		wr = &webRoom{room: room, ready: make(chan struct{})}
 		w.rooms[room] = wr
 	}
@@ -335,6 +335,15 @@ func (w *Web) handleWebSocket(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	wr.serve(r.Context())
+
+	// Drop closed rooms so the next reconnection builds a fresh ready channel.
+	if wr.isClosed() {
+		w.mu.Lock()
+		if w.rooms[room] == wr {
+			delete(w.rooms, room)
+		}
+		w.mu.Unlock()
+	}
 }
 
 func (w *Web) authorized(r *http.Request) bool {

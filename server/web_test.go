@@ -185,3 +185,64 @@ func TestWebRelayPipesBetweenGuestAndHost(t *testing.T) {
 		t.Fatalf("host read = %v %v", data, err)
 	}
 }
+
+// TestWebRoomRecreatedAfterClose guards the reconnection path: once a pump
+// tears a room down, the next attach must get a fresh room instead of the
+// spent one, otherwise every reconnect closes immediately after ready.
+func TestWebRoomRecreatedAfterClose(t *testing.T) {
+	w, hs := newWebTest(t)
+	ck := cookieFor(w)
+	_, body := doJSON(t, "POST", hs.URL+"/api/devices", map[string]any{"code": "112233", "name": "pc"}, ck)
+	var reg struct {
+		Room  string `json:"room"`
+		Token string `json:"device_token"`
+	}
+	if err := json.Unmarshal(body, &reg); err != nil {
+		t.Fatal(err)
+	}
+	wsURL := strings.Replace(hs.URL, "http://", "ws://", 1)
+
+	dialHost := func() *websocket.Conn {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		c, _, err := websocket.Dial(ctx, wsURL+"/web/"+reg.Room+"?role=host", &websocket.DialOptions{
+			HTTPHeader: http.Header{"X-Ft-Device-Token": []string{reg.Token}},
+		})
+		if err != nil {
+			t.Fatalf("host dial: %v", err)
+		}
+		return c
+	}
+	dialGuest := func() *websocket.Conn {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		c, _, err := websocket.Dial(ctx, wsURL+"/web/"+reg.Room+"?role=guest", &websocket.DialOptions{
+			HTTPHeader: http.Header{"Cookie": []string{"ftw=" + ck.Value}},
+		})
+		if err != nil {
+			t.Fatalf("guest dial: %v", err)
+		}
+		return c
+	}
+	echo := func(host, guest *websocket.Conn, msg string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := host.Write(ctx, websocket.MessageText, []byte(msg)); err != nil {
+			t.Fatalf("host write: %v", err)
+		}
+		_, data, err := guest.Read(ctx)
+		if err != nil || string(data) != msg {
+			t.Fatalf("guest read = %q %v", data, err)
+		}
+	}
+
+	host, guest := dialHost(), dialGuest()
+	echo(host, guest, "first")
+	_ = guest.Close(websocket.StatusNormalClosure, "done")
+	time.Sleep(100 * time.Millisecond)
+
+	host2, guest2 := dialHost(), dialGuest()
+	defer host2.Close(websocket.StatusNormalClosure, "")
+	defer guest2.Close(websocket.StatusNormalClosure, "")
+	echo(host2, guest2, "second")
+}

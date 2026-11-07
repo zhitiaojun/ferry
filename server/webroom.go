@@ -94,6 +94,15 @@ func (r *webRoom) pump(dst, src *websocket.Conn) {
 	r.closeAll()
 }
 
+// isClosed reports whether one of the pumps already tore this room down. A
+// closed room must never be reused: its ready channel is spent and both
+// sockets are gone, so the next attach has to create a fresh room instead.
+func (r *webRoom) isClosed() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.closed
+}
+
 func (r *webRoom) closeAll() {
 	r.mu.Lock()
 	r.closed = true
