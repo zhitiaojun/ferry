@@ -36,7 +36,8 @@
 - [x] M3 中继内层 TLS 1.3 + 身份钉定：`core/identity/tls.go`（Ed25519 自签证书、`VerifyPeerCertificate` 比对已配对公钥、`MinVersion=TLS1.3`）；未配对对端被拒。2.1MB/10MB 经 BJ 中继双向哈希一致（10MB 19.9s，两端均有 `relay.tls pinned=true`）；证据 `evidence/stage3/20261107-2220-tls10m.log`。
 - [x] M3 断线重连：接收端信令断开后按 1→2→4→…→30s 指数退避重连（`signal.reconnect` 事件），重连后继续收；永久性错误（未配对、签名失败）不重试。证据 `evidence/stage3/20261107-2235-reconnect.log`（`M3_RECONNECT=PASS`）。
 - [x] M3 未授权拒绝：未配对设备发 `send_request` 时接收端拒绝（`peer … is not paired`），发送端收不到 `relay_ready`，接收目录无文件。证据 `evidence/stage3/20261107-2230-g3.log`（`G3_LOCAL=PASS`）。
-- [ ] M3 剩余：VPN(T13) 实测（需手机开 VPN，两端 TUN）与 G3 报告。
+- [x] M3 VPN(T13) 实测（2026-11-07 22:40）：两端 TUN（电脑 `Meta` 198.18.0.1/30、手机 `tun0` 198.51.100.1/30），两端解析 `ft.cwlindean.cn` 均为 fake-ip（198.18.0.91 / 198.18.0.10）；经 BJ 中继 2.1MB 3.4s、10MB 16.2s，手机端 sha256 与源一致；重启 App 后重新点「中继接收」可继续收（3.5s，哈希一致）；`ft-server` 内存 7.0MB。证据 `evidence/stage3/20261107-2240-t13.log`。APK 同时补上中继接收与配对 URI 导入（`导入对方配对 URI` / `显示本机配对 URI`）。
+- [ ] M3 剩余：G3 报告与 README/MAP 收尾（T2、T13、内存、未授权、其他站点、重连均已取证）。
 
 可运行入口：`ft -version`、`ft whoami`、`ft send` / `ft recv`（`cmd/ft`；本机 TCP、LAN 发现、经 BJ 中继的 `--signal/--allow relay`）；`ft-server`（信令+中继）、`ft-probe`（登录与心跳探测）。`core/proto` 有金标向量单测，`core/session`、`core/transfer` 有单测与故障注入；`core/{identity,logging,pathmgr}` 已实现最小功能；`cmd/ft-desktop` 为投放小窗预研原型（非正式客户端）；`core/{punch,lanweb}` 仍为占位。
 
@@ -48,8 +49,8 @@
 
 M3 收尾（按 `PLAN.md` 任务卡）：
 
-1. T13：手机与电脑同时开 VPN(TUN)，经 BJ 信令+中继传 2.1MB/10MB，记录两端 TUN 网卡、fake-ip、实际是否走中继；手机当前关机，等用户回来。
-2. 出 G3 报告（T2、T13、内存、未授权、其他站点、重连）；文档（MAP/RUNBOOK/README）收尾。
+1. 出 G3 报告（T2、T13、内存、未授权、其他站点、重连），并更新 MAP/RUNBOOK/README 的 M3 状态。
+2. 进 M4（打洞 + 竞速升级）：`core/punch`、STUN `0.0.0.0:40000-40001/udp`、路径竞速；开始前读 PLAN M4 任务卡。
 
 ## 证据入口
 
@@ -59,7 +60,7 @@ M3 收尾（按 `PLAN.md` 任务卡）：
 | M1 本机 | `evidence/stage0/20261107-1835.log`（构建/测试/CLI×3 哈希/故障注入/续传/内存，`M1_EVIDENCE=PASS`） | 已有 |
 | M2 局域网 | `evidence/stage1/20261107-1909.log`（热点双向、哈希、TUN 过滤、端口 45321）、`20261107-1920.log`（学校网络：广播/组播被过滤、单播双向、4 轮哈希）、`20261107-2035.log`（投放小窗真实拖放）、`20261107-2040.log`（热点下手机→电脑 10MB） | 已有 |
 | M4 打洞 | 待建：`evidence/stage2/*.log` | 无 |
-| M3 中继 | `evidence/stage3/20261107-2118.log`（公网健康检查、probe、2.1MB/10MB 中继哈希、BJ 内存）、`20261107-2110-deploy.log`（systemd/站点/证书/端口状态）、`20261107-2136-esa-idle.log`（ESA 空闲 30s 与 15s 心跳）、`20261107-2220-tls10m.log`（TLS1.3 钉定 + 10MB）、`20261107-2230-g3.log`（未配对拒绝 + 重连）、`20261107-2235-reconnect.log`（信令中断重连） | 已有 |
+| M3 中继 | `evidence/stage3/20261107-2118.log`（公网健康检查、probe、2.1MB/10MB 中继哈希、BJ 内存）、`20261107-2110-deploy.log`（systemd/站点/证书/端口状态）、`20261107-2136-esa-idle.log`（ESA 空闲 30s 与 15s 心跳）、`20261107-2220-tls10m.log`（TLS1.3 钉定 + 10MB）、`20261107-2230-g3.log`（未配对拒绝 + 重连）、`20261107-2235-reconnect.log`（信令中断重连）、`20261107-2240-t13.log`（两端 TUN + fake-ip + 中继 2.1MB/10MB + 重启重连） | 已有 |
 
 规则：证据必须是带时间戳的原始输出（命令 + 输出），不放结论句；`evidence/` 建立前不要凭空引用。目录编号沿用原阶段号（stage2 = 打洞、stage3 = 中继），与里程碑顺序不同。
 
@@ -114,9 +115,9 @@ M3 收尾（按 `PLAN.md` 任务卡）：
 - G2 只验证“可达 + 档位正确 + 哈希一致”，不做测速（D23）。
 - `targetSdk=34` 在 Android 17 上未触发本地网络权限拦截（实测）；若升到 SDK 36+ 需复核 `LOCAL_NETWORK` 类权限。
 
-## 下次开工提示（2026-11-07 21:47 关机前记录）
+## 下次开工提示（2026-11-07 22:45 记录）
 
-- 本次会话已完成并提交到 `deb323b`（及本条目所在提交）：M3 的 BJ 部署、ESA 预检、经 ESA 的中继传输证据、15s 心跳保活；新增 `core/identity/paired.go`（配对 URI 与已配对公钥表）与 `core/identity/tls.go`（身份密钥自签证书 + TLS 1.3 公钥钉定），CLI 增加 `ft pair --show/--add/--list`。
+- M3 已全部取证：本地代码、BJ 部署、ESA 预检、中继 TLS 1.3 钉定、配对、断线重连、未配对拒绝、T13 两端 VPN 中继；只差 G3 报告与文档收尾，随后进 M4（打洞）。
 - BJ 侧 `ft-server` 由 systemd 常驻，**本机关机不影响**；恢复后先 `curl https://ft.cwlindean.cn/healthz` 确认。
-- 未接完的线：①中继路径还没套 `identity.ClientTLS/ServerTLS`（函数与单测已就绪，缺 `relay` 分支接线与已配对校验）；②`TestPinnedTLSRejectsWrongPeer` 在 net.Pipe 上会死锁（TLS 1.3 双方同时写），已删除，钉定失败路径暂由 `checkPinned` 逻辑保证，补测时改用真实 TCP listener；③T13（两端 TUN）实测、G3 报告未做。
+- 手机 App 当前已带「中继接收」与配对 URI 导入；手机侧设备 ID `c6d743a5bc8393848d0ee1a6eb1dd9c4400bdfe3dba98017ad4c0afecaed9313`（测试用），配对文件在 App 外部目录 `received/paired.json`；adb 访问该目录需 `MSYS_NO_PATHCONV=1` 且 `TMP/TEMP` 指到 `.tools/tmp`。
 - 恢复命令：`export GOCACHE=$PWD/.tools/gocache GOPATH=$PWD/.tools/gopath GOTMPDIR=$PWD/.tools/tmp GOFLAGS=-buildvcs=false`，然后 `.tools/go/bin/go.exe test ./...`。

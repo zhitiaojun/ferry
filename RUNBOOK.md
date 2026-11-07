@@ -106,6 +106,16 @@ nft list ruleset | head -40     # 确认本机是否有 INPUT 钩子（档案记
 
 注意：ESA 会把**空闲 30 s** 的 WSS 断开，客户端已按 15 s 心跳保活（`core/signaling.KeepaliveInterval`），不要再调大。
 
+### E.2 安卓 App 经中继接收（M3）
+
+1. App 里点「显示本机配对 URI」，把输入框里的 `ftpair://…` 复制到电脑，执行 `ft pair --add "<uri>" --paired ./paired-phone.json`。
+2. 电脑执行 `ft pair --show --key ./pc.key --paired ./paired-phone.json`，把输出的 URI 复制/粘贴到手机「配对 URI」框，点「导入对方配对 URI」（成功后外部目录出现 `paired.json`）。
+3. 手机点「中继接收」，状态变为「正在经服务器等待发送方…」，界面显示本机设备 ID。
+4. 电脑按 E.1 的发送端命令，`--to-id` 填手机显示的设备 ID；发送成功后手机端 JSON 与电脑端 `transfer_id` 一致。
+5. 校验：`adb shell "sha256sum /sdcard/Android/data/cn.cwlindean.ft/files/received/<name>"` 与源文件一致。
+
+手机端信令断开后同样按 1s→30s 退避自动重连（App 日志 `relay.reconnect`），重启 App 后重新点「中继接收」即可继续接收。
+
 ## F. 证据归档
 
 每次验证后，把原始输出写入 `evidence/stageN/YYYYMMDD-HHMM.log`，并在 `NOW.md` 的「证据入口」表登记路径。

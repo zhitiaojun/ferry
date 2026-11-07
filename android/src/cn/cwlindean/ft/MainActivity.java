@@ -43,6 +43,7 @@ import mobile.Mobile;
 public class MainActivity extends Activity {
     private static final String TAG = "ft";
     private static final int PICK_FILES = 42;
+    private static final int PICK_PAIR_FILE = 43;
 
     private TextView status;
     private TextView deviceList;
@@ -52,6 +53,9 @@ public class MainActivity extends Activity {
     private Button stopBtn;
     private Button discoverBtn;
     private Button sendBtn;
+    private Button relayBtn;
+    private TextView relayInfo;
+    private EditText pairField;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private WifiManager.MulticastLock multicastLock;
@@ -98,9 +102,39 @@ public class MainActivity extends Activity {
         stopBtn = new Button(this);
         stopBtn.setText("停止");
         stopBtn.setOnClickListener(v -> stopReceiver());
+        relayBtn = new Button(this);
+        relayBtn.setText("中继接收");
+        relayBtn.setOnClickListener(v -> startRelayReceiver());
         receiverRow.addView(startBtn);
         receiverRow.addView(stopBtn);
+        receiverRow.addView(relayBtn);
         root.addView(receiverRow);
+
+        relayInfo = new TextView(this);
+        relayInfo.setTextSize(13);
+        relayInfo.setText("中继：未连接（信令 wss://ft.cwlindean.cn/signal）");
+        pairField = new EditText(this);
+        pairField.setHint("配对 URI（ftpair://…）");
+        pairField.setTextSize(12);
+        root.addView(pairField);
+
+        LinearLayout pairRow = new LinearLayout(this);
+        pairRow.setOrientation(LinearLayout.HORIZONTAL);
+        Button showPairBtn = new Button(this);
+        showPairBtn.setText("显示本机配对 URI");
+        showPairBtn.setOnClickListener(v -> showPairUri());
+        Button importPairBtn = new Button(this);
+        importPairBtn.setText("导入对方配对 URI");
+        importPairBtn.setOnClickListener(v -> importPairUri());
+        pairRow.addView(showPairBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        pairRow.addView(importPairBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        Button pickPairBtn = new Button(this);
+        pickPairBtn.setText("导入配对文件");
+        pickPairBtn.setOnClickListener(v -> pickPairFile());
+        pairRow.addView(pickPairBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        root.addView(pairRow);
+
+        root.addView(relayInfo);
 
         TextView title = new TextView(this);
         title.setText("附近的设备（需对方也在公告）：");
@@ -196,10 +230,75 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    /**
+     * Log into the signaling server and wait for relay transfers. The device
+     * key and pair URI live in the app's external files dir, so they can be
+     * exchanged with the PC over adb.
+     */
+    private void showPairUri() {
+        File dir = new File(getExternalFilesDir(null), "received");
+        try {
+            pairField.setText(Mobile.pairURIFor(currentName(), new File(dir, "device.key").getAbsolutePath()));
+        } catch (Exception e) {
+            toast("生成配对 URI 失败: " + e.getMessage());
+        }
+    }
+
+    private void importPairUri() {
+        String uri = pairField.getText().toString().trim();
+        if (uri.isEmpty()) {
+            toast("先把对方配对 URI 粘贴到输入框");
+            return;
+        }
+        File dir = new File(getExternalFilesDir(null), "received");
+        try {
+            Mobile.pairImport(uri, new File(dir, "paired.json").getAbsolutePath());
+            toast("已导入对方公钥");
+        } catch (Exception e) {
+            toast("导入失败: " + e.getMessage());
+        }
+    }
+
+    private void startRelayReceiver() {
+        relayBtn.setEnabled(false);
+        final String name = currentName();
+        new Thread(() -> {
+            try {
+                File dir = new File(getExternalFilesDir(null), "received");
+                File key = new File(dir, "device.key");
+                File paired = new File(dir, "paired.json");
+                String uri = Mobile.pairURIFor(name, key.getAbsolutePath());
+                String id = Mobile.startRelayReceiver(name, dir.getAbsolutePath(),
+                        "wss://ft.cwlindean.cn/signal", key.getAbsolutePath(), paired.getAbsolutePath());
+                ui.post(() -> {
+                    relayBtn.setEnabled(true);
+                    stopBtn.setEnabled(true);
+                    receiverRunning = true;
+                    relayInfo.setText("中继接收中\n设备 ID：" + id
+                            + "\n配对文件：" + key.getAbsolutePath() + ".uri"
+                            + "\n（把该文件拷到电脑，用 ft pair --add 导入）");
+                    status.setText("正在经服务器等待发送方…");
+                    startKeepAlive("中继接收中");
+                });
+                Log.i(TAG, "relay uri " + uri);
+                // Acquire the LAN multicast lock as well: switching between LAN and
+                // relay must not depend on the radio dropping the Wi-Fi interface.
+                ui.post(this::acquireMulticastLock);
+            } catch (Exception e) {
+                Log.e(TAG, "startRelayReceiver", e);
+                ui.post(() -> {
+                    relayBtn.setEnabled(true);
+                    toast("中继启动失败：" + e.getMessage());
+                });
+            }
+        }).start();
+    }
+
     private void stopReceiver() {
         new Thread(() -> {
             try {
                 Mobile.stopReceiver();
+                Mobile.stopRelayReceiver();
             } catch (Exception e) {
                 Log.e(TAG, "stopReceiver", e);
             }
@@ -312,6 +411,36 @@ public class MainActivity extends Activity {
                 });
             }
         }).start();
+    }
+
+    private void pickPairFile() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("text/plain");
+        startActivityForResult(i, PICK_PAIR_FILE);
+    }
+
+    private void importPairFile(Uri uri) {
+        try {
+            java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
+            try (java.io.InputStream in = getContentResolver().openInputStream(uri)) {
+                byte[] b = new byte[4096];
+                int n;
+                while ((n = in.read(b)) > 0) {
+                    buf.write(b, 0, n);
+                }
+            }
+            String text = buf.toString("UTF-8").trim();
+            if (text.isEmpty()) {
+                toast("配对文件是空的");
+                return;
+            }
+            File dir = new File(getExternalFilesDir(null), "received");
+            Mobile.pairImport(text, new File(dir, "paired.json").getAbsolutePath());
+            toast("已导入对方公钥");
+        } catch (Exception e) {
+            toast("导入失败: " + e.getMessage());
+        }
     }
 
     private void pickFiles() {

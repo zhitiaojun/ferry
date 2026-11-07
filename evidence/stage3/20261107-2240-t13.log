@@ -1,0 +1,56 @@
+=== T13 双方 VPN(TUN) 中继测试 2026-11-07T22:32:03+08:00 ===
+--- PC TUN ---
+未知适配器 Meta:
+
+   连接特定的 DNS 后缀 . . . . . . . : 
+--- PC 默认路由 ---
+===========================================================================
+�ӿ��б�
+  4...........................Meta Tunnel
+ 12...92 74 ae 66 8b e4 ......MediaTek Wi-Fi 7 MT7925 160MHz PCIe Adapter #2
+ 14...92 74 ae 66 fb 94 ......MediaTek Wi-Fi 7 MT7925 160MHz PCIe Adapter #5
+ 19...90 74 ae 66 ab c4 ......MediaTek Wi-Fi 7 MT7925 160MHz PCIe Adapter
+  9...90 74 ae 66 ab c5 ......Bluetooth Device (Personal Area Network)
+  8...38 16 b3 5a aa 5c ......Realtek Gaming GbE Family Controller
+  1...........................Software Loopback Interface 1
+===========================================================================
+
+IPv4 ·�ɱ�
+--- PC 解析 ft.cwlindean.cn ---
+[ '198.18.0.91' ]
+--- PC 公网出口 ---
+2a09:bac5:636b:372d::57f:29
+--- 手机 TUN ---
+47: tun0    inet 198.51.100.1/30 scope global tun0\       valid_lft forever preferred_lft forever
+47: tun0    inet6 fe80::9b6c:e93d:8114:e2fd/64 scope link stable-privacy \       valid_lft forever preferred_lft forever
+--- 手机 WiFi ---
+Wifi is enabled
+Wifi scanning is always available
+==== Primary ClientModeManager instance ====
+--- 手机解析 ft.cwlindean.cn ---
+PING ft.cwlindean.cn (198.18.0.10) 56(84) bytes of data.
+64 bytes from 198.18.0.10: icmp_seq=1 ttl=64 time=0.572 ms
+--- 手机公网出口 ---
+toybox: Unknown command wget (see "toybox --help")
+--- 传输 1: 2.1MB (双方 VPN) ---
+{"bytes":2100000,"chunk_size":65536,"event":"transfer.start","files":1,"peer":"android-M332BF","transfer_id":"93fc5f1cdcb7d1d7b3f135c4d6a89ed2","ts":"2026-11-07T14:31:23.7069803Z"}
+{"bytes":2100000,"chunks":33,"duration_ms":3378,"event":"transfer.done","files":1,"transfer_id":"93fc5f1cdcb7d1d7b3f135c4d6a89ed2","ts":"2026-11-07T14:31:27.0853251Z"}
+--- 传输 2: 10MB (双方 VPN) ---
+{"bytes":10000000,"chunk_size":65536,"event":"transfer.start","files":1,"peer":"android-M332BF","transfer_id":"694945b21bd25dd7cac766485d79d72c","ts":"2026-11-07T14:31:32.9164217Z"}
+{"bytes":10000000,"chunks":153,"duration_ms":16181,"event":"transfer.done","files":1,"transfer_id":"694945b21bd25dd7cac766485d79d72c","ts":"2026-11-07T14:31:49.0982929Z"}
+--- 手机端 sha256 ---
+58bbe9ba2521cf5e457db4bfd7cdb5c79734e3ead7f88727e563dc44de735a10  /sdcard/Android/data/cn.cwlindean.ft/files/received/test-2.1m.bin
+e7524dd83c86135a530f87ed09cd5390b42c7d37c863b26cd1c5c2ec92688439  /sdcard/Android/data/cn.cwlindean.ft/files/received/test-10m.bin
+--- 电脑端 sha256 ---
+58bbe9ba2521cf5e457db4bfd7cdb5c79734e3ead7f88727e563dc44de735a10 *.tools/testdata/test-2.1m.bin
+e7524dd83c86135a530f87ed09cd5390b42c7d37c863b26cd1c5c2ec92688439 *.tools/testdata/test-10m.bin
+--- 重启 App 后自动重连 ---
+{"bytes":2100000,"chunks":33,"duration_ms":3503,"event":"transfer.done","files":1,"transfer_id":"e2ab6b17088d9a2e7f5ddd8be1134bed","ts":"2026-11-07T14:32:44.2916491Z"}
+--- BJ 内存 ---
+MemoryCurrent=7028736
+MemoryMax=268435456
+--- BJ 中继事件 ---
+{"event":"server.relay_open","from":"91695a021bdb","to":"c6d743a5bc83","transfer":"93fc5f1cdcb7d1d7b3f135c4d6a89ed2","ts":"2026-11-07T14:31:26.418602896Z"}
+{"event":"server.relay_open","from":"91695a021bdb","to":"c6d743a5bc83","transfer":"694945b21bd25dd7cac766485d79d72c","ts":"2026-11-07T14:31:35.612293694Z"}
+{"event":"server.relay_open","from":"91695a021bdb","to":"c6d743a5bc83","transfer":"e2ab6b17088d9a2e7f5ddd8be1134bed","ts":"2026-11-07T14:32:43.491555376Z"}
+T13=PASS
