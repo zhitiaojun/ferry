@@ -82,6 +82,24 @@ type room struct {
 	readyCh chan struct{}
 	done    chan struct{}
 	once    sync.Once
+
+	log     *logging.Logger
+	bytesMu sync.Mutex
+	bytes   [2]int64
+}
+
+// addBytes records how much data one side pushed through the splice. It backs
+// the R7 check: once a direct path takes over, these numbers stop growing.
+func (r *room) addBytes(side int, n int) {
+	r.bytesMu.Lock()
+	r.bytes[side] += int64(n)
+	r.bytesMu.Unlock()
+}
+
+func (r *room) byteCounts() (int64, int64) {
+	r.bytesMu.Lock()
+	defer r.bytesMu.Unlock()
+	return r.bytes[0], r.bytes[1]
 }
 
 // New returns a server with default limits.
@@ -412,6 +430,7 @@ func (s *Server) openRelay(ctx context.Context, from *peer, e *signaling.Envelop
 	rm := &room{
 		token: token, transfer: req.TransferID, created: time.Now(),
 		readyCh: make(chan struct{}), done: make(chan struct{}),
+		log: s.log,
 	}
 	s.rooms[token] = rm
 	s.mu.Unlock()

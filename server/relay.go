@@ -68,6 +68,12 @@ func (r *room) splice(ctx context.Context, idle time.Duration) {
 	<-errc
 	cancel()
 	r.closeAll()
+	a, b := r.byteCounts()
+	if r.log != nil {
+		r.log.Event("relay.close", map[string]any{
+			"transfer": r.transfer, "bytes_a": a, "bytes_b": b,
+		})
+	}
 }
 
 func (r *room) pump(ctx context.Context, from int, idle time.Duration) error {
@@ -91,6 +97,7 @@ func (r *room) pump(ctx context.Context, from int, idle time.Duration) error {
 		if err != nil {
 			return err
 		}
+		r.addBytes(from, len(data))
 	}
 }
 
