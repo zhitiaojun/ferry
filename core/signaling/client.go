@@ -64,7 +64,38 @@ func Dial(ctx context.Context, url string, key *identity.Key, log *logging.Logge
 		return nil, err
 	}
 	go c.readLoop()
+	if KeepaliveInterval > 0 {
+		go c.keepalive(KeepaliveInterval)
+	}
 	return c, nil
+}
+
+// KeepaliveInterval is how often a logged-in client pings the server.
+//
+// It exists because middleboxes drop quiet connections: ESA tears down an idle
+// WebSocket after ~30 s (measured 2026-11-07: a connection whose first message
+// arrived at 30 s was already gone; one pinging every 28 s survived), and the
+// server drops sessions silent for PingIdle (90 s). 15 s is the protocol
+// heartbeat (§6) and leaves a wide margin under the ~30 s path timeout.
+var KeepaliveInterval = 15 * time.Second
+
+func (c *Client) keepalive(every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-t.C:
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			_, err := c.Ping(ctx)
+			cancel()
+			if err != nil {
+				c.fail(err)
+				return
+			}
+		case <-c.done:
+			return
+		}
+	}
 }
 
 // login runs the four-step challenge handshake (protocol §8.2).

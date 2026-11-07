@@ -69,21 +69,34 @@ nft list ruleset | head -40     # 确认本机是否有 INPUT 钩子（档案记
 
 验证：输出与 `docs/context/infra-bj.md` 的端口表一致；不一致时先改文档再动手。
 
-## E. BJ 部署 ft-server（未执行，M3）
+## E. BJ 部署 ft-server（已于 2026-11-07 21:10 执行）
 
-前置：M3 ESA 预检已完成（`PLAN.md` M3 任务 0）；读运维档案；`ss -lntup` 复核 18790/tcp、40000-40001/udp 空闲；`free -m` 记录部署前可用内存；**改 openresty 前把具体变更告知用户**（D16）。
+前置（当初执行时的做法，后续重部署照做）：读运维仓库档案；`ss -lntup` 复核 18790/tcp 与 40000-40100/udp 空闲；`free -m` 记录可用内存；**改 openresty 前把具体变更告知用户**（D16）。运维记录见运维仓库 `修改log.md`（2026-11-07 21:10 条目，含回滚步骤）。
 
-步骤（草案，沿用 battery-alert 一键脚本模式）：
+完成的步骤：
 
-1. 开发机交叉编译 `GOOS=linux GOARCH=amd64`，上传到 `/opt/ft-server/`。
-2. 写 `/etc/systemd/system/ft-server.service`：`MemoryMax=256M`、`Environment=GOMEMLIMIT=180MiB`、`Restart=on-failure`；`systemctl enable --now ft-server`。
-3. DNS：`ft.cwlindean.cn` 已解析到 ESA（D22），无需改动；在 ESA 侧确认回源到 BJ 443 并启用 WebSocket（用户操作）；1Panel 申请证书并导出到 `sites/ft.cwlindean.cn/ssl/`。
-4. 新建站点 conf + `proxy/ft.conf`（反代 `127.0.0.1:18790`，开启 WebSocket 升级头、长超时）。
-5. `nginx -t` 通过后 reload（**禁止 restart**）。
+1. `GOOS=linux GOARCH=amd64 go build -o .tools/dist/ft-server ./cmd/ft-server`，上传到 BJ `/opt/ft-server/ft-server`（0755）。
+2. `/etc/systemd/system/ft-server.service`：`ExecStart=/opt/ft-server/ft-server -listen 127.0.0.1:18790 -log /var/log/ft-server/events.jsonl`、`MemoryMax=256M`、`Environment=GOMEMLIMIT=160MiB`、`Restart=on-failure`；`systemctl daemon-reload && systemctl enable --now ft-server`。
+3. 站点：`/opt/1panel/www/sites/ft.cwlindean.cn/{index,log,proxy,ssl}`；从 `agent.db` 表 `website_ssls` 的 id=8（通配符 `*.cwlindean.cn`，到期 2027-01-14）导出 `ssl/fullchain.pem`、`ssl/privkey.pem`（644/600）。
+4. `conf.d/ft.cwlindean.cn.conf`（80 只留 ACME 并 301；443 `ssl_protocols TLSv1.3 TLSv1.2`、`/healthz` 反代、`include .../proxy/*.conf`、其余 204）+ `proxy/ft.conf`（`/signal`、`/relay`，Upgrade 头、`proxy_read_timeout 3600s`、`proxy_buffering off`）。仓库内副本见 `deploy/`。
+5. `docker exec 1Panel-openresty-rAPZ nginx -t` 通过后 `nginx -s reload`（**从未 restart**）。
 
-验证：`ss -lntup` 见监听；`curl https://ft.cwlindean.cn/health` 200；WSS 连通；现有 6 个站点公网探活不变；`systemctl show ft-server -p MemoryPeak` < 256 MB；回写运维仓库 `修改log.md` 与《服务器信息-BJ》。
+验证：`curl -s https://ft.cwlindean.cn/healthz` 200；WSS 登录 250ms 级；中继 2.1MB/10MB 哈希一致；`systemctl show ft-server -p MemoryCurrent` 约 7 MB（限额 256 MB）。
 
-回滚：`systemctl disable --now ft-server`；删 unit 与 `/opt/ft-server`；删站点 conf → `nginx -t` → reload。
+### E.1 客户端经中继使用（M3 当前形态）
+
+```bash
+# 接收端：登录信令并等待 send_request（--allow relay 表示允许走服务器中继）
+.tools/bin/ft.exe recv --signal wss://ft.cwlindean.cn/signal --allow relay   --key ~/.ft/device.key --out ./recv/ --log recv.jsonl
+
+# 发送端：先 whoami 取 device_id，再指定对端
+.tools/bin/ft.exe whoami --key ~/.ft/device.key
+.tools/bin/ft.exe send --signal wss://ft.cwlindean.cn/signal --allow relay   --key ~/.ft/device.key --to-id <对端 device_id> --file a.bin --log send.jsonl
+```
+
+验证：两端 JSON `"path":"relay"`，`bytes`/`chunks` 一致，接收目录内 SHA-256 与源相同；断开后重发应得到同样结果，证明中继可重复使用。
+
+注意：ESA 会把**空闲 30 s** 的 WSS 断开，客户端已按 15 s 心跳保活（`core/signaling.KeepaliveInterval`），不要再调大。
 
 ## F. 证据归档
 

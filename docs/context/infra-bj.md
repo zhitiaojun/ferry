@@ -58,9 +58,13 @@
 
 - `ft.cwlindean.cn`：**已解析到 ESA（代理模式）**，用户确认（2026-11-07）。ESA 套餐流量不计费。
 - 链路：客户端 → ESA 边缘（443）→ 回源 BJ openresty（443）→ `127.0.0.1:18790`。
-- 源站侧仍需：1Panel 为该子域名申请 / 导出证书，新建站点 conf + `proxy/ft.conf`（反代时带 WebSocket 升级头与长超时）。
+- 源站侧已完成（2026-11-07 21:10）：复用通配符 `*.cwlindean.cn` 证书（`agent.db` id=8，到期 2027-01-14）导出到站点 `ssl/`；`conf.d/ft.cwlindean.cn.conf` + `proxy/ft.conf`（带 WebSocket 升级头、`proxy_read_timeout 3600s`、`proxy_buffering off`）；只做过 `nginx -t` + reload。systemd 单元与回滚步骤见运维仓库 `修改log.md`（2026-11-07 21:10）。
 - 注意：域名解析到 ESA 边缘，**UDP（STUN / 打洞）必须直连 `123.57.253.208`**，由信令下发地址；真实客户端 IP 取 ESA 透传头。
-- 待实测（M3 首项）：ESA 上 WSS 是否需开关、空闲超时、单连接时长上限、长时传输稳定性。
+- ESA 预检结论（2026-11-07 实测）：
+  - `GET https://ft.cwlindean.cn/healthz` 公网 200（`x-site-cache-status: DYNAMIC`），WSS 登录 250 ms 级，Ping RTT 38–41 ms；无需为 WSS 开额外开关。
+  - **空闲超时约 30 s**：连接建立后若 30 s 内没有任何应用层消息，会被断开（实测 keepalive=32 s/40 s 的连接都在 ~30.3 s 收到 EOF；28 s 及其以下能一直存活）。客户端心跳必须 **< 30 s，取协议规定的 15 s**。
+  - 中继长传输稳定：2.1 MB 6.1 s、10 MB 33.9 s（经 ESA + 中继，两端哈希一致），`ft-server` 峰值内存 7.8 MB。
+  - 服务端自身另有关联约束：`PingIdle=90 s`（超过即断开）、`LoginTTL=30 s`（挑战有效期）。
 
 ## 6.1 带宽
 

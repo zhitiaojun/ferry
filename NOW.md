@@ -4,7 +4,7 @@
 
 ## 当前目标
 
-以“我的手机 ↔ 我的电脑”之间的最佳传输体验为主、兼顾陌生设备（D12），按 `PLAN.md` 的 M0–M9 推进至 v1.0。当前处于 **M2 局域网 + 安卓最小 APK**，由 work agent 执行（D25，规约见 `WORK_AGENT.md`）：M0（G0 已关闭）、M1（G1 证据齐备）之后，M2 的发现、LAN 直连、最小 APK、热点双向传输、学校网络实测、安卓前台服务与投放小窗预研均已完成；待出 G2 报告。
+以“我的手机 ↔ 我的电脑”之间的最佳传输体验为主、兼顾陌生设备（D12），按 `PLAN.md` 的 M0–M9 推进至 v1.0。当前处于 **M3 信令 + 中继（含 BJ 部署）**，由 work agent 执行（D25，规约见 `WORK_AGENT.md`）：M0（G0 已关闭）、M1（G1 证据齐备）、M2（G2 已通过）之后，M3 的身份/信令/中继代码、BJ 部署、ESA 预检、经 ESA 的中继传输与内存采样均已完成；剩余扫码配对、中继外层 TLS 钉定、断线重连、VPN(T13) 实测与 G3 报告。
 
 ## 进展（截至 2026-11-07）
 
@@ -28,9 +28,13 @@
 - [x] M2 VPN(TUN) 诊断（T10）：热点与学校网络两次实测均在 PC 开 Meta TUN（198.18.0.1/30 Up）时完成，LAN 直连成功、`discovery.announce.start.interfaces` 只含物理网卡（Meta 被过滤）。手机侧无 VPN。
 - [x] M2 安卓前台服务（M2-5）：`TransferService`（`foregroundServiceType=dataSync`、通知渠道 `ft-transfer`、未决通知），接收与发送期间启动、停止时退出；按 HOME 退到后台后 PC→手机 10MB 仍完成且哈希一致（`evidence/stage1/20261107-1920.log`）。`targetSdk=34` 在 Android 17 上未触发本地网络权限拦截（实测）；若日后升到 SDK 36+ 需复核 `LOCAL_NETWORK` 类权限。
 - [x] M2 投放小窗预研（M2-6）：`cmd/ft-desktop` Win32 原型（置顶工具窗、`DragAcceptFiles`、每次投放输出一行 JSON、`-size/-margin/-pos/-log`）；合成 HDROP 用例与**真实资源管理器拖放**均通过（2026-11-07 拖入 `test-2.1m.bin`，窗口显示「收到 1 个文件」）；结论写入 `docs/context/design.md` §8.1（接收可行；“拖拽即弹窗”无官方 API，v1 用常驻小窗/边缘条/托盘投放区），证据 `evidence/stage1/20261107-2035.log`。
-- [ ] M3–M9 —— 未开始。
+- [x] M3 身份与信令（本地）：`core/identity`（Ed25519 密钥、设备 ID = sha256(pub)、PEM 存取）、`core/signaling`（WSS 登录挑战、在线表、候选/请求转发、15s 心跳保活）、`server/`（`/signal` + `/relay` + `/healthz`，内存与连接上限）、`core/relay`（WebSocket 拼成 `net.Conn`）、`cmd/ft-server`、`cmd/ft send/recv --signal/--allow relay`、`cmd/ft whoami`；单测覆盖错误签名、未知消息、中继拼接。
+- [x] M3 本地全链路：两台设备密钥经本机 `ft-server` 中继传 2.1MB/10MB，两端哈希一致（提交 `8059181`、`d7674a6`）。
+- [x] M3 BJ 部署（用户批准后）：`/opt/ft-server/ft-server` + systemd `ft-server`（`MemoryMax=256M`、`GOMEMLIMIT=160MiB`、只监听 `127.0.0.1:18790`）；`ft.cwlindean.cn` 站点（443 反代 `/signal`、`/relay`，复用通配符证书）；只 `nginx -t` + reload。运维回写已完成（`修改log.md` 2026-11-07 21:10）。
+- [x] M3-0 ESA 预检：公网 `healthz` 200、WSS 登录 250ms 级、Ping 38–41ms；**空闲 30s 即被断开**（keepalive=32/40s 均 ~30.3s EOF，28s 以下存活）→ 心跳取 15s；中继 2.1MB 6.1s、10MB 33.9s 哈希一致，`ft-server` 峰值内存 7.8MB（限额 256MB）。证据 `evidence/stage3/20261107-2118.log`、`20261107-2110-deploy.log`、`20261107-2136-esa-idle.log`（空闲 30s 断开与 15s 心跳 6 分钟存活）。
+- [ ] M3 剩余：扫码配对（`pair_begin` 载荷 + 已配对公钥表）、中继外层 TLS 1.3 钉定、客户端断线重连、VPN(T13) 实测、G3 报告。
 
-可运行入口：`ft -version`、`ft send` / `ft recv`（`cmd/ft`；本机 TCP、LAN 发现与热点直连）。`core/proto` 有金标向量单测，`core/session`、`core/transfer` 有单测与故障注入；`core/{identity,logging,pathmgr}` 已实现最小功能；`cmd/ft-desktop` 为投放小窗预研原型（非正式客户端）；`core/{signaling,punch,relay,lanweb}`、`server/` 仍为占位。
+可运行入口：`ft -version`、`ft whoami`、`ft send` / `ft recv`（`cmd/ft`；本机 TCP、LAN 发现、经 BJ 中继的 `--signal/--allow relay`）；`ft-server`（信令+中继）、`ft-probe`（登录与心跳探测）。`core/proto` 有金标向量单测，`core/session`、`core/transfer` 有单测与故障注入；`core/{identity,logging,pathmgr}` 已实现最小功能；`cmd/ft-desktop` 为投放小窗预研原型（非正式客户端）；`core/{punch,lanweb}` 仍为占位。
 
 ## 阻塞 / 待确认
 
@@ -38,10 +42,12 @@
 
 ## 下一步（按优先级，由 work agent 执行）
 
-M2 收尾（按 `PLAN.md` 任务卡）：
+M3 收尾（按 `PLAN.md` 任务卡）：
 
-1. G2 证据已齐（见文末 G2），提交后请用户过目。
-2. 之后进 M3（信令 + 中继；涉及 BJ 写操作，执行前先请示用户）。
+1. 扫码配对：`ft pair` 生成 `ftpair://v1/<device_id>/<pubkey>/<secret>`，双方交换并保存已配对公钥表（6 位码 PAKE 按 protocol §8.6 留 M6）。
+2. 中继外层 TLS 1.3 + 证书钉定（身份密钥自签证书，已配对公钥校验）。
+3. 信令断线自动重连（指数退避），并补 T13（两端 TUN 开启）实测。
+4. 出 G3 报告；文档（MAP/RUNBOOK/README）同步。
 
 ## 证据入口
 
@@ -51,7 +57,7 @@ M2 收尾（按 `PLAN.md` 任务卡）：
 | M1 本机 | `evidence/stage0/20261107-1835.log`（构建/测试/CLI×3 哈希/故障注入/续传/内存，`M1_EVIDENCE=PASS`） | 已有 |
 | M2 局域网 | `evidence/stage1/20261107-1909.log`（热点双向、哈希、TUN 过滤、端口 45321）、`20261107-1920.log`（学校网络：广播/组播被过滤、单播双向、4 轮哈希）、`20261107-2035.log`（投放小窗真实拖放）、`20261107-2040.log`（热点下手机→电脑 10MB） | 已有 |
 | M4 打洞 | 待建：`evidence/stage2/*.log` | 无 |
-| M3 中继 | 待建：`evidence/stage3/*.log` | 无 |
+| M3 中继 | `evidence/stage3/20261107-2118.log`（公网健康检查、probe、2.1MB/10MB 中继哈希、BJ 内存）、`20261107-2110-deploy.log`（systemd/站点/证书/端口状态） | 已有 |
 
 规则：证据必须是带时间戳的原始输出（命令 + 输出），不放结论句；`evidence/` 建立前不要凭空引用。目录编号沿用原阶段号（stage2 = 打洞、stage3 = 中继），与里程碑顺序不同。
 

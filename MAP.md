@@ -22,18 +22,23 @@ filetransfer/
 ├─ core/transfer/       发送/接收、分块校验、`.ftpart` 续传（M1）
 ├─ core/pathmgr/        TCP Dial / Accept / Close（M1，仅 LAN）
 ├─ core/logging/        JSONL 事件日志（M1）
-├─ core/identity/       device_id 派生（M1）
+├─ core/identity/       Ed25519 身份、device_id = sha256(pub)、PEM 存取（M3）
 ├─ core/discovery/      LAN 广播+组播发现、接口过滤、热点拓扑（M2）
 ├─ core/mobile/         gomobile 绑定面（StartReceiver/Discover/SendFiles，M2）
-├─ core/{signaling,punch,relay,lanweb}/  仅包说明，随后续里程碑填充
-├─ cmd/ft/              CLI：-version / send / recv（M1）
+├─ core/signaling/      WSS 信令客户端：登录挑战、在线表、候选/请求转发、15s 心跳（M3）
+├─ core/relay/          中继通道：WebSocket 拼成 net.Conn（M3）
+├─ core/{punch,lanweb}/ 仅包说明，随后续里程碑填充
+├─ cmd/ft/              CLI：-version / whoami / send / recv（LAN 直连、经信令的 relay 中继）
 ├─ cmd/ft-desktop/      投放小窗预研原型（Win32 拖放，M2）
-├─ server/              ft-server（占位）
+├─ server/              ft-server：/signal 信令、/relay 拼接、/healthz（M3）
+├─ cmd/ft-server/       服务端入口（127.0.0.1:18790）
+├─ cmd/ft-probe/        信令探测：登录 + 定时 Ping（证据用）
+├─ deploy/              systemd 单元、openresty 站点与反代配置、部署/回滚说明
 ├─ docs/context/        专题：requirements / infra-bj / design / references / review
 ├─ docs/spec/           protocol.md + vectors/（金标向量）
 ├─ android/             最小 APK：Java 单 Activity + Manifest + 无 Gradle 构建脚本（M2）
 ├─ web/                 浏览器页面（占位）
-├─ tools/               gen_vectors.py、m2-evidence.sh（证据脚本，不进入产品路径）
+├─ tools/               gen_vectors.py、m2-evidence.sh、m3-evidence.sh、evlog.sh（证据脚本，不进入产品路径）
 ├─ evidence/            证据日志（stage0..stage3）
 └─ history/             历史归档索引
 ```
@@ -52,16 +57,16 @@ filetransfer/
 
 ## 3. 服务部署位置
 
-**当前无部署。** 计划（M3，方案待部署前复核）：
+已部署（2026-11-07 21:10，经用户批准；运维记录见运维仓库 `修改log.md`）：
 
 | 组件 | 位置 |
 |---|---|
-| ft-server 程序 | BJ `/opt/ft-server/` |
-| 进程管理 | systemd 常驻单元 `ft-server.service`（`MemoryMax=256M`，D15） |
-| 监听 | `127.0.0.1:18790/tcp`；`0.0.0.0:40000-40001/udp` |
-| 对外入口 | `https://ft.cwlindean.cn`（已解析到 ESA，D22）→ 回源 openresty 443 → 18790；UDP 直连 `123.57.253.208:40000-40001` |
-| 站点配置 | `/opt/1panel/www/conf.d/<子域名>.conf` + `sites/<子域名>/proxy/ft.conf` |
-| 日志 | journald（`journalctl -u ft-server`） |
+| ft-server 程序 | BJ `/opt/ft-server/ft-server`（只监听 `127.0.0.1:18790`） |
+| 进程管理 | systemd `ft-server.service`（`MemoryMax=256M`、`GOMEMLIMIT=160MiB`、`Restart=on-failure`，D15） |
+| 日志 | BJ `/var/log/ft-server/events.jsonl`；`journalctl -u ft-server` |
+| 公网入口 | `https://ft.cwlindean.cn`（ESA 443 → BJ openresty 443 → 18790）：`/signal`、`/relay`、`/healthz` |
+| 证书 | 站点 `ssl/` 复用通配符 `*.cwlindean.cn`（到期 2027-01-14） |
+| 端口预留 | 18790/tcp 已用；40000-40100/udp 待 M4 STUN 使用（安全组已开） |
 
 禁忌：不得部署到 LA-DR 与 rn。
 
