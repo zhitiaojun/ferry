@@ -184,11 +184,25 @@ func runSend(args []string) int {
 		cctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 		if *punchPath {
-			sum, err := sendViaPunch(cctx, punchOptions{
+			po := punchOptions{
 				SignalURL: *signalURL, KeyPath: *keyPath, PairedPath: *pairedPath,
 				Name: *name, ToID: *toID, Files: files, Chunk: *chunk,
 				Timeout: *timeout, STUN: splitCSV(*stunServers), Log: logger,
-			})
+			}
+			ro := relayOptions{
+				SignalURL: *signalURL, KeyPath: *keyPath, PairedPath: *pairedPath,
+				Name: *name, ToID: *toID, NoTLS: *noTLS,
+				Files: files, Chunk: *chunk, Timeout: *timeout, Log: logger,
+			}
+			if hasPath(paths, "relay") && !*noTLS {
+				sum, err := sendViaRace(cctx, po, ro)
+				if err != nil {
+					return fail(logger, "race", err)
+				}
+				printSummary(sum)
+				return 0
+			}
+			sum, err := sendViaPunch(cctx, po)
 			if err != nil {
 				return fail(logger, "punch", err)
 			}
@@ -291,11 +305,25 @@ func runRecv(args []string) int {
 		cctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 		if *punchPath {
-			sum, err := recvViaPunch(cctx, punchOptions{
+			po := punchOptions{
 				SignalURL: *signalURL, KeyPath: *keyPath, PairedPath: *pairedPath,
 				Name: *name, OutDir: *out, Chunk: *chunk, Timeout: *timeout,
 				STUN: splitCSV(*stunServers), Log: logger,
-			})
+			}
+			ro := relayOptions{
+				SignalURL: *signalURL, KeyPath: *keyPath, PairedPath: *pairedPath,
+				Name: *name, OutDir: *out, NoTLS: *noTLS,
+				Chunk: *chunk, Timeout: *timeout, Log: logger,
+			}
+			if !*noTLS {
+				sum, err := recvViaRace(cctx, po, ro)
+				if err != nil {
+					return fail(logger, "race", err)
+				}
+				printSummary(sum)
+				return 0
+			}
+			sum, err := recvViaPunch(cctx, po)
 			if err != nil {
 				return fail(logger, "punch", err)
 			}
@@ -392,6 +420,16 @@ func runRecv(args []string) int {
 		DurationMS: res.Duration.Milliseconds(),
 	})
 	return 0
+}
+
+// hasPath reports whether name is in the --allow list.
+func hasPath(paths []string, name string) bool {
+	for _, p := range paths {
+		if p == name {
+			return true
+		}
+	}
+	return false
 }
 
 // checkAllow validates --allow and returns the first usable path name.

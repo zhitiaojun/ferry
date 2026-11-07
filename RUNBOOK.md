@@ -116,6 +116,21 @@ nft list ruleset | head -40     # 确认本机是否有 INPUT 钩子（档案记
 
 手机端信令断开后同样按 1s→30s 退避自动重连（App 日志 `relay.reconnect`），重启 App 后重新点「中继接收」即可继续接收。
 
+## G. M4 打洞与路径竞速（本机已执行，`evidence/stage2/20261107-2318-punch.log`、`20261107-2326-race.log`）
+
+```
+# 接收端：同时准备打洞隧道与中继房间
+ft recv --signal ws://127.0.0.1:18790/signal --punch --key .tools/keys/recv.key         --paired .tools/keys/paired-recv.json --out ./recv --log recv.jsonl
+
+# 发送端：--allow punch,relay 表示两条路径都允许，t=0 并发竞速
+ft send --signal ws://127.0.0.1:18790/signal --punch --allow punch,relay         --key .tools/keys/send.key --paired .tools/keys/paired-send.json         --to-id <接收端 device_id> --file ./test-10m.bin --log send.jsonl
+```
+
+- 两端日志应有同一条 `path.selected`（`punch` 或 `relay`）；`transfer.done` 后比对 sha256。
+- 只允许一条路径时：`--allow relay` 走中继；`--allow punch` 只打洞（失败则报错，不静默回退）。
+- `FT_PUNCH_BLOCK=1` 仅用于验证“打洞失败 → 中继胜出”的降级路径，不要用于真实传输。
+- 单机双进程调试：`FT_PUNCH_LOOPBACK=1` 追加回环候选，绕过 Windows 入站防火墙。
+
 ## F. 证据归档
 
 每次验证后，把原始输出写入 `evidence/stageN/YYYYMMDD-HHMM.log`，并在 `NOW.md` 的「证据入口」表登记路径。

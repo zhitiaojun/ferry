@@ -80,6 +80,24 @@ func (s *Session) Conn() net.Conn { return s.nc }
 // Close closes the underlying connection.
 func (s *Session) Close() error { return s.nc.Close() }
 
+// Drain reads until the peer closes its side or the timeout expires, then
+// closes the connection. After the final FIN-OK the receiver closes first; if
+// the transport is torn down immediately the sender may lose that last frame,
+// so receivers call Drain before Close.
+func (s *Session) Drain(timeout time.Duration) {
+	if timeout <= 0 {
+		timeout = 2 * time.Second
+	}
+	_ = s.nc.SetReadDeadline(time.Now().Add(timeout))
+	buf := make([]byte, 512)
+	for {
+		if _, err := s.nc.Read(buf); err != nil {
+			break
+		}
+	}
+	_ = s.nc.Close()
+}
+
 // SendMsg encodes msg and writes it as one frame.
 func (s *Session) SendMsg(t proto.Type, msg Encoder) error {
 	payload, err := msg.Encode()

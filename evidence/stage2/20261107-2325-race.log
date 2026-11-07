@@ -1,0 +1,26 @@
+=== M4 path race evidence 2026-11-07T23:24:17+08:00 ===
+ft 0.0.0-dev
+protocol 1
+go go1.27.3
+platform windows/amd64
+ok uptime=15m54s peers=0 relay_rooms=1
+--- scenario 1: punch reachable (loopback candidate), 10MB ---
+{"ok":true,"path":"relay","peer":"a7fd14b608f4","transfer_id":"bad9b635e9529bd268b7eae8a65f0486","files":["test-10m.bin"],"bytes":10000000,"chunks":153,"duration_ms":112}
+send_exit=0
+{"ok":true,"path":"relay","peer":"eabd863d0057","transfer_id":"bad9b635e9529bd268b7eae8a65f0486","files":["test-10m.bin"],"bytes":10000000,"chunks":153,"duration_ms":612}
+recv_sha  e7524dd83c86135a530f87ed09cd5390b42c7d37c863b26cd1c5c2ec92688439 *.tools/race-punch/test-10m.bin
+src_sha   e7524dd83c86135a530f87ed09cd5390b42c7d37c863b26cd1c5c2ec92688439 *.tools/testdata/test-10m.bin
+CHECK punch race hash PASS
+CHECK punch won FAIL
+--- scenario 2: punch blocked (no candidate), 2.1MB -> relay must win ---
+{"ok":true,"path":"punch","peer":"a7fd14b608f4","transfer_id":"29490bb12349e3b66c65c727fa3e4ccb","files":["test-2.1m.bin"],"bytes":2100000,"chunks":33,"duration_ms":25}
+send_exit=0
+{"ok":true,"path":"punch","peer":"eabd863d0057","transfer_id":"29490bb12349e3b66c65c727fa3e4ccb","files":["test-2.1m.bin"],"bytes":2100000,"chunks":33,"duration_ms":25}
+recv_sha  58bbe9ba2521cf5e457db4bfd7cdb5c79734e3ead7f88727e563dc44de735a10 *.tools/race-relay/test-2.1m.bin
+src_sha   58bbe9ba2521cf5e457db4bfd7cdb5c79734e3ead7f88727e563dc44de735a10 *.tools/testdata/test-2.1m.bin
+CHECK relay fallback hash PASS
+CHECK relay won FAIL
+--- summaries ---
+{"bytes":10000000,"chunks":153,"duration_ms":112,"event":"transfer.done","files":1,"transfer_id":"bad9b635e9529bd268b7eae8a65f0486","ts":"2026-11-07T15:24:20.5406179Z"}
+{"bytes":2100000,"chunks":33,"duration_ms":25,"event":"transfer.done","files":1,"transfer_id":"29490bb12349e3b66c65c727fa3e4ccb","ts":"2026-11-07T15:25:23.1251767Z"}
+PATH_RACE=FAIL

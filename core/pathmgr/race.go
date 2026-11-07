@@ -4,7 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
+
+// loserGrace bounds how long Race waits for the losing attempts to return
+// after cancelling them.
+const loserGrace = 500 * time.Millisecond
 
 // Attempt is one way of reaching the peer. Fn must return as soon as ctx is
 // cancelled, closing whatever it opened.
@@ -48,9 +53,17 @@ func Race[T any](ctx context.Context, attempts ...Attempt[T]) (T, string, error)
 		r := <-ch
 		if r.err == nil {
 			cancel()
-			// Drain the rest so every attempt has stopped before returning.
+			// Give the losers a short grace period to unwind, but do not make
+			// the caller wait on a stuck cancellation: the buffered channel
+			// lets them exit on their own without blocking.
+			grace := time.NewTimer(loserGrace)
+			defer grace.Stop()
 			for j := i + 1; j < len(attempts); j++ {
-				<-ch
+				select {
+				case <-ch:
+				case <-grace.C:
+					return r.value, r.name, nil
+				}
 			}
 			return r.value, r.name, nil
 		}

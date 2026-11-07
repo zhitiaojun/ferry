@@ -208,7 +208,7 @@ func sendViaRelay(ctx context.Context, o relayOptions) (summary, error) {
 		_ = rc.Close()
 		return summary{}, fmt.Errorf("handshake over relay: %w", err)
 	}
-	defer s.Close()
+	defer s.Drain(2 * time.Second)
 
 	start := time.Now()
 	res, err := transfer.Send(s, o.Files, transfer.Config{
@@ -350,7 +350,7 @@ func recvOnce(ctx context.Context, o relayOptions) (summary, error) {
 		_ = rc.Close()
 		return summary{}, fmt.Errorf("handshake over relay: %w", err)
 	}
-	defer s.Close()
+	defer s.Drain(2 * time.Second)
 
 	start := time.Now()
 	res, err := transfer.Receive(s, o.OutDir, transfer.Config{
