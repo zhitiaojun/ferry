@@ -4,7 +4,7 @@
 
 ## 当前目标
 
-以“我的手机 ↔ 我的电脑”之间的最佳传输体验为主、兼顾陌生设备（D12），按 `PLAN.md` 的 M0–M9 推进至 v1.0。当前处于 **M3 信令 + 中继（含 BJ 部署）**，由 work agent 执行（D25，规约见 `WORK_AGENT.md`）：M0（G0 已关闭）、M1（G1 证据齐备）、M2（G2 已通过）之后，M3 的身份/信令/中继代码、BJ 部署、ESA 预检、经 ESA 的中继传输与内存采样均已完成；剩余扫码配对、中继外层 TLS 钉定、断线重连、VPN(T13) 实测与 G3 报告。
+以“我的手机 ↔ 我的电脑”之间的最佳传输体验为主、兼顾陌生设备（D12），按 `PLAN.md` 的 M0–M9 推进至 v1.0。当前处于 **M4 打洞与多路径竞速**，由 work agent 执行（D25，规约见 `WORK_AGENT.md`）：M0（G0 关闸）、M1（G1 证据齐备）、M2（G2 通过）、M3（G3 通过）之后，M4 的 STUN 服务端（BJ `0.0.0.0:40000-40001/udp`）与客户端候选收集、UDP 打洞 QUIC 隧道已在本机双向打通；剩余真实 NAT（手机/热点/校园网）实测、路径竞速与升级判据、G4 报告。
 
 ## 进展（截至 2026-11-07）
 
@@ -37,9 +37,13 @@
 - [x] M3 断线重连：接收端信令断开后按 1→2→4→…→30s 指数退避重连（`signal.reconnect` 事件），重连后继续收；永久性错误（未配对、签名失败）不重试。证据 `evidence/stage3/20261107-2235-reconnect.log`（`M3_RECONNECT=PASS`）。
 - [x] M3 未授权拒绝：未配对设备发 `send_request` 时接收端拒绝（`peer … is not paired`），发送端收不到 `relay_ready`，接收目录无文件。证据 `evidence/stage3/20261107-2230-g3.log`（`G3_LOCAL=PASS`）。
 - [x] M3 VPN(T13) 实测（2026-11-07 22:40）：两端 TUN（电脑 `Meta` 198.18.0.1/30、手机 `tun0` 198.51.100.1/30），两端解析 `ft.cwlindean.cn` 均为 fake-ip（198.18.0.91 / 198.18.0.10）；经 BJ 中继 2.1MB 3.4s、10MB 16.2s，手机端 sha256 与源一致；重启 App 后重新点「中继接收」可继续收（3.5s，哈希一致）；`ft-server` 内存 7.0MB。证据 `evidence/stage3/20261107-2240-t13.log`。APK 同时补上中继接收与配对 URI 导入（`导入对方配对 URI` / `显示本机配对 URI`）。
-- [ ] M3 剩余：G3 报告与 README/MAP 收尾（T2、T13、内存、未授权、其他站点、重连均已取证）。
+- [x] M3 G3 报告：六项判据（T2 中继 2.1MB/10MB、T13 两端 TUN、配对重启重连、内存 7.0–7.8MB、未授权拒绝、其他站点 200）全部通过；README/MAP 已同步。
+- [x] M4 STUN：`core/punch`（Binding 请求/响应编解码、`Client.Query`、映射行为判定）、`server/stun.go`（`-stun` 监听）、BJ 已部署（unit 追加 `-stun 0.0.0.0:40000,0.0.0.0:40001`）；公网探测通过（`evidence/stage2/20261107-2247-stun.log`）。
+- [x] M4 打洞路径：`core/punch/gather.go`（LAN + STUN 候选，同一 UDP socket 复用）、`core/pathmgr/quic.go`（共享 socket 的 QUIC 隧道、单 Transport 多候选并发拨号）、`cmd/ft send/recv --signal --punch`（经信令交换 `candidates`，QUIC 上跑既有 session/transfer）；本机 2.1MB 24ms、10MB 109ms，哈希一致（`evidence/stage2/20261107-2318-punch.log`）。
+- [x] M4 竞速原语：`core/pathmgr.Race`（并发尝试，首个成功者胜出，其余经 context 取消并等待退出；全败时汇总错误），单测覆盖首胜/全败/已取消/空列表。
+- [ ] M4 剩余：真实 NAT 实测（手机↔电脑热点/校园网，记录候选、NAT 类型、最终档位）、路径竞速与 0.5s/3s 升级降级、IPv6 直连与 PMTUD 复核、G4 报告。
 
-可运行入口：`ft -version`、`ft whoami`、`ft send` / `ft recv`（`cmd/ft`；本机 TCP、LAN 发现、经 BJ 中继的 `--signal/--allow relay`）；`ft-server`（信令+中继）、`ft-probe`（登录与心跳探测）。`core/proto` 有金标向量单测，`core/session`、`core/transfer` 有单测与故障注入；`core/{identity,logging,pathmgr}` 已实现最小功能；`cmd/ft-desktop` 为投放小窗预研原型（非正式客户端）；`core/{punch,lanweb}` 仍为占位。
+可运行入口：`ft -version`、`ft whoami`、`ft send` / `ft recv`（`cmd/ft`；本机 TCP、LAN 发现、经 BJ 中继的 `--signal/--allow relay`、UDP 打洞的 `--signal --punch`）；`ft-server`（信令+中继+STUN）、`ft-probe`（登录与心跳探测）。`core/proto` 有金标向量单测，`core/session`、`core/transfer`、`core/punch`、`core/pathmgr` 有单测；`cmd/ft-desktop` 为投放小窗预研原型（非正式客户端）；`core/lanweb` 仍为占位。
 
 ## 阻塞 / 待确认
 
@@ -47,10 +51,12 @@
 
 ## 下一步（按优先级，由 work agent 执行）
 
-M3 收尾（按 `PLAN.md` 任务卡）：
+M4（按 `PLAN.md` 任务卡）：
 
-1. 出 G3 报告（T2、T13、内存、未授权、其他站点、重连），并更新 MAP/RUNBOOK/README 的 M3 状态。
-2. 进 M4（打洞 + 竞速升级）：`core/punch`、STUN `0.0.0.0:40000-40001/udp`、路径竞速；开始前读 PLAN M4 任务卡。
+1. 真实 NAT 打洞实测：手机（USB/Wi-Fi）↔ 电脑，记录两端候选、NAT 映射行为、最终档位；对称 NAT 失败时按 D3 回退中继并留证。
+2. 路径竞速：`t=0` 并发 LAN/打洞/中继，LAN ≤0.5s 直用、0.5s 未通先中继承载、升级需确认、3s 无进展降级；日志记录最终与切换路径。
+3. IPv6 候选与 PMTUD 复核（若无公网 IPv6 则记录“环境不具备”）。
+4. 出 G4 报告（T2/T5–T8/T11/T12），更新 MAP/RUNBOOK/README。
 
 ## 证据入口
 
@@ -59,7 +65,8 @@ M3 收尾（按 `PLAN.md` 任务卡）：
 | M0 | `evidence/stage0/20261107-1745.log`（向量生成 + 构建 + 测试）、`20261107-1800.log`（Android 工具链 + AAR）、`20261107-1805.log`（规范定稿 + 向量重生成） | 已有 |
 | M1 本机 | `evidence/stage0/20261107-1835.log`（构建/测试/CLI×3 哈希/故障注入/续传/内存，`M1_EVIDENCE=PASS`） | 已有 |
 | M2 局域网 | `evidence/stage1/20261107-1909.log`（热点双向、哈希、TUN 过滤、端口 45321）、`20261107-1920.log`（学校网络：广播/组播被过滤、单播双向、4 轮哈希）、`20261107-2035.log`（投放小窗真实拖放）、`20261107-2040.log`（热点下手机→电脑 10MB） | 已有 |
-| M4 打洞 | 待建：`evidence/stage2/*.log` | 无 |
+| M4 STUN | `evidence/stage2/20261107-2247-stun.log`（BJ 端口、unit、公网映射与 NAT 判定） | 已有 |
+| M4 打洞 | `evidence/stage2/20261107-2318-punch.log`（本机 punch 2.1MB/10MB 哈希一致） | 已有 |
 | M3 中继 | `evidence/stage3/20261107-2118.log`（公网健康检查、probe、2.1MB/10MB 中继哈希、BJ 内存）、`20261107-2110-deploy.log`（systemd/站点/证书/端口状态）、`20261107-2136-esa-idle.log`（ESA 空闲 30s 与 15s 心跳）、`20261107-2220-tls10m.log`（TLS1.3 钉定 + 10MB）、`20261107-2230-g3.log`（未配对拒绝 + 重连）、`20261107-2235-reconnect.log`（信令中断重连）、`20261107-2240-t13.log`（两端 TUN + fake-ip + 中继 2.1MB/10MB + 重启重连） | 已有 |
 
 规则：证据必须是带时间戳的原始输出（命令 + 输出），不放结论句；`evidence/` 建立前不要凭空引用。目录编号沿用原阶段号（stage2 = 打洞、stage3 = 中继），与里程碑顺序不同。
