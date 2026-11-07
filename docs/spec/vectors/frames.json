@@ -96,6 +96,31 @@
       }
     },
     {
+      "name": "manifest_empty_file",
+      "frame_hex": "465452580103000000112233445566778899aabbccddeeff000000000000000300000053101112131415161718191a1b1c1d1e1f00010000000000010009656d7074792e62696e00000000000000000000019a5d2fbce7e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "expect": {
+        "version": 1,
+        "type": "MANIFEST",
+        "type_id": 3,
+        "flags": 0,
+        "session_id": "00112233445566778899aabbccddeeff",
+        "seq": 3,
+        "payload_len": 83,
+        "payload": {
+          "transfer_id": "101112131415161718191a1b1c1d1e1f",
+          "chunk_size": 65536,
+          "files": [
+            {
+              "name": "empty.bin",
+              "size": 0,
+              "mtime_ms": 1762500000999,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          ]
+        }
+      }
+    },
+    {
       "name": "data",
       "frame_hex": "465452580104000000112233445566778899aabbccddeeff000000000000000a0000004e101112131415161718191a1b1c1d1e1f000000000000000000020000a30e12d094b7a69210faf9f7c2ac5182d55b1e5ad0d4822acf9081d3afbf033068656c6c6f2066696c657472616e73666572",
       "expect": {

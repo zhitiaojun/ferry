@@ -74,6 +74,7 @@ FILE_A = b"a" * 2100000  # 2.1 MB test file (D10)
 FILE_B = b"b" * 1024
 HASH_A = hashlib.sha256(FILE_A).digest()
 HASH_B = hashlib.sha256(FILE_B).digest()
+HASH_EMPTY = hashlib.sha256(b"").digest()
 
 CHUNK_DATA = b"hello filetransfer"
 CHUNK_HASH = hashlib.sha256(CHUNK_DATA).digest()
@@ -213,6 +214,11 @@ def build_frames():
         ),
         valid_vector(
             "manifest", 0x03, "MANIFEST", 2, p_manifest(), manifest_expect(),
+        ),
+        valid_vector(
+            "manifest_empty_file", 0x03, "MANIFEST", 3,
+            p_manifest(files=[("empty.bin", 0, 1762500000999, HASH_EMPTY)]),
+            manifest_expect(files=[("empty.bin", 0, 1762500000999, HASH_EMPTY)]),
         ),
         valid_vector(
             "data", 0x04, "DATA", 10, p_data(),

@@ -194,9 +194,6 @@ func (m *Manifest) Validate() error {
 		if err := ValidateFileName(f.Name); err != nil {
 			return err
 		}
-		if f.Size == 0 {
-			return NewError(CodeManifestInvalid, "empty files are not supported in v1.0")
-		}
 	}
 	return nil
 }
