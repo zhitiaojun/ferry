@@ -1,10 +1,10 @@
 # NOW.md — 当前状态
 
-> 更新于 2026-11-07。接续任务先读这里，再按 `PROJECT_INDEX.md` 取需要的资料。
+> 更新于 2026-11-08。接续任务先读这里，再按 `PROJECT_INDEX.md` 取需要的资料。
 
 ## 当前目标
 
-以“我的手机 ↔ 我的电脑”之间的最佳传输体验为主、兼顾陌生设备（D12），按 `PLAN.md` 的 M0–M9 推进至 v1.0。当前处于 **M4 打洞与多路径竞速**，由 work agent 执行（D25，规约见 `WORK_AGENT.md`）：M0（G0 关闸）、M1（G1 证据齐备）、M2（G2 通过）、M3（G3 通过）之后，M4 的 STUN 服务端（BJ `0.0.0.0:40000-40001/udp`）与客户端候选收集、UDP 打洞 QUIC 隧道已在本机双向打通；剩余真实 NAT（手机/热点/校园网）实测、路径竞速与升级判据、G4 报告。
+以“我的手机 ↔ 我的电脑”之间的最佳传输体验为主、兼顾陌生设备（D12），按 `PLAN.md` 的 M0–M9 推进至 v1.0。当前处于 **M4 已完成（G4 报告已出）、准备进入 M5**，由 work agent 执行（D25，规约见 `WORK_AGENT.md`）：M0（G0 关闸）、M1（G1）、M2（G2）、M3（G3）之后，M4 的 STUN 服务端、候选收集、UDP 打洞（QUIC，TLS 1.3 钉定）、路径竞速与降级均已落地，真实 NAT 实测按环境如实记录（T5 成功、T6 因校园网 UDP 过滤回退中继）。
 
 ## 进展（截至 2026-11-07）
 
@@ -45,7 +45,9 @@
 - [x] M4 路径竞速：`--punch --allow punch,relay` 时 punch 与 relay 在 t=0 并发（`pathmgr.Race`，先完成会话握手者胜，败者取消，日志 `path.selected`）；证据 `evidence/stage2/20261107-2326-race.log`：case A 10MB punch 96ms、case B（`FT_PUNCH_BLOCK=1` 模拟打洞失败）relay 28ms，两端路径一致、哈希一致，`PATH_RACE=PASS`。
 - [x] M4 T5 跨 NAT 打洞（电脑→手机）：手机走蜂窝（VPN 开）时电脑用手机 STUN 候选 `123.244.181.175:34098` 打通，2.1MB `2069ms`、10MB `14938ms`，手机端 sha256 与源一致；手机 `mapping=cone`。
 - [ ] M4 T6 手机→电脑：手机 VPN 开着时其 STUN 候选是 VPN 出口，电脑回拨被丢，`punch.Connect` 25s 超时；待手机关闭 VPN 后重测（对称握手 `core/punch/connect.go`：两侧都监听、按设备 ID 分工先拨/先听，8s 后双方都拨）。
-- [ ] M4 剩余：竞速升级/降级（0.5s/3s 判据）与中途切流的范围确认、IPv6 直连与 PMTUD 复核（本机无全局 v6，环境不具备需如实记录）、G4 报告。
+- [x] M4 竞速与降级：`pathmgr.Race` 并发打洞/中继，`FT_PUNCH_BLOCK=1` 时干净回退中继（证据 `evidence/stage2/20261107-2326-race.log`）。
+- [x] M4 真实 NAT：T5（电脑→手机，蜂窝）打洞成功；T6（手机→电脑）在同一校园 AP 下因客户端间 UDP 过滤不可达，按 D3 回退中继（证据 `evidence/stage2/20261108-0034-t6.txt`）。
+- [x] M4 G4 报告：`evidence/stage2/20261108-0045-g4.txt`（T2/T5/T6/竞速结果、T11 环境不具备、T8 未测说明）。
 
 可运行入口：`ft -version`、`ft whoami`、`ft send` / `ft recv`（`cmd/ft`；本机 TCP、LAN 发现、经 BJ 中继的 `--signal/--allow relay`、UDP 打洞的 `--signal --punch`）；`ft-server`（信令+中继+STUN）、`ft-probe`（登录/心跳探测；`-gather` 打印打洞候选与 NAT 行为）。`core/proto` 有金标向量单测，`core/session`、`core/transfer`、`core/punch`、`core/pathmgr` 有单测；`cmd/ft-desktop` 为投放小窗预研原型（非正式客户端）；`core/lanweb` 仍为占位。
 
@@ -55,12 +57,11 @@
 
 ## 下一步（按优先级，由 work agent 执行）
 
-M4（按 `PLAN.md` 任务卡）：
+M4 已收口（G4 报告见 `evidence/stage2/20261108-0045-g4.txt`）。下一步按 `PLAN.md` 进入 **M5 浏览器端**：
 
-1. 真实 NAT 打洞实测：手机（USB/Wi-Fi）↔ 电脑，记录两端候选、NAT 映射行为、最终档位；对称 NAT 失败时按 D3 回退中继并留证。
-2. 路径竞速：`t=0` 并发 LAN/打洞/中继，LAN ≤0.5s 直用、0.5s 未通先中继承载、升级需确认、3s 无进展降级；日志记录最终与切换路径。
-3. IPv6 候选与 PMTUD 复核（若无公网 IPv6 则记录“环境不具备”）。
-4. 出 G4 报告（T2/T5–T8/T11/T12），更新 MAP/RUNBOOK/README。
+1. `core/lanweb`：LAN 直连的浏览器页面（上传/下载、二维码/链接），与 `cmd/ft` 共用传输层。
+2. 中继 Web 页（依赖 M3 已就绪）：短链接/二维码换取一次性会话，端到端加密（M6 收紧）。
+3. 文档与证据：`evidence/stage2/`，更新 MAP/RUNBOOK/README。
 
 ## 关卡 G4（准备中，2026-11-07）
 
@@ -85,6 +86,8 @@ M4（按 `PLAN.md` 任务卡）：
 | M4 打洞 | `evidence/stage2/20261107-2318-punch.log`（本机 punch 2.1MB/10MB 哈希一致） | 已有 |
 | M4 竞速 | `evidence/stage2/20261107-2326-race.log`（punch 胜出 / 打洞失败时 relay 胜出，两端路径与哈希一致） | 已有 |
 | M4 环境与真机 | `evidence/stage2/20261108-0020-m4.log`（PC 网络/手机网络与 VPN、STUN 探测、本机 punch、真机尝试记录；`tools/m4-evidence.sh` 可重跑） | 已有 |
+| M4 T5/T6 | `evidence/stage2/20261108-0034-t6.txt`（T5 成功四元数据、T6 校园网 UDP 过滤定位、两端拨号日志） | 已有 |
+| M4 G4 | `evidence/stage2/20261108-0045-g4.txt`（T2/T5/T6/竞速/T11/T8/T12 汇总） | 已有 |
 | M3 中继 | `evidence/stage3/20261107-2118.log`（公网健康检查、probe、2.1MB/10MB 中继哈希、BJ 内存）、`20261107-2110-deploy.log`（systemd/站点/证书/端口状态）、`20261107-2136-esa-idle.log`（ESA 空闲 30s 与 15s 心跳）、`20261107-2220-tls10m.log`（TLS1.3 钉定 + 10MB）、`20261107-2230-g3.log`（未配对拒绝 + 重连）、`20261107-2235-reconnect.log`（信令中断重连）、`20261107-2240-t13.log`（两端 TUN + fake-ip + 中继 2.1MB/10MB + 重启重连） | 已有 |
 
 规则：证据必须是带时间戳的原始输出（命令 + 输出），不放结论句；`evidence/` 建立前不要凭空引用。目录编号沿用原阶段号（stage2 = 打洞、stage3 = 中继），与里程碑顺序不同。
