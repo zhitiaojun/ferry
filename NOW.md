@@ -4,7 +4,7 @@
 
 ## 当前目标
 
-以“我的手机 ↔ 我的电脑”之间的最佳传输体验为主、兼顾陌生设备（D12），按 `PLAN.md` 的 M0–M9 推进至 v1.0。当前处于 **M0 收口与初始化**，由 work agent 执行中（D25，规约见 `WORK_AGENT.md`）：协议规范与 Go 骨架已完成，开发机 Android 工具链尚未就绪。
+以“我的手机 ↔ 我的电脑”之间的最佳传输体验为主、兼顾陌生设备（D12），按 `PLAN.md` 的 M0–M9 推进至 v1.0。当前处于 **M0 收口与初始化**，由 work agent 执行中（D25，规约见 `WORK_AGENT.md`）：协议规范、Go 骨架、开发机 Android 工具链均已完成，等待 G0 评审。
 
 ## 进展（截至 2026-11-07）
 
@@ -18,26 +18,25 @@
 - [x] Git 仓库初始化与首次提交（D21）。
 - [x] M0-a 协议规范：`docs/spec/protocol.md`（v1.0-draft）+ 金标向量（`docs/spec/vectors/`，生成器 `tools/gen_vectors.py`）。
 - [x] M0-b Go 工程骨架：`core/proto` 帧/消息编解码 + 金标向量单测，`go build/vet/test` 通过；`ft -version` 可运行。
-- [ ] M0-c 开发机工具链：Go 1.27.3 已就位（仓库内 `.tools/`，不入库）；Android SDK/NDK 与 gomobile 未装。
+- [x] M0-c 开发机工具链：Go 1.27.3、Temurin JDK 17.0.21、Android cmdline-tools 12.0 / build-tools 34.0.0 / platform android-34 / NDK r27c、gomobile + gobind 均装在仓库内 `.tools/`（不入库）；`gomobile bind` 产出 arm64 AAR 并校验（`evidence/stage0/20261107-1800.log`）。
 - [ ] M1–M9 —— 未开始。
 
 可运行入口：`ft -version`（`cmd/ft`）。`core/proto` 已有金标向量单测；其余 `core/*` 与 `server/`、`cmd/ft-desktop/` 仅为占位。
 
 ## 阻塞 / 待确认
 
-无阻塞用户的问题。执行中的待实测项（ESA 上 WSS 行为、学校网络可达性、IPv6、Android 17 权限）已列入对应里程碑任务卡。
+G0 判据之一「protocol.md 评审通过」需用户评审，重点为 `docs/spec/protocol.md` §12 待定项（超时数值、chunk 上限、空文件、信令字段、多文件并发）。其余无阻塞；执行中的待实测项（ESA 上 WSS 行为、学校网络可达性、IPv6、Android 17 权限）已列入对应里程碑任务卡。
 
 ## 下一步（按优先级，由 work agent 执行）
 
-1. M0-c：在开发机安装 Android SDK/NDK 与 gomobile，并做一次空 AAR 构建验证（不在 BJ 构建）。
-2. M0 收口：提交 G0 关卡报告（判据：protocol.md 评审通过、`go build ./...` 通过、MAP.md 与实际目录一致）。
-3. G0 通过后进入 M1（本机核心传输）。
+1. M0 收口：提交 G0 关卡报告，请用户评审 `docs/spec/protocol.md`（§12 待定项）。
+2. 评审意见回写规范后进入 M1（本机核心传输）。
 
 ## 证据入口
 
 | 阶段 | 证据位置 | 状态 |
 |---|---|---|
-| M1 本机 | `evidence/stage0/20261107-1745.log`（M0：向量生成 + 构建 + 测试原始输出） | 已有 |
+| M1 本机 | `evidence/stage0/20261107-1745.log`（M0：向量生成 + 构建 + 测试）、`evidence/stage0/20261107-1800.log`（M0-c：Android 工具链 + AAR） | 已有 |
 | M2 局域网 | 待建：`evidence/stage1/*.log` | 无 |
 | M4 打洞 | 待建：`evidence/stage2/*.log` | 无 |
 | M3 中继 | 待建：`evidence/stage3/*.log` | 无 |

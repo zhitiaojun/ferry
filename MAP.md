@@ -37,7 +37,7 @@ filetransfer/
 
 | 角色 | 环境 | 说明 |
 |---|---|---|
-| 开发机 | Windows 11（日常在学校网络） | Go 1.27.3 已就位（`.tools/go`，不入库）；gomobile、Android SDK/NDK 待装（M0）；APK 在此构建，不在 BJ 构建 |
+| 开发机 | Windows 11（日常在学校网络） | Go 1.27.3、Temurin JDK 17.0.21、Android cmdline-tools 12.0 + build-tools 34.0.0 + platform android-34、NDK r27c、gomobile/gobind 均装在仓库内 `.tools/`（不入库）；已用空 AAR 验证（`evidence/stage0/20261107-1800.log`）；APK 在此构建，不在 BJ 构建 |
 | 手机 | 安卓（小米 22081212C，HyperOS，Android 17 / SDK 37） | 测试网络：电信蜂窝；学校网络（部分隔离）；手机开热点供电脑连入（R6） |
 | 服务器 | BJ（阿里云 ECS） | 内网 `172.24.52.162`，公网 `123.57.253.208` |
 
@@ -64,6 +64,7 @@ filetransfer/
 |---|---|---|
 | 本文档集 | v0.5（2026-11-07：VPN / TUN 场景） | 本次任务 |
 | 代码 | M0 骨架：`core/proto` 可编译、金标向量单测通过；其余包仅占位 | `go.mod`、`evidence/stage0/` |
+| 开发机工具链 | Go 1.27.3 / JDK 17.0.21 / NDK r27c / gomobile（x/mobile v0.0.0-20261011034528） | `.tools/`（不入库） |
 | 运维档案 | 《服务器信息-BJ》2026-11-03 实测版 | 用户提供 |
 
 ## 5. 文件与事实的对应关系

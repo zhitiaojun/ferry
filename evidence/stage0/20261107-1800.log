@@ -1,0 +1,65 @@
+== M0-c Android toolchain verification ==
+2026-11-07T17:55:44+08:00
+
+-- java -version
+openjdk version "17.0.21" 2026-10-20
+OpenJDK Runtime Environment Temurin-17.0.21+9 (build 17.0.21+9)
+OpenJDK 64-Bit Server VM Temurin-17.0.21+9 (build 17.0.21+9, mixed mode, sharing)
+
+-- sdkmanager --version
+12.0
+
+
+-- NDK revision
+Pkg.Revision = 27.2.12479018
+
+-- go version
+go version go1.27.3 windows/amd64
+
+-- gomobile tool version
+	path	golang.org/x/mobile/cmd/gomobile
+	mod	golang.org/x/mobile	v0.0.0-20261011034528-197770444867	h1:rav73cdd7OQUPgt1aIFbZQTiPNnjfueKXvfOiLCY0Ss=
+	dep	golang.org/x/mod	v0.42.0	h1:ICeL3t2L30ljSPHHxDnR4fqVcBt/zR2zJAb9juavmQg=
+
+-- go build/vet/test
+BUILD_OK
+VET_OK
+?   	github.com/cwlindean/filetransfer/cmd/ft	[no test files]
+?   	github.com/cwlindean/filetransfer/cmd/ft-desktop	[no test files]
+?   	github.com/cwlindean/filetransfer/core/discovery	[no test files]
+?   	github.com/cwlindean/filetransfer/core/identity	[no test files]
+?   	github.com/cwlindean/filetransfer/core/lanweb	[no test files]
+?   	github.com/cwlindean/filetransfer/core/pathmgr	[no test files]
+ok  	github.com/cwlindean/filetransfer/core/proto	1.439s
+?   	github.com/cwlindean/filetransfer/core/punch	[no test files]
+?   	github.com/cwlindean/filetransfer/core/relay	[no test files]
+?   	github.com/cwlindean/filetransfer/core/session	[no test files]
+?   	github.com/cwlindean/filetransfer/core/signaling	[no test files]
+?   	github.com/cwlindean/filetransfer/core/transfer	[no test files]
+?   	github.com/cwlindean/filetransfer/server	[no test files]
+
+-- gomobile bind AAR
+-rw-r--r-- 1 cwlindean 197609 1487019 Nov  7 17:55 .tools/gomobile-probe/probe.aar
+591aba906116f14086ce61ab0d38dec1a76c2cea139e516464558b8e7ca5df71 *.tools/gomobile-probe/probe.aar
+Archive:  .tools/gomobile-probe/probe.aar
+  Length      Date    Time    Name
+---------  ---------- -----   ----
+      144  1980-00-00 00:00   AndroidManifest.xml
+       53  1980-00-00 00:00   proguard.txt
+     9906  1980-00-00 00:00   classes.jar
+  3609224  1980-00-00 00:00   jni/arm64-v8a/libgojni.so
+        0  1980-00-00 00:00   R.txt
+        0  1980-00-00 00:00   res/
+---------                     -------
+  3619327                     6 files
+
+-- classes.jar entries
+      133  1980-00-00 00:00   go/error.class
+      391  1980-00-00 00:00   probe/Probe.class
+---------                     -------
+    13321                     14 files
+
+-- toolchain locations (dev machine only, gitignored)
+jdk: /c/project/filetransfer/.tools/jdk/jdk-17.0.21+9
+sdk: /c/project/filetransfer/.tools/android-sdk
+ndk: /c/project/filetransfer/.tools/android-sdk/ndk/27.2.12479018
