@@ -51,6 +51,8 @@ func main() {
 		os.Exit(runRecv(os.Args[2:]))
 	case "whoami":
 		os.Exit(runWhoami(os.Args[2:]))
+	case "pair":
+		os.Exit(runPair(os.Args[2:]))
 	case "help", "-h", "--help":
 		usage()
 		return

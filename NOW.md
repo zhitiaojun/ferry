@@ -111,3 +111,10 @@ M3 收尾（按 `PLAN.md` 任务卡）：
 - 学校网络广播发现双向失败、单播成功，已记 `RISKS.md` R6，并补一条 Android 后台广播 `sendmsg: operation not permitted` 观察（待 M3/M7 复核）。
 - G2 只验证“可达 + 档位正确 + 哈希一致”，不做测速（D23）。
 - `targetSdk=34` 在 Android 17 上未触发本地网络权限拦截（实测）；若升到 SDK 36+ 需复核 `LOCAL_NETWORK` 类权限。
+
+## 下次开工提示（2026-11-07 21:47 关机前记录）
+
+- 本次会话已完成并提交到 `deb323b`（及本条目所在提交）：M3 的 BJ 部署、ESA 预检、经 ESA 的中继传输证据、15s 心跳保活；新增 `core/identity/paired.go`（配对 URI 与已配对公钥表）与 `core/identity/tls.go`（身份密钥自签证书 + TLS 1.3 公钥钉定），CLI 增加 `ft pair --show/--add/--list`。
+- BJ 侧 `ft-server` 由 systemd 常驻，**本机关机不影响**；恢复后先 `curl https://ft.cwlindean.cn/healthz` 确认。
+- 未接完的线：①中继路径还没套 `identity.ClientTLS/ServerTLS`（函数与单测已就绪，缺 `relay` 分支接线与已配对校验）；②`TestPinnedTLSRejectsWrongPeer` 在 net.Pipe 上会死锁（TLS 1.3 双方同时写），已删除，钉定失败路径暂由 `checkPinned` 逻辑保证，补测时改用真实 TCP listener；③T13（两端 TUN）实测、G3 报告未做。
+- 恢复命令：`export GOCACHE=$PWD/.tools/gocache GOPATH=$PWD/.tools/gopath GOTMPDIR=$PWD/.tools/tmp GOFLAGS=-buildvcs=false`，然后 `.tools/go/bin/go.exe test ./...`。

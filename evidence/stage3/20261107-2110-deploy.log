@@ -150,3 +150,31 @@ MemoryMax=268435456
 LISTEN 0      4096       127.0.0.1:18790      0.0.0.0:*    users:(("ft-server",pid=2999966,fd=6))                                                               
 
 [2026-11-07T21:21:23+08:00] exit=0
+
+[2026-11-07T21:35:27+0800] $ curl -s -o /dev/null -w %{http_code} %{url_effective}\n --max-time 15 https://api.cwlindean.cn/
+200 https://api.cwlindean.cn/
+[2026-11-07T21:35:28+0800] exit=0
+
+[2026-11-07T21:35:28+0800] $ curl -s -o /dev/null -w %{http_code} %{url_effective}\n --max-time 15 https://wash-api.cwlindean.cn/
+404 https://wash-api.cwlindean.cn/
+[2026-11-07T21:35:28+0800] exit=0
+
+[2026-11-07T21:35:28+0800] $ curl -s -o /dev/null -w %{http_code} %{url_effective}\n --max-time 15 https://status.cwlindean.cn/
+200 https://status.cwlindean.cn/
+[2026-11-07T21:35:28+0800] exit=0
+
+[2026-11-07T21:35:29+0800] $ curl -s -o /dev/null -w %{http_code} %{url_effective}\n --max-time 15 https://cloud.cwlindean.cn/
+200 https://cloud.cwlindean.cn/
+[2026-11-07T21:35:29+0800] exit=0
+
+[2026-11-07T21:35:29+0800] $ curl -s -o /dev/null -w %{http_code} %{url_effective}\n --max-time 15 https://temp.cwlindean.cn/
+200 https://temp.cwlindean.cn/
+[2026-11-07T21:35:30+0800] exit=0
+
+[2026-11-07T21:35:30+0800] $ curl -s -o /dev/null -w %{http_code} %{url_effective}\n --max-time 15 https://ft.cwlindean.cn/healthz
+200 https://ft.cwlindean.cn/healthz
+[2026-11-07T21:35:30+0800] exit=0
+
+[2026-11-07T21:35:47+0800] $ curl -s -o /dev/null -w %{http_code}\n --max-time 15 https://wash-api.cwlindean.cn/laundry/status
+200
+[2026-11-07T21:35:48+0800] exit=0
