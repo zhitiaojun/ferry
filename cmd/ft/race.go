@@ -294,6 +294,13 @@ func recvViaRace(ctx context.Context, po punchOptions, ro relayOptions) (summary
 				}
 			}
 			peerLocal := localPeerCandidates(peerCands)
+			if po.Log != nil {
+				var addrs []string
+				for _, a := range punch.Resolve(peerLocal) {
+					addrs = append(addrs, a.String())
+				}
+				po.Log.Event("punch.peer_candidates", map[string]any{"addrs": addrs, "count": len(peerCands)})
+			}
 			punchCtx, cancel := context.WithCancel(actx)
 			defer cancel()
 			go g.Punch(punchCtx, peerLocal)

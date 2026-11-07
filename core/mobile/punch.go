@@ -459,7 +459,7 @@ func openLogger(dir string) *logging.Logger {
 	return logging.New(f)
 }
 
-func openTempLogger() *logging.Logger { return nil }
+func openTempLogger() *logging.Logger { return logging.New(os.Stderr) }
 
 func hex16(s string) [16]byte {
 	var out [16]byte
