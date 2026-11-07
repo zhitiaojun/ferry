@@ -14,6 +14,7 @@
 - [x] 架构审查（`docs/context/review.md`）与设计 v0.2（`docs/context/design.md`）。
 - [x] 路线图 v0.4（`PLAN.md`）与 work agent 执行规约（`WORK_AGENT.md`）。
 - [x] 第三轮决策：ESA 子域名、不测速、学校网络 + 热点场景、分工（D22–D27）。
+- [x] 第四轮：VPN（TUN）场景纳入全部链路设计与验收（D28）。
 - [x] Git 仓库初始化与首次提交（D21）。
 - [ ] M0：`docs/spec/protocol.md`、Go 工程骨架、开发机工具链 —— 未开始。
 - [ ] M1–M9 —— 未开始。
