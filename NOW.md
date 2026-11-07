@@ -160,3 +160,9 @@ M5 剩余：无（G5 待用户确认）。
 - BJ 侧 `ft-server` 由 systemd 常驻，**本机关机不影响**；恢复后先 `curl https://ft.cwlindean.cn/healthz` 确认。
 - 手机 App 当前已带「中继接收」与配对 URI 导入；手机侧设备 ID `c6d743a5bc8393848d0ee1a6eb1dd9c4400bdfe3dba98017ad4c0afecaed9313`（测试用），配对文件在 App 外部目录 `received/paired.json`；adb 访问该目录需 `MSYS_NO_PATHCONV=1` 且 `TMP/TEMP` 指到 `.tools/tmp`。
 - 恢复命令：`export GOCACHE=$PWD/.tools/gocache GOPATH=$PWD/.tools/gopath GOTMPDIR=$PWD/.tools/tmp GOFLAGS=-buildvcs=false`，然后 `.tools/go/bin/go.exe test ./...`。
+
+## 下次开工提示（2026-11-08 01:45）
+
+- M5 已完成并出 G5（T3=设备局域网地址 lanweb、T4=公网经 ESA 中继），G5 待用户确认后进 M6。
+- 代码已提交到 `ceb7eb2`，工作区干净；BJ 上跑的仍是 `480550e` 时的二进制（web 房间修复**未部署**）。
+- 明天两件小事：① 重新交叉编译并部署 BJ（`ft-server` 换二进制即可，站点与 systemd 不用再改），让“浏览器断开后重新连接”与 10MB 上传真正生效；② 用浏览器复测一次 10MB 中继上传（本地已验证下载 10MB 通过，上传此前受后台标签页 `setTimeout(0)` 节流到 ~64KB/s，已改为 `bufferedAmount` + 微任务）。
