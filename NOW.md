@@ -63,7 +63,9 @@
 
 ## 下一步（按优先级，由 work agent 执行）
 
-M5 剩余：把 web 端部署到 BJ（新二进制 + `FT_WEB_PASSWORD` 环境变量 + 站点 `/` 反代 `/app`/`/api`/`/web`），然后按 G5 做 T3（同网浏览器）/T4（外网浏览器经中继）验收并出 G5 报告。
+M5 剩余：T3（同网浏览器走 LAN）与 T4（外网浏览器经中继、已在本机浏览器实测通过）按 G5 整理证据并出报告。
+
+- [x] M5 部署与公网验收：BJ 换新二进制（sha256 `6ebd7cbd…`，备份 `ft-server.bak-20261108-web`）、`/opt/ft-server/web.env`（0600）、unit 增 `EnvironmentFile`、站点 `/` 与 `/web/` 反代后 `nginx -t` + reload；公网 `/` 200 伪装页、`/app` 无 cookie 404、`/healthz` 200；浏览器经 ESA 中继连接、列表、下载（哈希通过）、上传 200,000B（设备侧 sha256 `2abed853…` 一致）；证据 `evidence/stage2/20261108-0123-web-public.log`（`M5_WEB_PUBLIC=PASS`）。ESA 约 30s 断空闲 WS，`ft share` 已加 20s ping 与 1→15s 重连退避。
 
 ## 关卡 G4（准备中，2026-11-07）
 

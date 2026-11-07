@@ -161,6 +161,29 @@ func heartbeat(ctx context.Context, client *http.Client, base, code, name string
 }
 
 func serveRelay(ctx context.Context, base string, reg *shareReg, srv *lanweb.Server, log *logging.Logger) error {
+	backoff := time.Second
+	for {
+		err := relayOnce(ctx, base, reg, srv, log)
+		if ctx.Err() != nil {
+			return nil
+		}
+		msg := "connection closed"
+		if err != nil {
+			msg = err.Error()
+		}
+		log.Event("share.relay_lost", map[string]any{"room": reg.Room, "error": msg, "retry_ms": backoff.Milliseconds()})
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(backoff):
+		}
+		if backoff < 15*time.Second {
+			backoff *= 2
+		}
+	}
+}
+
+func relayOnce(ctx context.Context, base string, reg *shareReg, srv *lanweb.Server, log *logging.Logger) error {
 	wsURL := strings.Replace(strings.Replace(strings.TrimRight(base, "/"), "https://", "wss://", 1), "http://", "ws://", 1)
 	u := wsURL + "/web/" + reg.Room + "?role=host"
 	c, _, err := websocket.Dial(ctx, u, &websocket.DialOptions{
@@ -171,6 +194,29 @@ func serveRelay(ctx context.Context, base string, reg *shareReg, srv *lanweb.Ser
 	}
 	defer c.Close(websocket.StatusNormalClosure, "bye")
 	log.Event("share.relay_ready", map[string]any{"room": reg.Room})
+
+	// ESA drops idle WebSocket connections after ~30 s, so the host side keeps
+	// sending protocol-level pings; the browser answers them automatically.
+	pingCtx, stopPing := context.WithCancel(ctx)
+	defer stopPing()
+	go func() {
+		t := time.NewTicker(20 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-pingCtx.Done():
+				return
+			case <-t.C:
+				pc, cancel := context.WithTimeout(pingCtx, 10*time.Second)
+				err := c.Ping(pc)
+				cancel()
+				if err != nil {
+					return
+				}
+			}
+		}
+	}()
+
 	return serveWebHost(ctx, c, srv.Dir(), srv, log)
 }
 
