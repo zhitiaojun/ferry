@@ -395,6 +395,7 @@ func dialRace(ctx context.Context, q *pathmgr.QUIC, addrs []*net.UDPAddr, timeou
 }
 
 func gatherHint(ctx context.Context, servers []string, hint *discovery.Hint, logger *logging.Logger) (*punch.Gathered, error) {
+	setPunchDebug()
 	if hint == nil {
 		return punch.GatherSTUNOnly(ctx, servers, 2*time.Second, logger)
 	}
@@ -459,7 +460,31 @@ func openLogger(dir string) *logging.Logger {
 	return logging.New(f)
 }
 
-func openTempLogger() *logging.Logger { return logging.New(os.Stderr) }
+var debugFile *os.File
+
+func setPunchDebug() {
+	if debugFile != nil || punch.Debugf != nil {
+		return
+	}
+	const path = "/sdcard/Android/data/cn.cwlindean.ft/files/received/punch-dbg.txt"
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	debugFile = f
+	punch.Debugf = func(format string, args ...any) {
+		fmt.Fprintf(f, format+"\n", args...)
+	}
+}
+
+func openTempLogger() *logging.Logger {
+	const path = "/sdcard/Android/data/cn.cwlindean.ft/files/received/punch-send.jsonl"
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil
+	}
+	return logging.New(f)
+}
 
 func hex16(s string) [16]byte {
 	var out [16]byte

@@ -305,9 +305,15 @@ func recvViaRace(ctx context.Context, po punchOptions, ro relayOptions) (summary
 			defer cancel()
 			go g.Punch(punchCtx, peerLocal)
 			cctx, ccancel := context.WithTimeout(actx, 25*time.Second)
+			punch.Debugf = func(format string, args ...any) {
+				po.Log.Event("punch.debug", map[string]any{"msg": fmt.Sprintf(format, args...)})
+			}
 			s, err := punch.Connect(cctx, q, punch.Resolve(peerLocal), key.ID(), parseDeviceID(req.FromDevice), sessionParams(key, po.Name))
 			ccancel()
 			if err != nil {
+				if po.Log != nil {
+					po.Log.Event("punch.error", map[string]any{"error": err.Error()})
+				}
 				return nil, err
 			}
 			cancel()

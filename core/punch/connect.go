@@ -13,6 +13,15 @@ import (
 	"github.com/cwlindean/filetransfer/core/session"
 )
 
+// Debugf receives punch diagnostics when a caller installs it.
+var Debugf func(format string, args ...any)
+
+func debugf(format string, args ...any) {
+	if Debugf != nil {
+		Debugf(format, args...)
+	}
+}
+
 // Connect establishes the session over the punched QUIC tunnel.
 //
 // Both sides listen and dial, but not at the same time: the device with the
@@ -61,8 +70,10 @@ func Connect(ctx context.Context, q *pathmgr.QUIC, addrs []*net.UDPAddr, self, p
 		for {
 			conn, err := q.Accept(ctx)
 			if err != nil {
+				debugf("accept stopped: %v", err)
 				return
 			}
+			debugf("accepted conn remote=%s", conn.RemoteAddr())
 			wg.Add(1)
 			go func(conn net.Conn) {
 				defer wg.Done()
@@ -88,6 +99,9 @@ func Connect(ctx context.Context, q *pathmgr.QUIC, addrs []*net.UDPAddr, self, p
 			for {
 				if dialFirst || both.Load() {
 					conn, err := q.DialAddr(ctx, addr)
+					if err != nil {
+						debugf("dial %s failed: %v", addr, err)
+					}
 					if err == nil {
 						s, serr := session.Dial(conn, params)
 						if serr != nil {
