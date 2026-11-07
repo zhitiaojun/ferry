@@ -1,0 +1,170 @@
+
+[2026-11-07T19:17:23+0800] $ date
+Sat Nov  7 19:17:23     2026
+[2026-11-07T19:17:23+0800] exit=0
+
+[2026-11-07T19:17:23+0800] $ netsh wlan show interfaces
+
+ç³»ç»Ÿä¸Šæœ‰ 1 ä¸ªæ¥å£: 
+
+    åç§°                   : WLAN
+    è¯´æ˜            : MediaTek Wi-Fi 7 MT7925 160MHz PCIe Adapter
+    GUID                   : d7aa64c0-16e9-4806-b53b-c048b475e751
+    ç‰©ç†åœ°å€       : 90:74:ae:66:ab:c4
+    ç•Œé¢ç±»å‹         : ä¸»è¦
+    çŠ¶æ€                  : å·²è¿æ¥
+    SSID                   : DLUT-PanJin
+    AP BSSID               : 06:74:9c:23:cc:e3
+    æ³¢æ®µ                   : 5 GHz
+    é€šé“                : 149
+    ç½‘ç»œç±»å‹               : ç»“æ„
+    æ— çº¿ç”µç±»å‹             : 802.11ac
+    èº«ä»½éªŒè¯               : å¼€æ”¾å¼
+    å¯†ç                  : æ— 
+    è¿æ¥æ¨¡å¼        : é…ç½®æ–‡ä»¶
+    æ¥æ”¶é€Ÿç‡(Mbps)         : 162
+    ä¼ è¾“é€Ÿç‡ (Mbps)        : 360
+    ä¿¡å·                   : 75%
+    Rssi                   : -64
+    é…ç½®æ–‡ä»¶               : DLUT-PanJin 
+å·²é…ç½®     QoS MSCSï¼š 0
+    å·²é…ç½® QoS æ˜ å°„ï¼š 0
+    ç­–ç•¥å…è®¸çš„ QoS æ˜ å°„ ï¼š 0
+
+[2026-11-07T19:17:23+0800] exit=0
+
+[2026-11-07T19:17:23+0800] $ ipconfig
+
+Windows IP ÅäÖÃ
+
+
+Î´ÖªÊÊÅäÆ÷ Meta:
+
+   Á¬½ÓÌØ¶¨µÄ DNS ºó×º . . . . . . . : 
+   IPv4 µØÖ· . . . . . . . . . . . . : 198.18.0.1
+   ×ÓÍøÑÚÂë  . . . . . . . . . . . . : 255.255.255.252
+   Ä¬ÈÏÍø¹Ø. . . . . . . . . . . . . : 198.18.0.2
+
+ÎŞÏß¾ÖÓòÍøÊÊÅäÆ÷ WLAN 2:
+
+   Ã½Ìå×´Ì¬  . . . . . . . . . . . . : Ã½ÌåÒÑ¶Ï¿ªÁ¬½Ó
+   Á¬½ÓÌØ¶¨µÄ DNS ºó×º . . . . . . . : 
+
+ÎŞÏß¾ÖÓòÍøÊÊÅäÆ÷ WLAN 5:
+
+   Ã½Ìå×´Ì¬  . . . . . . . . . . . . : Ã½ÌåÒÑ¶Ï¿ªÁ¬½Ó
+   Á¬½ÓÌØ¶¨µÄ DNS ºó×º . . . . . . . : 
+
+ÎŞÏß¾ÖÓòÍøÊÊÅäÆ÷ WLAN:
+
+   Á¬½ÓÌØ¶¨µÄ DNS ºó×º . . . . . . . : 
+   IPv4 µØÖ· . . . . . . . . . . . . : 10.201.2.127
+   ×ÓÍøÑÚÂë  . . . . . . . . . . . . : 255.255.128.0
+   Ä¬ÈÏÍø¹Ø. . . . . . . . . . . . . : 10.201.0.1
+
+ÒÔÌ«ÍøÊÊÅäÆ÷ À¶ÑÀÍøÂçÁ¬½Ó:
+
+   Ã½Ìå×´Ì¬  . . . . . . . . . . . . : Ã½ÌåÒÑ¶Ï¿ªÁ¬½Ó
+   Á¬½ÓÌØ¶¨µÄ DNS ºó×º . . . . . . . : 
+
+ÒÔÌ«ÍøÊÊÅäÆ÷ ÒÔÌ«Íø:
+
+   Ã½Ìå×´Ì¬  . . . . . . . . . . . . : Ã½ÌåÒÑ¶Ï¿ªÁ¬½Ó
+   Á¬½ÓÌØ¶¨µÄ DNS ºó×º . . . . . . . : 
+[2026-11-07T19:17:23+0800] exit=0
+
+[2026-11-07T19:17:23+0800] $ route print -4
+===========================================================================
+½Ó¿ÚÁĞ±í
+  4...........................Meta Tunnel
+ 12...92 74 ae 66 8b e4 ......MediaTek Wi-Fi 7 MT7925 160MHz PCIe Adapter #2
+ 14...92 74 ae 66 eb 84 ......MediaTek Wi-Fi 7 MT7925 160MHz PCIe Adapter #5
+ 19...90 74 ae 66 ab c4 ......MediaTek Wi-Fi 7 MT7925 160MHz PCIe Adapter
+  9...90 74 ae 66 ab c5 ......Bluetooth Device (Personal Area Network)
+  8...38 16 b3 5a aa 5c ......Realtek Gaming GbE Family Controller
+  1...........................Software Loopback Interface 1
+===========================================================================
+
+IPv4 Â·ÓÉ±í
+===========================================================================
+»î¶¯Â·ÓÉ:
+ÍøÂçÄ¿±ê        ÍøÂçÑÚÂë          Íø¹Ø       ½Ó¿Ú   Ô¾µãÊı
+          0.0.0.0          0.0.0.0       198.18.0.2       198.18.0.1      0
+          0.0.0.0          0.0.0.0       10.201.0.1     10.201.2.127     40
+       10.201.0.0    255.255.128.0            ÔÚÁ´Â·ÉÏ      10.201.2.127    296
+     10.201.2.127  255.255.255.255            ÔÚÁ´Â·ÉÏ      10.201.2.127    296
+   10.201.127.255  255.255.255.255            ÔÚÁ´Â·ÉÏ      10.201.2.127    296
+        127.0.0.0        255.0.0.0            ÔÚÁ´Â·ÉÏ         127.0.0.1    331
+        127.0.0.1  255.255.255.255            ÔÚÁ´Â·ÉÏ         127.0.0.1    331
+  127.255.255.255  255.255.255.255            ÔÚÁ´Â·ÉÏ         127.0.0.1    331
+       198.18.0.0  255.255.255.252            ÔÚÁ´Â·ÉÏ        198.18.0.1    256
+       198.18.0.1  255.255.255.255            ÔÚÁ´Â·ÉÏ        198.18.0.1    256
+       198.18.0.3  255.255.255.255            ÔÚÁ´Â·ÉÏ        198.18.0.1    256
+        224.0.0.0        240.0.0.0            ÔÚÁ´Â·ÉÏ         127.0.0.1    331
+        224.0.0.0        240.0.0.0            ÔÚÁ´Â·ÉÏ      10.201.2.127    296
+        224.0.0.0        240.0.0.0            ÔÚÁ´Â·ÉÏ        198.18.0.1    256
+  255.255.255.255  255.255.255.255            ÔÚÁ´Â·ÉÏ         127.0.0.1    331
+  255.255.255.255  255.255.255.255            ÔÚÁ´Â·ÉÏ      10.201.2.127    296
+  255.255.255.255  255.255.255.255            ÔÚÁ´Â·ÉÏ        198.18.0.1    256
+===========================================================================
+ÓÀ¾ÃÂ·ÓÉ:
+  ÎŞ
+[2026-11-07T19:17:23+0800] exit=0
+
+[2026-11-07T19:17:24+0800] $ adb shell cmd wifi status
+Wifi is enabled
+Wifi scanning is always available
+==== Primary ClientModeManager instance ====
+Wifi is connected to "DLUT-PanJin"
+WifiInfo: SSID: "DLUT-PanJin", BSSID: 06:74:9c:2b:19:57, MAC: 44:4a:37:c2:6b:0a, IP: /10.201.2.123, Security type: 0, Supplicant state: COMPLETED, Wi-Fi standard: 11ac, RSSI: -72, Link speed: 270Mbps, Tx Link speed: 270Mbps, Max Supported Tx Link speed: 400Mbps, Calculated Tx : 112Mbps, Rx Link speed: 270Mbps, Max Supported Rx Link speed: 400Mbps, Calculated Rx : 254Mbps, Frequency: 5260MHz, Net ID: 3, Metered hint: false, score: 59, isUsable: true, CarrierMerged: false, SubscriptionId: -1, IsPrimary: 1, Trusted: true, Restricted: false, Ephemeral: false, OEM paid: false, OEM private: false, OSU AP: false, FQDN: <none>, Provider friendly name: <none>, Requesting package name: <none>"DLUT-PanJin"openMLO Information: , Is TID-To-Link negotiation supported by the AP: false, AP MLD Address: <none>, AP MLO Link Id: <none>, AP MLO Affiliated links: <none>, Vendor Data: <none>
+successfulTxPackets: 545616
+successfulTxPacketsPerSecond: 1.982176480741128
+retriedTxPackets: 134029
+retriedTxPacketsPerSecond: 0.517458843660113
+lostTxPackets: 180
+lostTxPacketsPerSecond: 5.0417564419668795E-87
+successfulRxPackets: 735802
+successfulRxPacketsPerSecond: 0.09229578171944723
+[2026-11-07T19:17:24+0800] exit=0
+
+[2026-11-07T19:17:24+0800] $ adb shell ls -l /sdcard/Download/school-test-2.1m.bin
+-rw-rw---- 1 u0_a227 media_rw 2100000 2026-11-07 18:52 /sdcard/Download/school-test-2.1m.bin
+[2026-11-07T19:17:24+0800] exit=0
+
+== å­¦æ ¡ç½‘ç»œï¼ˆDLUT-PanJinï¼‰å®æµ‹ 2026-11-07T19:27:23+0800 ==
+-- è®¾å¤‡ï¼šPC WLAN 10.201.2.127/17 ç½‘å…³ 10.201.0.1ï¼›æ‰‹æœº 10.201.2.123/17 ç½‘å…³åŒä¸Šï¼ˆåŒä¸€ /24ï¼‰
+-- VPNï¼šPC Meta TUN 198.18.0.1/30 Upï¼ˆVPN å¼€ï¼‰ï¼›æ‰‹æœºæ—  VPN
+
+-- å‘ç°ï¼ˆå¹¿æ’­+ç»„æ’­ï¼‰ï¼šPC å…¬å‘Š 8sï¼Œæ‰‹æœºæœç´¢æ— ç»“æœï¼›
+-- åŒä¸€æ—¶åˆ»æ‰‹æœºå…¬å‘Š 8sï¼ŒPC æœç´¢æ— ç»“æœï¼š
+{"eligible":1,"event":"discovery.listen","joined_interfaces":1,"port":45321,"ts":"2026-11-07T11:21:25.4033081Z"}
+{"error":"no device announced itself within 8s","event":"error","stage":"discover","ts":"2026-11-07T11:21:33.4409096Z"}
+
+-- å•æ’­å¹¿æ’­æ¢é’ˆï¼ˆPCâ†’æ‰‹æœº 10.201.127.255:45321ï¼Œ3 æ¬¡ï¼‰ï¼šæ‰‹æœºæœªæ”¶åˆ°ï¼ˆ0/3ï¼‰ï¼›åŒæœŸæ‰‹æœºè‡ªèº«å…¬å‘Šåœ¨æœ¬åœ°å›ç¯å¯è§ 1 æ¡
+
+-- è½®æ¬¡ 1ï¼ˆæ‰‹æœºâ†’PCï¼Œ2.1MBï¼Œç›´è¿ 10.201.2.127:18812ï¼‰ï¼š
+{"addr":"[::]:18812","event":"path.listen","lan":false,"path":"lan","ts":"2026-11-07T11:21:40.4341394Z"}
+{"addr":"10.201.2.123:54224","event":"session.ready","path":"lan","peer":"android-M332BF","topology":"lan","ts":"2026-11-07T11:22:39.4377292Z"}
+{"bytes":2100000,"chunk_size":65536,"event":"transfer.accept","files":1,"peer":"android-M332BF","resume_file":0,"resume_from":0,"ts":"2026-11-07T11:22:39.4410175Z"}
+{"bytes":2100000,"chunks":33,"duration_ms":2651,"event":"transfer.done","files":1,"transfer_id":"c0e3827f9d768934e87f81f9f89b4785","ts":"2026-11-07T11:22:42.0888663Z"}
+-- è½®æ¬¡ 2ï¼ˆæ‰‹æœºâ†’PCï¼Œ2.1MBï¼Œ18813ï¼‰ï¼š
+{"addr":"[::]:18813","event":"path.listen","lan":false,"path":"lan","ts":"2026-11-07T11:23:00.2195056Z"}
+{"addr":"10.201.2.123:43124","event":"session.ready","path":"lan","peer":"android-M332BF","topology":"lan","ts":"2026-11-07T11:23:23.3215392Z"}
+{"bytes":2100000,"chunk_size":65536,"event":"transfer.accept","files":1,"peer":"android-M332BF","resume_file":0,"resume_from":0,"ts":"2026-11-07T11:23:23.3240646Z"}
+{"bytes":2100000,"chunks":33,"duration_ms":2755,"event":"transfer.done","files":1,"transfer_id":"264880feb116cdd21ccdd22fa9a03948","ts":"2026-11-07T11:23:26.0770137Z"}
+-- è½®æ¬¡ 3ï¼ˆæ‰‹æœºâ†’PCï¼Œ10MBï¼Œ18814ï¼‰ï¼š
+{"addr":"[::]:18814","event":"path.listen","lan":false,"path":"lan","ts":"2026-11-07T11:23:37.3831619Z"}
+{"addr":"10.201.2.123:58596","event":"session.ready","path":"lan","peer":"android-M332BF","topology":"lan","ts":"2026-11-07T11:24:03.7094616Z"}
+{"bytes":10000000,"chunk_size":65536,"event":"transfer.accept","files":1,"peer":"android-M332BF","resume_file":0,"resume_from":0,"ts":"2026-11-07T11:24:03.7103398Z"}
+{"bytes":10000000,"chunks":153,"duration_ms":14382,"event":"transfer.done","files":1,"transfer_id":"46ba47cae26a75f942da85d010944958","ts":"2026-11-07T11:24:18.0916361Z"}
+-- è½®æ¬¡ 4ï¼ˆPCâ†’æ‰‹æœºï¼Œ2.1MBï¼Œæ‰‹æœºç›‘å¬ 35651ï¼‰ï¼š
+{"addr":"10.201.2.123:35651","event":"session.ready","path":"lan","peer":"android-M332BF","topology":"lan","ts":"2026-11-07T11:24:28.3299701Z"}
+{"bytes":2100000,"chunk_size":65536,"event":"transfer.start","files":1,"peer":"android-M332BF","transfer_id":"8a807144fd61680c422b345bc6f32ff3","ts":"2026-11-07T11:24:28.3299701Z"}
+{"bytes":2100000,"chunks":33,"duration_ms":1443,"event":"transfer.done","files":1,"transfer_id":"8a807144fd61680c422b345bc6f32ff3","ts":"2026-11-07T11:24:29.7738046Z"}
+
+-- å“ˆå¸Œï¼ˆå‘é€ç«¯ vs æ¥æ”¶ç«¯ï¼‰
+58bbe9ba2521cf5e457db4bfd7cdb5c79734e3ead7f88727e563dc44de735a10 *.tools/testdata/test-2.1m.bin
+58bbe9ba2521cf5e457db4bfd7cdb5c79734e3ead7f88727e563dc44de735a10 *recv-school/school-test-2.1m.bin
+e7524dd83c86135a530f87ed09cd5390b42c7d37c863b26cd1c5c2ec92688439 *.tools/testdata/test-10m.bin
+e7524dd83c86135a530f87ed09cd5390b42c7d37c863b26cd1c5c2ec92688439 *recv-school/school-test-10m.bin
+58bbe9ba2521cf5e457db4bfd7cdb5c79734e3ead7f88727e563dc44de735a10 *.tools/phone-school-recv.bin

@@ -1,0 +1,4 @@
+{"addr":"[::]:18814","event":"path.listen","lan":false,"path":"lan","ts":"2026-11-07T11:23:37.3831619Z"}
+{"addr":"10.201.2.123:58596","event":"session.ready","path":"lan","peer":"android-M332BF","topology":"lan","ts":"2026-11-07T11:24:03.7094616Z"}
+{"bytes":10000000,"chunk_size":65536,"event":"transfer.accept","files":1,"peer":"android-M332BF","resume_file":0,"resume_from":0,"ts":"2026-11-07T11:24:03.7103398Z"}
+{"bytes":10000000,"chunks":153,"duration_ms":14382,"event":"transfer.done","files":1,"transfer_id":"46ba47cae26a75f942da85d010944958","ts":"2026-11-07T11:24:18.0916361Z"}

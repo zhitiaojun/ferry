@@ -4,7 +4,7 @@
 
 ## 当前目标
 
-以“我的手机 ↔ 我的电脑”之间的最佳传输体验为主、兼顾陌生设备（D12），按 `PLAN.md` 的 M0–M9 推进至 v1.0。当前处于 **M2 局域网 + 安卓最小 APK**，由 work agent 执行（D25，规约见 `WORK_AGENT.md`）：M0（G0 已关闭）、M1（代码与 G1 证据完成）之后，M2 的发现、LAN 直连、最小 APK 与热点双向传输已验证；学校网络实测与投放小窗预研待做。
+以“我的手机 ↔ 我的电脑”之间的最佳传输体验为主、兼顾陌生设备（D12），按 `PLAN.md` 的 M0–M9 推进至 v1.0。当前处于 **M2 局域网 + 安卓最小 APK**，由 work agent 执行（D25，规约见 `WORK_AGENT.md`）：M0（G0 已关闭）、M1（代码与 G1 证据完成）之后，M2 的发现、LAN 直连、最小 APK、热点双向传输与学校网络实测均已完成；剩下安卓前台服务与投放小窗预研。
 
 ## 进展（截至 2026-11-07）
 
@@ -24,8 +24,8 @@
 - [x] M2 发现与 LAN 直连：`core/discovery`（广播 + 组播双发、设备表、TTL、虚拟网卡/TUN 过滤）、`cmd/ft send --discover/--peer`、`ft recv --lan`；本机回环与「电脑连手机热点」双向直传均通过（2.1 MB / 10 MB，哈希一致），拓扑判定 `topology=hotspot`（对端为网关）。
 - [x] M2 安卓最小 APK：`core/mobile` gomobile 绑定 + `android/`（Java 单 Activity、MulticastLock、无 Gradle 构建脚本），Redmi M332BF（Android 17 / SDK 37）安装运行，手机 ↔ 电脑热点双向传输哈希一致（`evidence/stage1/20261107-1909.log`）。
 - [x] M2 两个平台缺陷已修：Android 17 禁止应用读取 netlink（`route ip+net: netlinkrib: permission denied`）→ 改为 Java 枚举 Wi-Fi 网卡并把 `{name,index,ip,prefix}` 经 gomobile 传给 Go（`discovery.Hint`）；Android 保留端口含 40002（`ip_local_reserved_ports`）导致 bind 失败 → 发现端口改为 **45321**（Windows 侧 50000-50059 也被排除）。
-- [ ] M2 学校网络实测（T1）：待手机连入校园网后做多次广播/组播/单播可达性记录。
-- [ ] M2 VPN(TUN) 诊断（T10）：热点头场地已记录 Meta TUN 开启时 LAN 仍成功、TUN 被过滤；学校网络下需复测。
+- [x] M2 学校网络实测（T1）：2026-11-07 19:20–19:25，DLUT-PanJin（PC 10.201.2.127 / 手机 10.201.2.123，同一 /24）。广播与组播发现**双向均被 AP 过滤**（PC 公告 8s、手机公告 8s 均搜不到；PC 定向广播探针 3 次、手机 0/3 收到），但**单播 TCP 双向可达**：手机→PC 2.1MB×2、10MB 与 PC→手机 2.1MB 全部哈希一致、`topology=lan`。记录 `evidence/stage1/20261107-1920.log`；结论已写入 `RISKS.md` R6（LAN 直连依赖手动/信令单播地址）。
+- [x] M2 VPN(TUN) 诊断（T10）：热点与学校网络两次实测均在 PC 开 Meta TUN（198.18.0.1/30 Up）时完成，LAN 直连成功、`discovery.announce.start.interfaces` 只含物理网卡（Meta 被过滤）。手机侧无 VPN。
 - [ ] M2 投放小窗预研（Go + Win32 拖拽原型，结论进 `design.md` §8）。
 - [ ] M3–M9 —— 未开始。
 
@@ -39,11 +39,9 @@
 
 M2 剩余（按 `PLAN.md` 任务卡）：
 
-1. 学校网络实测（T1）：电脑与手机同连校园网，多时段记录广播 / 组播 / 单播可达性，写入 `evidence/stage1/` 并更新 `RISKS.md` R6。
-2. VPN(TUN) 诊断（T10）：校园网下开 Meta TUN 复测，记录两端 VPN 状态、TUN 网卡与出口。
-3. 安卓前台服务：传输期间保活（`PLAN.md` M2-5），确认 Android 17 本地网络权限对 targetSdk 34 无影响并记入风险。
-4. 投放小窗预研：Go + Win32 最小原型（Explorer 拖拽 → 右下角置顶窗 → 接收 `CF_HDROP` → 收起），结论写 `docs/context/design.md` §8。
-5. 收尾：G2 报告 + 证据归档 + 提交。
+1. 安卓前台服务：传输期间保活（`PLAN.md` M2-5），确认 Android 17 本地网络权限对 targetSdk 34 无影响并记入风险。
+2. 投放小窗预研：Go + Win32 最小原型（Explorer 拖拽 → 右下角置顶窗 → 接收 `CF_HDROP` → 收起），结论写 `docs/context/design.md` §8。
+3. 收尾：G2 报告 + 证据归档 + 提交。
 
 ## 证据入口
 
@@ -51,7 +49,7 @@ M2 剩余（按 `PLAN.md` 任务卡）：
 |---|---|---|
 | M0 | `evidence/stage0/20261107-1745.log`（向量生成 + 构建 + 测试）、`20261107-1800.log`（Android 工具链 + AAR）、`20261107-1805.log`（规范定稿 + 向量重生成） | 已有 |
 | M1 本机 | `evidence/stage0/20261107-1835.log`（构建/测试/CLI×3 哈希/故障注入/续传/内存，`M1_EVIDENCE=PASS`） | 已有 |
-| M2 局域网 | `evidence/stage1/20261107-1909.log`（热点双向、哈希、TUN 过滤、端口 45321） | 已有（学校网络待补） |
+| M2 局域网 | `evidence/stage1/20261107-1909.log`（热点双向、哈希、TUN 过滤、端口 45321）、`20261107-1920.log`（学校网络：广播/组播被过滤、单播双向、4 轮哈希） | 已有 |
 | M4 打洞 | 待建：`evidence/stage2/*.log` | 无 |
 | M3 中继 | 待建：`evidence/stage3/*.log` | 无 |
 

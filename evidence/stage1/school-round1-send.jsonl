@@ -1,0 +1,2 @@
+{"eligible":1,"event":"discovery.listen","joined_interfaces":1,"port":45321,"ts":"2026-11-07T11:21:25.4033081Z"}
+{"error":"no device announced itself within 8s","event":"error","stage":"discover","ts":"2026-11-07T11:21:33.4409096Z"}
