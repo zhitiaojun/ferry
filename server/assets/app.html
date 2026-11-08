@@ -293,18 +293,22 @@
     if (!p) return;
     var CH = 64 * 1024;
     var HIGH_WATER = 4 * 1024 * 1024;
-    // Send in bursts bounded by bufferedAmount and yield through a microtask.
-    // setTimeout(0) would be throttled to ~1 s in background tabs, which made
-    // a 10 MB upload crawl at about 64 KB/s.
+    // Send fixed bursts, then yield to the event loop. A pure microtask chain
+    // starves rendering (and the browser tooling), while a bare setTimeout(0)
+    // between every 64 KiB frame is throttled to ~1 s per chunk in background
+    // tabs; bursting keeps both fast and responsive.
+    var BURST = 32;
     var step = function () {
       if (!state.put) return;
-      while (p.off < p.buf.byteLength && state.ws.bufferedAmount < HIGH_WATER) {
+      var sent = 0;
+      while (p.off < p.buf.byteLength && state.ws.bufferedAmount < HIGH_WATER && sent < BURST) {
         var end = Math.min(p.off + CH, p.buf.byteLength);
         state.ws.send(p.buf.slice(p.off, end));
         p.off = end;
+        sent++;
         $('status').textContent = '上传中：' + p.name + ' ' + Math.round(p.off * 100 / p.buf.byteLength) + '%';
       }
-      if (p.off < p.buf.byteLength) { Promise.resolve().then(step); return; }
+      if (p.off < p.buf.byteLength) { setTimeout(step, 0); return; }
       relaySend({ t: 'put.end' });
     };
     step();

@@ -70,7 +70,7 @@ M5 结论（G5）：
 - 已知限制（浏览器安全策略）：HTTPS 公网页面无法 `fetch` 设备的 `http://<LAN IP>`（混合内容被 Chrome 阻止），因此公网页面的“LAN 优先”只在 http 页面/本机调试时生效，公网页面实际固定走中继；需要 LAN 直连时用设备二维码/局域网地址打开。
 - 服务器端只转运密文之外的帧数据，`/app` 需口令 cookie；10MB 级传输内存不随文件线性增长（中继按 64KiB 帧转发）。
 
-M5 剩余：无（G5 待用户确认）。
+M5 剩余：无（G5 已出，2026-11-08 收尾记录见文末）。
 
 - [x] M5 部署与公网验收：BJ 换新二进制（sha256 `6ebd7cbd…`，备份 `ft-server.bak-20261108-web`）、`/opt/ft-server/web.env`（0600）、unit 增 `EnvironmentFile`、站点 `/` 与 `/web/` 反代后 `nginx -t` + reload；公网 `/` 200 伪装页、`/app` 无 cookie 404、`/healthz` 200；浏览器经 ESA 中继连接、列表、下载（哈希通过）、上传 200,000B（设备侧 sha256 `2abed853…` 一致）；证据 `evidence/stage2/20261108-0123-web-public.log`（`M5_WEB_PUBLIC=PASS`）。ESA 约 30s 断空闲 WS，`ft share` 已加 20s ping 与 1→15s 重连退避。
 
@@ -161,8 +161,9 @@ M5 剩余：无（G5 待用户确认）。
 - 手机 App 当前已带「中继接收」与配对 URI 导入；手机侧设备 ID `c6d743a5bc8393848d0ee1a6eb1dd9c4400bdfe3dba98017ad4c0afecaed9313`（测试用），配对文件在 App 外部目录 `received/paired.json`；adb 访问该目录需 `MSYS_NO_PATHCONV=1` 且 `TMP/TEMP` 指到 `.tools/tmp`。
 - 恢复命令：`export GOCACHE=$PWD/.tools/gocache GOPATH=$PWD/.tools/gopath GOTMPDIR=$PWD/.tools/tmp GOFLAGS=-buildvcs=false`，然后 `.tools/go/bin/go.exe test ./...`。
 
-## 下次开工提示（2026-11-08 01:45）
+## 收尾记录（2026-11-08 15:20）
 
-- M5 已完成并出 G5（T3=设备局域网地址 lanweb、T4=公网经 ESA 中继），G5 待用户确认后进 M6。
-- 代码已提交到 `ceb7eb2`，工作区干净；BJ 上跑的仍是 `480550e` 时的二进制（web 房间修复**未部署**）。
-- 明天两件小事：① 重新交叉编译并部署 BJ（`ft-server` 换二进制即可，站点与 systemd 不用再改），让“浏览器断开后重新连接”与 10MB 上传真正生效；② 用浏览器复测一次 10MB 中继上传（本地已验证下载 10MB 通过，上传此前受后台标签页 `setTimeout(0)` 节流到 ~64KB/s，已改为 `bufferedAmount` + 微任务）。
+- 已把“房间关闭后被复用”与“后台上传节流”两个修复部署到 BJ（仅换二进制，站点/systemd 未动，sha256 `43159091…a857`，备份 `ft-server.bak-20261108-webroom`）。
+- 公网经 ESA 中继上传 10,000,000 B 实测约 16.3 s，设备侧 sha256 `778808fb0725dab6b474fa946ac59f0262c5d96d09e791a66ffd01880b725c5c` 与浏览器生成数据一致；证据 `evidence/stage2/20261108-1521-web-upload10m.log`。
+- G5 判据全部可复核：T3（设备 LAN 地址，lanweb）与 T4（公网 ESA 中继，下载 10MB/上传 10MB 哈希一致）均通过。
+- 下一步：M6（配对二维码/6 位码 PAKE、中继内层端到端加密与密钥协商），涉及 protocol.md 扩展时先给用户方案再改。
