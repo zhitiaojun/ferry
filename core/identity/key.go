@@ -93,6 +93,10 @@ func (k *Key) MarshalPEM() ([]byte, error) {
 	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
 }
 
+// keySealMagic marks a DPAPI-sealed key file (Windows only). Files without it
+// are plain PKCS#8 PEM so early keys keep working.
+const keySealMagic = "FTKEYDP1"
+
 // ParseKeyPEM parses a PKCS#8 PEM Ed25519 private key.
 func ParseKeyPEM(data []byte) (*Key, error) {
 	block, _ := pem.Decode(data)
@@ -120,6 +124,13 @@ func (k *Key) Save(path string) error {
 	if err != nil {
 		return err
 	}
+	if sealAvailable() {
+		sealed, err := dpapiProtect(data)
+		if err != nil {
+			return fmt.Errorf("protect key: %w", err)
+		}
+		data = append([]byte(keySealMagic), sealed...)
+	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return fmt.Errorf("write key: %w", err)
@@ -135,6 +146,13 @@ func LoadKey(path string) (*Key, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read key: %w", err)
+	}
+	if len(data) > len(keySealMagic) && string(data[:len(keySealMagic)]) == keySealMagic {
+		plain, err := dpapiUnprotect(data[len(keySealMagic):])
+		if err != nil {
+			return nil, fmt.Errorf("unprotect key: %w", err)
+		}
+		data = plain
 	}
 	return ParseKeyPEM(data)
 }
