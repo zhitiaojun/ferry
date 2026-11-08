@@ -50,6 +50,11 @@ func isFakeIP(ip net.IP) bool {
 	return ip4 != nil && ip4[0] == 198 && (ip4[1] == 18 || ip4[1] == 19)
 }
 
+// IsTunnelFakeIP reports whether ip falls in the 198.18.0.0/15 range that
+// transparent-proxy VPN clients use for fake addresses. A connection whose
+// local address lands in that range did not leave through the physical NIC.
+func IsTunnelFakeIP(ip net.IP) bool { return isFakeIP(ip) }
+
 func isLinkLocal(ip net.IP) bool {
 	ip4 := ip.To4()
 	return ip4 != nil && ip4[0] == 169 && ip4[1] == 254

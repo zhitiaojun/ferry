@@ -56,6 +56,7 @@ ft send --addr <手机IP>:<端口> --file ./test-2.1m.bin --log send.jsonl
 
 - 手机侧 Go 不能读 netlink，接口信息由 Java 枚举后经 `discovery.Hint` 传入。
 - 校园网 / 部分企业 Wi-Fi 会在 AP 上过滤客户端之间的广播与组播（DLUT-PanJin 实测：双向发现失败、定向广播探针 0/3，但单播 TCP 正常）。这类网络下用 `--peer/--addr <ip:port>` 直连；失败时先确认两台设备是否在同一子网，再判断是不是 AP 隔离（`ping` + 手动地址都不通）。
+- VPN 常开（TUN 全接管，如 Meta 的 `198.18.0.0/15`）时，发往局域网地址的 TCP 会被隧道接走，握手收不到 `HELLO_ACK`。客户端会立刻报 `LAN path went through a VPN tunnel`；此时用 `--allow relay`（或 `--punch`）即可，或在该 VPN 客户端里开启“绕过局域网/LAN 直连”。
 - 接收/发送期间 App 启动前台服务（`dataSync`）保活；Android 13+ 首次会请求通知权限，拒绝只是看不到通知，传输本身不受影响。
 
 ## D. BJ 服务器核验（只读，未执行；依据运维档案）

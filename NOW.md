@@ -92,6 +92,8 @@
 
 - [x] 切网续传（断线重拨 + 断点续传）：`cmd/ft/lan.go` 的 `sendLAN` 在 LAN 发送失败时按 0.5→4 s 退避重拨，接收端保留 `.ftpart` 并在新会话里回 `RESUME(resume_from)`；`ft send` 新增 `--retry-for`（默认 2 分钟）与摘要里的 `attempts`。证据 `evidence/stage3/20261108-2245-resume.log`：200 MB 传输中途杀掉接收端（已写 131,563,520 B），2 秒后重启，第二次会话 `resume_from=131563520`，最终两端 sha256 `e3ffd766…` 一致，`attempts=4`；脚本 `tools/resume-evidence.sh`
 
+- [x] VPN 常开兼容：`cmd/ft/lan.go` 新增 `checkLANPath`（本地地址落在 198.18/15 而���端不是 → 立即判定 LAN 被 TUN 接管，不再重试 2 分钟），`core/discovery.IsTunnelFakeIP` 导出该判定并加单测 `cmd/ft/lan_test.go`。证据 `evidence/stage3/20261108-2253-vpn-compat.log`：同一 VPN 下 LAN 直连 0 秒拒绝、经中继 2.1MB 3.2s 成功且手机侧 sha256 一致。
+
 ## 下一步（按优先级，由 work agent 执行）
 
 M7 剩余（按 `PLAN.md` M7 卡）：真机“切网”（手机 Wi-Fi ⇄ 蜂窝）续传实测（需电脑关 VPN：Meta TUN 在 TUN 模式下会把 10.201.2.123 的 TCP 也接走，表现为连上但收不到 HELLO_ACK）、耗电记录；安卓分享/后台保活需真机点验；G7 报告。

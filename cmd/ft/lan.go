@@ -8,6 +8,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/cwlindean/filetransfer/core/discovery"
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/logging"
 	"github.com/cwlindean/filetransfer/core/pathmgr"
@@ -65,6 +66,10 @@ func sendLANOnce(addr string, files []string, chunk int, frameTimeout time.Durat
 	if err != nil {
 		return nil, "", err
 	}
+	if err := checkLANPath(nc); err != nil {
+		_ = nc.Close()
+		return nil, "", err
+	}
 	s, err := session.Dial(nc, session.Params{
 		DeviceID:     identity.DeviceID(defaultName()),
 		Name:         defaultName(),
@@ -86,6 +91,30 @@ func sendLANOnce(addr string, files []string, chunk int, frameTimeout time.Durat
 	return res, s.Peer.Name, nil
 }
 
+// errLANHijacked means the OS handed a LAN connection to a VPN tunnel: the
+// tunnel accepts the TCP handshake locally but cannot route back into the LAN.
+var errLANHijacked = errors.New("LAN path went through a VPN tunnel")
+
+// checkLANPath rejects a LAN connection captured by a VPN tunnel. The tell is a
+// local address in the tunnel's fake range while the peer is a real address:
+// sending over it stalls at the hello exchange (no data ever reaches the peer).
+func checkLANPath(nc net.Conn) error {
+	local, ok1 := nc.LocalAddr().(*net.TCPAddr)
+	remote, ok2 := nc.RemoteAddr().(*net.TCPAddr)
+	if !ok1 || !ok2 {
+		return nil
+	}
+	if lanRoutedThroughTunnel(local.IP, remote.IP) {
+		return fmt.Errorf("%w (local %s -> %s); turn the VPN's LAN bypass on, or use --punch/relay instead of --addr", errLANHijacked, local.IP, remote.IP)
+	}
+	return nil
+}
+
+// lanRoutedThroughTunnel reports the VPN-capture case above.
+func lanRoutedThroughTunnel(local, remote net.IP) bool {
+	return discovery.IsTunnelFakeIP(local) && !discovery.IsTunnelFakeIP(remote)
+}
+
 // retryable keeps permanent failures (bad manifest, hash mismatch, refused
 // handshake) from spinning: only transport-shaped errors are worth a redial.
 func retryable(err error) bool {
@@ -98,6 +127,9 @@ func retryable(err error) bool {
 	}
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
+	}
+	if errors.Is(err, errLANHijacked) {
+		return false // a tunnel-captured path will not heal by redialing
 	}
 	var ne net.Error
 	if errors.As(err, &ne) {
