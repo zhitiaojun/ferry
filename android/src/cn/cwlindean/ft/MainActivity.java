@@ -9,6 +9,7 @@ import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.text.InputType;
 import android.os.Looper;
 import android.provider.OpenableColumns;
 import android.util.Log;
@@ -59,6 +60,9 @@ public class MainActivity extends Activity {
     private TextView webInfo;
     private TextView relayInfo;
     private EditText pairField;
+    private EditText pakeCodeField;
+    private EditText pakePeerField;
+    private TextView pakeInfo;
     private Button punchBtn;
     private Button punchSendBtn;
     private TextView punchInfo;
@@ -226,6 +230,35 @@ public class MainActivity extends Activity {
         pairRow.addView(pickPairBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         root.addView(pairRow);
 
+        // One-time 6-digit code pairing (protocol §8.6): the code is never sent,
+        // both sides prove knowledge of it with SPAKE2.
+        pakeCodeField = new EditText(this);
+        pakeCodeField.setHint("6 位一次性配对码");
+        pakeCodeField.setInputType(InputType.TYPE_CLASS_NUMBER);
+        pakeCodeField.setTextSize(14);
+        root.addView(pakeCodeField);
+
+        pakePeerField = new EditText(this);
+        pakePeerField.setHint("对方设备 ID（点“等待配对”时留空）");
+        pakePeerField.setTextSize(12);
+        root.addView(pakePeerField);
+
+        LinearLayout pakeRow = new LinearLayout(this);
+        pakeRow.setOrientation(LinearLayout.HORIZONTAL);
+        Button waitPairBtn = new Button(this);
+        waitPairBtn.setText("等待配对");
+        waitPairBtn.setOnClickListener(v -> startPake(true));
+        Button doPairBtn = new Button(this);
+        doPairBtn.setText("用 6 位码配对");
+        doPairBtn.setOnClickListener(v -> startPake(false));
+        pakeRow.addView(waitPairBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        pakeRow.addView(doPairBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        root.addView(pakeRow);
+
+        pakeInfo = new TextView(this);
+        pakeInfo.setTextSize(12);
+        root.addView(pakeInfo);
+
         root.addView(relayInfo);
 
         punchInfo = new TextView(this);
@@ -384,6 +417,33 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             toast("导入失败: " + e.getMessage());
         }
+    }
+
+    private void startPake(boolean wait) {
+        String code = pakeCodeField.getText().toString().trim();
+        if (code.length() != 6) {
+            toast("配对码是 6 位数字");
+            return;
+        }
+        File dir = new File(getExternalFilesDir(null), "received");
+        File key = new File(dir, "device.key");
+        File paired = new File(dir, "paired.json");
+        String peer = pakePeerField.getText().toString().trim();
+        if (!wait && peer.isEmpty()) {
+            toast("输入对方设备 ID，或先点“等待配对”");
+            return;
+        }
+        pakeInfo.setText(wait ? "正在等待对方输入同一个配对码…" : "正在与对方协商…");
+        new Thread(() -> {
+            try {
+                String res = wait
+                        ? Mobile.waitPairCode("", key.getAbsolutePath(), paired.getAbsolutePath(), code, 90000)
+                        : Mobile.pairWithCode("", key.getAbsolutePath(), paired.getAbsolutePath(), code, peer);
+                ui.post(() -> pakeInfo.setText("配对成功：" + res));
+            } catch (Exception e) {
+                ui.post(() -> pakeInfo.setText("配对失败：" + e.getMessage()));
+            }
+        }).start();
     }
 
     private void startRelayReceiver() {

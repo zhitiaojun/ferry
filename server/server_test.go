@@ -275,3 +275,24 @@ func TestRoomThrottleParksOverBudget(t *testing.T) {
 		t.Fatalf("over budget did not wait (%v)", d)
 	}
 }
+
+func TestLoginBudgetPerIP(t *testing.T) {
+	srv := New(nil)
+	for i := 0; i < srv.limits.LoginBurst; i++ {
+		if !srv.allowLogin("203.0.113.7") {
+			t.Fatalf("attempt %d rejected inside the burst budget", i+1)
+		}
+	}
+	if srv.allowLogin("203.0.113.7") {
+		t.Fatal("attempt past LoginBurst accepted")
+	}
+	if !srv.allowLogin("198.51.100.9") {
+		t.Fatal("a different address must keep its own budget")
+	}
+	srv.loginMu.Lock()
+	srv.loginLimits["203.0.113.7"].window = time.Now().Add(-srv.limits.LoginWindow - time.Second)
+	srv.loginMu.Unlock()
+	if !srv.allowLogin("203.0.113.7") {
+		t.Fatal("budget not restored after the window")
+	}
+}

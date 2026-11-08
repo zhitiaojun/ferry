@@ -33,6 +33,9 @@ type Limits struct {
 
 	RelayRate int64 // bytes/second per relay room (0 = unlimited)
 
+	LoginBurst  int           // login attempts per window, per source IP
+	LoginWindow time.Duration // window length for LoginBurst
+
 	PairBurst  int           // pairing messages allowed per window, per peer
 	PairWindow time.Duration // window length for PairBurst
 }
@@ -47,6 +50,8 @@ func DefaultLimits() Limits {
 		LoginTTL:      30 * time.Second,
 		PingIdle:      90 * time.Second,
 		RelayRate:     16 << 20,
+		LoginBurst:    10,
+		LoginWindow:   time.Minute,
 		PairBurst:     30,
 		PairWindow:    time.Minute,
 	}
@@ -63,6 +68,9 @@ type Server struct {
 	peers  map[string]*peer // device id hex → connection
 	rooms  map[string]*room // relay token → room
 	nextID uint64
+
+	loginMu     sync.Mutex
+	loginLimits map[string]*loginBucket
 }
 
 type peer struct {
@@ -87,6 +95,12 @@ func (p *peer) send(ctx context.Context, e *signaling.Envelope) error {
 	p.wmu.Lock()
 	defer p.wmu.Unlock()
 	return p.conn.Write(ctx, websocket.MessageText, raw)
+}
+
+// loginBucket counts unauthenticated login attempts from one source address.
+type loginBucket struct {
+	window time.Time
+	count  int
 }
 
 type room struct {
@@ -129,12 +143,13 @@ func (r *room) byteCounts() (int64, int64) {
 // New returns a server with default limits.
 func New(log *logging.Logger) *Server {
 	return &Server{
-		limits: DefaultLimits(),
-		log:    log,
-		web:    NewWeb(os.Getenv("FT_WEB_PASSWORD"), DefaultWebLimits(), log),
-		start:  time.Now(),
-		peers:  make(map[string]*peer),
-		rooms:  make(map[string]*room),
+		limits:      DefaultLimits(),
+		log:         log,
+		web:         NewWeb(os.Getenv("FT_WEB_PASSWORD"), DefaultWebLimits(), log),
+		start:       time.Now(),
+		peers:       make(map[string]*peer),
+		rooms:       make(map[string]*room),
+		loginLimits: make(map[string]*loginBucket),
 	}
 }
 
@@ -177,6 +192,14 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.CloseNow()
 	ctx := r.Context()
+
+	// Unauthenticated login attempts are the cheapest thing to flood, so cap
+	// them per source address before touching the handshake.
+	if !s.allowLogin(clientIP(r)) {
+		http.Error(w, "too many login attempts", http.StatusTooManyRequests)
+		conn.Close(websocket.StatusPolicyViolation, "rate limited")
+		return
+	}
 
 	p, err := s.login(ctx, conn)
 	if err != nil {
@@ -405,6 +428,28 @@ func (s *Server) route(ctx context.Context, p *peer, e *signaling.Envelope) {
 	default:
 		s.writeError(ctx, p.conn, e.ID, signaling.ErrUnsupportedType, "unsupported message type "+e.Type)
 	}
+}
+
+// allowLogin applies the per-IP login budget. The table is pruned lazily so a
+// long scan cannot grow it without bound.
+func (s *Server) allowLogin(ip string) bool {
+	s.loginMu.Lock()
+	defer s.loginMu.Unlock()
+	now := time.Now()
+	if len(s.loginLimits) > 4096 {
+		for k, b := range s.loginLimits {
+			if now.Sub(b.window) > s.limits.LoginWindow {
+				delete(s.loginLimits, k)
+			}
+		}
+	}
+	b, ok := s.loginLimits[ip]
+	if !ok || now.Sub(b.window) > s.limits.LoginWindow {
+		b = &loginBucket{window: now}
+		s.loginLimits[ip] = b
+	}
+	b.count++
+	return b.count <= s.limits.LoginBurst
 }
 
 // allowPair applies the per-peer pairing budget (PairWindow, PairBurst).
