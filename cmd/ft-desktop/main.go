@@ -27,6 +27,9 @@ var (
 	flagSize = flag.String("size", "260x90", "drop window size WxH (drop mode only)")
 	flagLog  = flag.String("log", "", "append JSONL events to this file")
 	flagKey  = flag.String("key", "", "device key file (default: %LOCALAPPDATA%\\ft\\device.key)")
+	flagPair = flag.String("paired", "", "trusted device table (default: %LOCALAPPDATA%\\ft\\paired.json)")
+	flagSig  = flag.String("signal", "wss://ft.cwlindean.cn/signal", "signaling URL used to send via the relay")
+	flagSend = flag.String("send", "", "diagnostic: send these comma-separated files to the paired device, then exit")
 )
 
 func main() {
@@ -45,6 +48,11 @@ func main() {
 	}
 
 	app := newApp(dir, *flagPort)
+	app.pairedPath = *flagPair
+	if app.pairedPath == "" {
+		app.pairedPath = defaultPairedPath()
+	}
+	app.signalURL = *flagSig
 	if *flagLog != "" {
 		f, err := os.OpenFile(*flagLog, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
@@ -65,6 +73,20 @@ func main() {
 	if keyPath == "" {
 		keyPath = defaultKeyPath()
 	}
+	app.keyPath = keyPath
+
+	if *flagSend != "" {
+		files := strings.Split(*flagSend, ",")
+		res, peer, err := sendViaRelay(app, files)
+		if err != nil {
+			app.event("desktop.send_error", map[string]any{"error": err.Error()})
+			fmt.Fprintln(os.Stderr, "send:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("{\"ok\":true,\"to\":%q,\"bytes\":%d,\"chunks\":%d}\n", peer.Name, res.Bytes, res.Chunks)
+		return
+	}
+
 	os.Exit(runTray(app, keyPath))
 }
 
@@ -101,12 +123,31 @@ func parsePos(s string) (*[2]int32, error) {
 
 // app holds state shared by tray and drop modes.
 type app struct {
-	dir    string
-	port   int
-	logOut *os.File
+	dir        string
+	port       int
+	keyPath    string
+	pairedPath string
+	signalURL  string
+	logOut     *os.File
 }
 
 func newApp(dir string, port int) *app { return &app{dir: dir, port: port} }
+
+// localAppData returns %LOCALAPPDATA%, where the device key and peer table live.
+func localAppData() (string, error) {
+	if d := os.Getenv("LOCALAPPDATA"); d != "" {
+		return d, nil
+	}
+	return "", fmt.Errorf("LOCALAPPDATA is not set")
+}
+
+// defaultPairedPath keeps the trusted-device table next to the device key.
+func defaultPairedPath() string {
+	if d, err := localAppData(); err == nil {
+		return filepath.Join(d, "ft", "paired.json")
+	}
+	return "paired.json"
+}
 
 // event appends one JSON line to the log file (if any) and stderr.
 func (a *app) event(kind string, kv map[string]any) {

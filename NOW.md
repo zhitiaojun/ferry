@@ -59,7 +59,7 @@
 
 ## 阻塞 / 待确认
 
-**2026-11-08 16:00 起暂停**：用户没有数据线，手机无法连接，App 端配对 UI 的真机点验做不了；M7 未开工。恢复条件：用户说继续（有数据线时再补点验，或直接进 M7）。
+2026-11-08 20:12 起 M7 开工（用户「开始」）；手机端 6 位码配对已真机点验通过（无数据线，经公网 web 安装 APK）。当前无阻塞。
 
 此前：无阻塞。G0 已关闭（用户委托定稿：§6 冻结、空文件改为支持、信令留待 M3、多文件串行）。执行中的待实测项（ESA 上 WSS 行为、学校网络可达性、IPv6、Android 17 本地网络权限与前台服务限制）已列入对应里程碑任务卡。
 
@@ -76,9 +76,17 @@
 - [x] G6 报告成文：`evidence/stage2/20261108-1600-g6-report.md`（八项判据全 PASS）
 - [x] App 端 6 位码配对已真机点验（2026-11-08 20:12，无数据线经公网；证据 `evidence/stage2/20261108-2012-pake-app.log`）
 
+## M7 进展（2026-11-08 20:2x 起）
+
+- [x] `cmd/ft-desktop` 托盘常驻 + 后台接收：通知区图标、菜单（打开接收目录/显示接收信息/显示投放小窗/退出）、LAN 接收并在完成时弹气球；冒烟 2.1MB 哈希一致，提交 `1025c8b`
+- [x] 共享发送路径 `core/client`（`SendFiles`/`Peers`，TLS1.3 钉定 + 中继房间），CLI 与桌面端共用；`core/client/tls.go` 的 `readyURL` 复用 `relay.RelayURL`（补一次性 token）
+- [x] 投放小窗发送：`cmd/ft-desktop/send.go` 的 `sendViaRelay` 取配对表（单台直发，多台提示），`WM_DROPFILES` 后调用；`-send` 诊断入口用于无 GUI 回归
+- [x] 桌面端新增 `-paired`/`-signal` 参数；设备密钥默认 `%LOCALAPPDATA%\ft\device.key`（`~/.ft` 与 `%LOCALAPPDATA%` 在沙箱内不可写时用 `-key`）
+- [x] 本机中继回归：`ft-desktop -send test-2.1m.bin` → `{"ok":true,"to":"recv-bj","bytes":2100000,"chunks":33}`，接收端 sha256 `58bbe9ba…` 一致；证据 `evidence/stage3/20261108-2035-desktop-send.log`
+
 ## 下一步（按优先级，由 work agent 执行）
 
-M6 已完成，G6 报告见 `evidence/stage2/20261108-1600-g6-report.md`；下一步 M7 产品化（托盘/投放小窗/右键菜单/安卓后台与分享/续传/UI，见 `PLAN.md` M7 卡）。
+M7 剩余（按 `PLAN.md` M7 卡）：开机自启（HKCU Run）、右键「发送到」快捷方式、投放窗多设备分区与选择、WebView2 主界面、安卓分享菜单/自启白名单/VPN 绕过、锁屏收 10MB 与切网续传、耗电记录；G7 报告。
 
 M5 结论（G5）：
 

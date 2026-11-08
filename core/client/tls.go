@@ -1,0 +1,54 @@
+package client
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/tls"
+	"fmt"
+	"net"
+	"time"
+
+	"github.com/cwlindean/filetransfer/core/identity"
+	"github.com/cwlindean/filetransfer/core/relay"
+	"github.com/cwlindean/filetransfer/core/signaling"
+)
+
+// pairedPeer returns the pinned public key of a peer from the trusted table.
+func pairedPeer(path, id string) (ed25519.PublicKey, error) {
+	store, err := identity.LoadPaired(path)
+	if err != nil {
+		return nil, err
+	}
+	d, ok := store.Get(id)
+	if !ok {
+		return nil, fmt.Errorf("peer %s is not paired; import its URI with: ft pair --add <uri>", truncHex(id))
+	}
+	return d.PublicKeyBytes()
+}
+
+// clientTLS wraps the relay stream with the pinned TLS 1.3 channel (D26): our
+// identity certificate on one side, the paired peer's key as the only accepted
+// pin on the other, so neither the server nor the relay room can impersonate.
+func clientTLS(ctx context.Context, rc net.Conn, key *identity.Key, peer ed25519.PublicKey) (net.Conn, error) {
+	cfg, err := identity.ClientTLS(key, peer)
+	if err != nil {
+		return nil, err
+	}
+	tc := tls.Client(rc, cfg)
+	hctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := tc.HandshakeContext(hctx); err != nil {
+		return nil, fmt.Errorf("tls handshake: %w", err)
+	}
+	return tc, nil
+}
+
+// readyURL turns the server's relay_ready payload into the absolute WebSocket
+// URL the relay room expects (path plus one-time token).
+func readyURL(signalURL string, ready signaling.RelayReady) string {
+	u, err := relay.RelayURL(signalURL, ready.RelayURL, ready.Token)
+	if err != nil {
+		return ""
+	}
+	return u
+}

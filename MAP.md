@@ -28,9 +28,10 @@ filetransfer/
 ├─ core/signaling/      WSS 信令客户端：登录挑战、在线表、候选/请求转发、15s 心跳（M3）
 ├─ core/relay/          中继通道：WebSocket 拼成 net.Conn（M3）
 ├─ core/punch/          STUN 客户端/服务端子集、候选收集、Punch 与对称握手 Connect（M4）
+├─ core/client/         CLI/桌面共用的发送路径（中继 + TLS1.3 钉定，M7）
 ├─ core/lanweb/          浏览器 LAN 收发（token 路径、流式上传、SHA-256、下载）
 ├─ cmd/ft/              CLI：-version / whoami / pair / send / recv（LAN、relay、punch 与竞速）
-├─ cmd/ft-desktop/      投放小窗预研原型（Win32 拖放，M2）
+├─ cmd/ft-desktop/      桌面端（托盘接收 + 投放小窗，Win32，M7）
 ├─ server/              ft-server：/signal 信令、/relay 拼接、/healthz、STUN UDP（M3/M4）、web 端 /（伪装页）/api/*、/web/<room>（M5）
 ├─ cmd/ft-server/       服务端入口（127.0.0.1:18790）
 ├─ cmd/ft-probe/        信令探测：登录 + Ping + `-gather` 打洞候选（证据用）
