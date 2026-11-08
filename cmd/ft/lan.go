@@ -33,6 +33,7 @@ func sendLAN(addr string, files []string, chunk int, frameTimeout time.Duration,
 
 	start := time.Now()
 	var lastErr error
+	hijacked := 0
 	for attempt := 1; ; attempt++ {
 		if time.Since(start) > deadline {
 			return lanResult{Attempts: attempt - 1}, fmt.Errorf("gave up after %v: %w", deadline, lastErr)
@@ -42,6 +43,20 @@ func sendLAN(addr string, files []string, chunk int, frameTimeout time.Duration,
 			return lanResult{Res: res, Peer: peer, Attempts: attempt}, nil
 		}
 		lastErr = err
+		if errors.Is(err, errLANHijacked) {
+			// A Wi-Fi/VPN reconnect can leave the tunnel briefly holding the
+			// LAN route; that heals by itself after a second or two, so keep
+			// redialing for a short while before declaring the path unusable.
+			hijacked++
+			if hijacked > maxHijackAttempts {
+				return lanResult{Attempts: attempt}, err
+			}
+			if log != nil {
+				log.Event("lan.retry_vpn", map[string]any{"attempt": attempt, "error": err.Error()})
+			}
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
 		if !retryable(err) {
 			return lanResult{Attempts: attempt}, err
 		}
@@ -90,6 +105,11 @@ func sendLANOnce(addr string, files []string, chunk int, frameTimeout time.Durat
 	}
 	return res, s.Peer.Name, nil
 }
+
+// maxHijackAttempts bounds how long a LAN send keeps retrying while a VPN
+// tunnel holds the route (500ms apart), so a reconnect blip is survivable but a
+// permanently captured path still fails fast.
+const maxHijackAttempts = 8
 
 // errLANHijacked means the OS handed a LAN connection to a VPN tunnel: the
 // tunnel accepts the TCP handshake locally but cannot route back into the LAN.

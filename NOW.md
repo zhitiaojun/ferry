@@ -90,7 +90,8 @@
 
 - [x] 原生主界面（`cmd/ft-desktop/mainwin.go`，880×468、GDI 自绘）：左栏已配对设备（选中高亮）、右侧投放区与「最近传输」台账、底栏「选择文件…／打开接收目录／暂停接收」；拖放与多选发送、暂停接收用 `recvEnabled` 拒新会话但保留端口；`WM_PRINT` 走同一 `paintDC()`（截图/辅助工具不再挂起）；托盘菜单加「打开主界面」，`-main` 可直接拉起。设计说明见 `docs/context/design.md` §13，截图 `evidence/stage3/20261108-2227-mainwin.png`
 
-- [x] 切网续传（断线重拨 + 断点续传）：`cmd/ft/lan.go` 的 `sendLAN` 在 LAN 发送失败时按 0.5→4 s 退避重拨，接收端保留 `.ftpart` 并在新会话里回 `RESUME(resume_from)`；`ft send` 新增 `--retry-for`（默认 2 分钟）与摘要里的 `attempts`。证据 `evidence/stage3/20261108-2245-resume.log`：200 MB 传输中途杀掉接收端（已写 131,563,520 B），2 秒后重启，第二次会话 `resume_from=131563520`，最终两端 sha256 `e3ffd766…` 一致，`attempts=4`；脚本 `tools/resume-evidence.sh`
+- [x] 切网续传（真机 + VPN 常开）：手机热点下 PC 发 200 MB，传输中 `netsh wlan disconnect` 5 秒再连回，发送端 `attempts=9` 续上，手机端 `resume_from=39649280`，两端 sha256 `e3ffd766…` 一致；证据 `evidence/stage3/20261108-2310-switch.log`，脚本 `.tools/switch-evidence.sh`。期间 Meta VPN（TUN `198.18.0.1/30`）一直开着：热点子网是直连路由，不被隧道接管；重连瞬间若被接管，`sendLAN` 会按 500ms 重拨最多 8 次（`maxHijackAttempts`）等它恢复。
+- [x] 切网续传（断线重拨 + 断点续传，本机）：`cmd/ft/lan.go` 的 `sendLAN` 在 LAN 发送失败时按 0.5→4 s 退避重拨，接收端保留 `.ftpart` 并在新会话里回 `RESUME(resume_from)`；`ft send` 新增 `--retry-for`（默认 2 分钟）与摘要里的 `attempts`。证据 `evidence/stage3/20261108-2245-resume.log`：200 MB 传输中途杀掉接收端（已写 131,563,520 B），2 秒后重启，第二次会话 `resume_from=131563520`，最终两端 sha256 `e3ffd766…` 一致，`attempts=4`；脚本 `tools/resume-evidence.sh`
 
 - [x] VPN 常开兼容：`cmd/ft/lan.go` 新增 `checkLANPath`（本地地址落在 198.18/15 而���端不是 → 立即判定 LAN 被 TUN 接管，不再重试 2 分钟），`core/discovery.IsTunnelFakeIP` 导出该判定并加单测 `cmd/ft/lan_test.go`。证据 `evidence/stage3/20261108-2253-vpn-compat.log`：同一 VPN 下 LAN 直连 0 秒拒绝、经中继 2.1MB 3.2s 成功且手机侧 sha256 一致。
 
