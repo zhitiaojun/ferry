@@ -67,7 +67,10 @@
 - [x] 服务端配对限频：每设备每分钟 30 条 `pair_*`，超出回 `rate_limited`（`server/server.go` 的 `allowPair`，单测 `TestPairBudgetPerPeer`）。
 - [x] 陌生设备信任确认弹窗（App 导入配对 URI 时显示设备 ID 并二次确认；APK 已构建，待手机联网复验）
 - [x] 自查清单 `docs/security-checklist.md`：文件名清洗、帧/清单上限、日志脱敏、私钥 DPAPI 封装，均有单测或脚本证据
-- [ ] G6 证据与报告
+- [x] 中继房间带宽上限 16 MiB/s（挂起式，`room.throttle` + `TestRoomThrottleParksOverBudget`）
+- [x] 部署 BJ：新二进制 sha256 `32fc1b2c…65c0e8`，`ft-server` active、healthz 200、公网 `/` 200；备份 `ft-server.bak-20261108-m6`，运维 `修改log.md` 已记
+- [ ] G6 报告成文（判据已全部有证据，见 `evidence/stage2/20261108-1549-g6.log`）
+- [ ] 手机联网后复验：APK 配对确认弹窗、6 位码在 App 端的入口（当前仅 CLI）
 
 ## 下一步（按优先级，由 work agent 执行）
 
