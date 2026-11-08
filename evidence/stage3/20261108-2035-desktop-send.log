@@ -32,3 +32,14 @@ source: .tools/testdata/test-2.1m.bin
 ## note
 - 两端凭配对表做 TLS1.3 公钥钉定；未配对时 clientTLS 会直接失败（client.pairedPeer）。
 - 桌面二进制与投放小窗共用 sendViaRelay；投放窗在 WM_DROPFILES 后调用同一函数。
+
+## autostart (开机自启)
+$ reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v filetransfer /t REG_SZ /d "\\"C:\\project\\filetransfer\\.tools\\bin\\ft-desktop.exe\\"" /f
+The operation completed successfully.
+$ ft-desktop.exe -startup status
+autostart=true
+$ reg delete ... /f && ft-desktop.exe -startup status
+autostart=false
+
+note: 本沙箱内由 Go 进程派生 reg.exe 写 HKLM/HKCU 被拒（Access is denied），宿主 shell 直接 reg add 成功；
+      因此读取路径与菜单勾选已验，写入路径需在非沙箱环境（用户机）复核。

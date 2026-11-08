@@ -30,6 +30,7 @@ var (
 	flagPair = flag.String("paired", "", "trusted device table (default: %LOCALAPPDATA%\\ft\\paired.json)")
 	flagSig  = flag.String("signal", "wss://ft.cwlindean.cn/signal", "signaling URL used to send via the relay")
 	flagSend = flag.String("send", "", "diagnostic: send these comma-separated files to the paired device, then exit")
+	flagAuto = flag.String("startup", "", "diagnostic: on/off/status for the HKCU Run entry, then exit")
 )
 
 func main() {
@@ -59,6 +60,22 @@ func main() {
 			fatal("open log: %v", err)
 		}
 		app.logOut = f
+	}
+
+	if *flagAuto != "" {
+		switch *flagAuto {
+		case "status":
+			fmt.Printf("autostart=%v\n", autostartEnabled())
+		case "on", "off":
+			if err := setAutostart(*flagAuto == "on"); err != nil {
+				fmt.Fprintln(os.Stderr, "startup:", err)
+				os.Exit(1)
+			}
+			fmt.Printf("autostart=%v\n", autostartEnabled())
+		default:
+			fatal(`-startup must be on, off or status`)
+		}
+		return
 	}
 
 	if *flagDrop {

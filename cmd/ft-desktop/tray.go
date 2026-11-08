@@ -21,7 +21,8 @@ const (
 	menuOpenDir = 1
 	menuInfo    = 2
 	menuDrop    = 3
-	menuQuit    = 4
+	menuStartup = 4
+	menuQuit    = 5
 )
 
 type tray struct {
@@ -170,6 +171,11 @@ func (t *tray) menu() {
 	appendMenu(menu, mfString, menuInfo, "显示接收信息")
 	appendMenu(menu, mfSeparator, 0, "")
 	appendMenu(menu, mfString, menuDrop, "显示投放小窗")
+	startupFlags := uint32(mfString)
+	if autostartEnabled() {
+		startupFlags |= mfChecked
+	}
+	appendMenu(menu, startupFlags, menuStartup, "开机自启")
 	appendMenu(menu, mfSeparator, 0, "")
 	appendMenu(menu, mfString, menuQuit, "退出")
 
@@ -205,6 +211,15 @@ func (t *tray) command(id uint16) {
 		if err == nil {
 			cmd := exec.Command(exe, "-drop")
 			cmd.Start()
+		}
+	case menuStartup:
+		on := !autostartEnabled()
+		if err := setAutostart(on); err != nil {
+			t.balloon("开机自启", fmt.Sprintf("设置失败：%v", err))
+		} else if on {
+			t.balloon("开机自启", "已设置：登录后自动在通知区运行")
+		} else {
+			t.balloon("开机自启", "已取消开机自启")
 		}
 	case menuQuit:
 		procPostQuitMessage.Call(0)

@@ -83,6 +83,7 @@
 - [x] 投放小窗发送：`cmd/ft-desktop/send.go` 的 `sendViaRelay` 取配对表（单台直发，多台提示），`WM_DROPFILES` 后调用；`-send` 诊断入口用于无 GUI 回归
 - [x] 桌面端新增 `-paired`/`-signal` 参数；设备密钥默认 `%LOCALAPPDATA%\ft\device.key`（`~/.ft` 与 `%LOCALAPPDATA%` 在沙箱内不可写时用 `-key`）
 - [x] 本机中继回归：`ft-desktop -send test-2.1m.bin` → `{"ok":true,"to":"recv-bj","bytes":2100000,"chunks":33}`，接收端 sha256 `58bbe9ba…` 一致；证据 `evidence/stage3/20261108-2035-desktop-send.log`
+- [x] 开机自启：托盘菜单「开机自启」勾选项 + `-startup on/off/status` 诊断；HKCU `Run\filetransfer`（`cmd/ft-desktop/autostart.go`，经 reg.exe）。读取与勾选已验证；本沙箱内派生进程写入注册表被拒（宿主 shell 直接写成功），写入路径待用户机复核
 
 ## 下一步（按优先级，由 work agent 执行）
 
