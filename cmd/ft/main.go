@@ -151,6 +151,7 @@ type summary struct {
 	Bytes      int64    `json:"bytes"`
 	Chunks     int      `json:"chunks"`
 	DurationMS int64    `json:"duration_ms"`
+	Attempts   int      `json:"attempts,omitempty"`
 	Error      string   `json:"error,omitempty"`
 }
 
@@ -175,6 +176,7 @@ func runSend(args []string) int {
 	noTLS := fs.Bool("no-tls", false, "relay without the pinned TLS 1.3 layer (debug only)")
 	punchPath := fs.Bool("punch", false, "with --signal: send over a UDP hole-punched QUIC tunnel")
 	stunServers := fs.String("stun", defaultSTUN, "comma separated STUN servers for --punch")
+	retryFor := fs.Duration("retry-for", 2*time.Minute, "keep retrying a dropped LAN transfer this long (resumes from the receiver's .ftpart)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -252,34 +254,8 @@ func runSend(args []string) int {
 		return 2
 	}
 
-	p := pathmgr.NewTCPDial(target)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	nc, err := p.Dial(ctx)
-	if err != nil {
-		return fail(logger, "dial", err)
-	}
-	s, err := session.Dial(nc, session.Params{
-		DeviceID:     identity.DeviceID(*name),
-		Name:         *name,
-		Capabilities: proto.CapResume,
-	})
-	if err != nil {
-		_ = nc.Close()
-		return fail(logger, "handshake", err)
-	}
-	defer s.Close()
-
 	topology := topologyOf(target)
-	if logger != nil {
-		logger.Event("session.ready", map[string]any{"peer": s.Peer.Name, "path": paths[0], "topology": topology, "addr": target})
-	}
-
-	res, err := transfer.Send(s, files, transfer.Config{
-		ChunkSize: uint32(*chunk),
-		Timeout:   *timeout,
-		Log:       logger,
-	})
+	res, err := sendLAN(target, files, *chunk, *timeout, *retryFor, logger)
 	if err != nil {
 		return fail(logger, "transfer", err)
 	}
@@ -287,12 +263,13 @@ func runSend(args []string) int {
 		OK:         true,
 		Path:       paths[0],
 		Topology:   topology,
-		Peer:       s.Peer.Name,
-		TransferID: fmt.Sprintf("%x", res.TransferID),
-		Files:      res.Files,
-		Bytes:      res.Bytes,
-		Chunks:     res.Chunks,
-		DurationMS: res.Duration.Milliseconds(),
+		Peer:       res.Peer,
+		TransferID: fmt.Sprintf("%x", res.Res.TransferID),
+		Files:      res.Res.Files,
+		Bytes:      res.Res.Bytes,
+		Chunks:     res.Res.Chunks,
+		DurationMS: res.Res.Duration.Milliseconds(),
+		Attempts:   res.Attempts,
 	})
 	return 0
 }

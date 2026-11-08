@@ -90,9 +90,11 @@
 
 - [x] 原生主界面（`cmd/ft-desktop/mainwin.go`，880×468、GDI 自绘）：左栏已配对设备（选中高亮）、右侧投放区与「最近传输」台账、底栏「选择文件…／打开接收目录／暂停接收」；拖放与多选发送、暂停接收用 `recvEnabled` 拒新会话但保留端口；`WM_PRINT` 走同一 `paintDC()`（截图/辅助工具不再挂起）；托盘菜单加「打开主界面」，`-main` 可直接拉起。设计说明见 `docs/context/design.md` §13，截图 `evidence/stage3/20261108-2227-mainwin.png`
 
+- [x] 切网续传（断线重拨 + 断点续传）：`cmd/ft/lan.go` 的 `sendLAN` 在 LAN 发送失败时按 0.5→4 s 退避重拨，接收端保留 `.ftpart` 并在新会话里回 `RESUME(resume_from)`；`ft send` 新增 `--retry-for`（默认 2 分钟）与摘要里的 `attempts`。证据 `evidence/stage3/20261108-2245-resume.log`：200 MB 传输中途杀掉接收端（已写 131,563,520 B），2 秒后重启，第二次会话 `resume_from=131563520`，最终两端 sha256 `e3ffd766…` 一致，`attempts=4`；脚本 `tools/resume-evidence.sh`
+
 ## 下一步（按优先级，由 work agent 执行）
 
-M7 剩余（按 `PLAN.md` M7 卡）：锁屏状态下收 10MB、切网续传、耗电记录；安卓分享/后台保活需真机点验；G7 报告。
+M7 剩余（按 `PLAN.md` M7 卡）：真机“切网”（手机 Wi-Fi ⇄ 蜂窝）续传实测（需电脑关 VPN：Meta TUN 在 TUN 模式下会把 10.201.2.123 的 TCP 也接走，表现为连上但收不到 HELLO_ACK）、耗电记录；安卓分享/后台保活需真机点验；G7 报告。
 
 M5 结论（G5）：
 
