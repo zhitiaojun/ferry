@@ -61,6 +61,14 @@
 
 无阻塞。G0 已关闭（用户委托定稿：§6 冻结、空文件改为支持、信令留待 M3、多文件串行）。执行中的待实测项（ESA 上 WSS 行为、学校网络可达性、IPv6、Android 17 本地网络权限与前台服务限制）已列入对应里程碑任务卡。
 
+## M6 进展（2026-11-08 15:3x）
+
+- [x] 一次性会话码 PAKE：`core/pairing/spake2.go`（SPAKE2/P-256，M/N 固定点）+ `ft pair --code/--wait` 经信令 `pair_begin`/`pair_relay` 配对；同码双向互通、错码不落盘，证据 `evidence/stage2/20261108-1532-pake.log`。
+- [x] 服务端配对限频：每设备每分钟 30 条 `pair_*`，超出回 `rate_limited`（`server/server.go` 的 `allowPair`，单测 `TestPairBudgetPerPeer`）。
+- [ ] 陌生设备确认弹窗（安卓 UI）
+- [ ] 自查清单（文件名清洗 / 超长帧 / 超大清单 / 日志脱敏 / 私钥存储）
+- [ ] G6 证据与报告
+
 ## 下一步（按优先级，由 work agent 执行）
 
 M5 结论（G5）：

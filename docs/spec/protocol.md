@@ -415,8 +415,17 @@ FT-SIGNAL-V1
 ### 8.6 配对
 
 - **扫码（自有设备首选）**：电脑显示二维码，内容 `ftpair://v1/<device_id_hex>/<pubkey_hex>/<secret_b64url>`；手机扫码后经信令 `pair_begin{method:"qr", proof:HMAC-SHA256(secret, nonce)}`，电脑确认后双方把对方公钥写入已配对表。
-- **6 位码（陌生设备 / 无摄像头）**：PAKE（SPAKE2，P-256）经信令通道协商临时密钥，成功后建立一次性信任；6 位码用后作废（M6 完整实现，M3 先做扫码）。
+- **6 位码（陌生设备 / 无摄像头）**：PAKE（SPAKE2，P-256）经信令通道协商临时密钥，成功后建立一次性信任；6 位码用后作废（M6 实现，流程见下）。
 - 配对不经过服务端存储：服务端只转发 `pair_relay` 载荷。
+
+6 位码流程（M6，`ft pair --code <6 位> --with <id>` / `ft pair --code <6 位> --wait`）：
+
+1. 发起方随机 16 字节 `session_id`，`w = SHA-256("FT-SPAKE2-V1" || session_id || code) mod n`，算 `X = x·B + w·M`，发 `pair_begin{to_device, from_device, method:"pake", proof:base64(session_id || X)}`。
+2. 接收方用同一 `code` 与 `session_id` 得 `w`，算 `Y = y·B + w·N`，回 `pair_relay{to_device: 发起方, payload:base64(Y)}`。
+3. 双方各自去盲化得 `K`，会话密钥 `SHA-256("FT-SPAKE2-KEY" || session_id || X || Y || K)`（transcript 固定“发起方在前”）。
+4. 双方发 `pair_relay{payload:base64(tag || pubkey)}`，`tag = HMAC-SHA256(key, "FT-SPAKE2-CONFIRM" || "pair")`；对端校验 tag 后，用 `sha256(pubkey) == device_id` 校验公钥并写入已配对表。
+5. 任一步失败（码不同、tag 不符、公钥与 id 不符）都不落盘；`code` 一次一用，双方应各自重新生成。
+6. 服务端对 `pair_begin`/`pair_relay` 按设备限频：每设备每分钟 30 条，超限回 `rate_limited`（异常记录 `pair.rate_limited`）。
 
 ### 8.7 心跳与断线
 

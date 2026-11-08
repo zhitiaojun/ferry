@@ -30,6 +30,9 @@ type Limits struct {
 	RelayIdle     time.Duration // drop a spliced relay after this much silence
 	LoginTTL      time.Duration // time allowed between challenge and login
 	PingIdle      time.Duration // close a signaling socket after this much silence
+
+	PairBurst  int           // pairing messages allowed per window, per peer
+	PairWindow time.Duration // window length for PairBurst
 }
 
 // DefaultLimits are sized for the 256 MB BJ quota (D9): the signaling state is
@@ -41,6 +44,8 @@ func DefaultLimits() Limits {
 		RelayIdle:     60 * time.Second,
 		LoginTTL:      30 * time.Second,
 		PingIdle:      90 * time.Second,
+		PairBurst:     30,
+		PairWindow:    time.Minute,
 	}
 }
 
@@ -62,6 +67,13 @@ type peer struct {
 	pub  []byte
 	conn *websocket.Conn
 	wmu  sync.Mutex // serialises writes to conn
+
+	// Pairing budget: pairing messages are cheap to forward but easy to
+	// abuse as a relay for arbitrary traffic, so each peer gets a small
+	// fixed window.
+	pairMu     sync.Mutex
+	pairCount  int
+	pairWindow time.Time
 }
 
 func (p *peer) send(ctx context.Context, e *signaling.Envelope) error {
@@ -353,7 +365,13 @@ func (s *Server) route(ctx context.Context, p *peer, e *signaling.Envelope) {
 		if err == nil {
 			_ = p.send(ctx, pong)
 		}
-	case signaling.TypeCandidates, signaling.TypeSendRequest, signaling.TypeSendResp, signaling.TypePairBegin, signaling.TypePairRelay:
+	case signaling.TypePairBegin, signaling.TypePairRelay:
+		if !s.allowPair(p) {
+			s.writeError(ctx, p.conn, e.ID, signaling.ErrRateLimited, "too many pairing messages")
+			return
+		}
+		fallthrough
+	case signaling.TypeCandidates, signaling.TypeSendRequest, signaling.TypeSendResp:
 		to, ok := toDevice(e)
 		if !ok {
 			s.writeError(ctx, p.conn, e.ID, signaling.ErrBadRequest, "missing to_device")
@@ -377,6 +395,19 @@ func (s *Server) route(ctx context.Context, p *peer, e *signaling.Envelope) {
 	default:
 		s.writeError(ctx, p.conn, e.ID, signaling.ErrUnsupportedType, "unsupported message type "+e.Type)
 	}
+}
+
+// allowPair applies the per-peer pairing budget (PairWindow, PairBurst).
+func (s *Server) allowPair(p *peer) bool {
+	p.pairMu.Lock()
+	defer p.pairMu.Unlock()
+	now := time.Now()
+	if p.pairWindow.IsZero() || now.Sub(p.pairWindow) > s.limits.PairWindow {
+		p.pairWindow = now
+		p.pairCount = 0
+	}
+	p.pairCount++
+	return p.pairCount <= s.limits.PairBurst
 }
 
 // withSender returns a copy of e whose send_request payload carries the

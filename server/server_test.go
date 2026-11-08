@@ -239,3 +239,23 @@ func readTest(t *testing.T, ctx context.Context, conn *websocket.Conn) *signalin
 	}
 	return e
 }
+
+func TestPairBudgetPerPeer(t *testing.T) {
+	srv := New(nil)
+	p := &peer{id: "deadbeef"}
+	for i := 0; i < srv.limits.PairBurst; i++ {
+		if !srv.allowPair(p) {
+			t.Fatalf("message %d rejected inside the burst budget", i+1)
+		}
+	}
+	if srv.allowPair(p) {
+		t.Fatal("message past PairBurst accepted")
+	}
+	// A fresh window restores the budget.
+	p.pairMu.Lock()
+	p.pairWindow = time.Now().Add(-srv.limits.PairWindow - time.Second)
+	p.pairMu.Unlock()
+	if !srv.allowPair(p) {
+		t.Fatal("budget not restored after the window")
+	}
+}

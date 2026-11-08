@@ -43,6 +43,7 @@ const (
 	ErrAuthFailed      = "auth_failed"
 	ErrPeerOffline     = "peer_offline"
 	ErrBadRequest      = "bad_request"
+	ErrRateLimited     = "rate_limited"
 	ErrTooLarge        = "message_too_large"
 )
 
