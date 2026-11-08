@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/cwlindean/filetransfer/core/identity"
 )
@@ -24,6 +25,13 @@ func defaultPairedPath() string {
 // trusted peers. The URI is the payload a QR code would carry (protocol §8.6);
 // the scanner proves the one-time secret in-band once pairing lands (M6).
 func runPair(args []string) int {
+	// The one-time-code flow has its own flag set; keep `ft pair --show/--add`
+	// unchanged for QR based pairing.
+	for _, a := range args {
+		if a == "--code" || a == "-code" || strings.HasPrefix(a, "--code=") || strings.HasPrefix(a, "-code=") {
+			return runPairPake(args)
+		}
+	}
 	fs := flag.NewFlagSet("pair", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	keyPath := fs.String("key", defaultKeyPath(), "device key file")

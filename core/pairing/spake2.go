@@ -22,6 +22,9 @@ const (
 	RoleResponder Role = 2
 )
 
+// ShareSize is the encoded length of one SPAKE2 share (uncompressed P-256 point).
+const ShareSize = shareSize
+
 const (
 	versionLabel  = "FT-SPAKE2-V1"
 	keyLabel      = "FT-SPAKE2-KEY"

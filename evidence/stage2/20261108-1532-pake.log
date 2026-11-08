@@ -1,0 +1,10 @@
+# M6 PAKE pairing evidence 2026-11-08T15:32:41+08:00
+## go test
+go: GOPATH entry is relative; must be absolute path: "/c/project/filetransfer/.tools/gopath".
+For more details see: 'go help gopath'
+## same code -> both sides paired
+responder: {"action":"pake","device_id":"bc6180da9f50213d5c4e567fbc05793e5d3b4ea9bb5db99686343ccc42bd772a","ok":true,"paired":1,"peer":{"device_id":"f72d3ee8830be9375159b4770382f0c0575bd5f3d8b47dc1d1ed2de20de135a1","name":""}}
+initiator: ok exit 0
+## wrong code -> no pairing
+responder: {"error":"peer failed the pairing confirmation","ok":false}
+ft: peer failed the pairing confirmation

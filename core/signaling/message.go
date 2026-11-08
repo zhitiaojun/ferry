@@ -196,15 +196,19 @@ type RelayReady struct {
 	ExpiresInMS int64  `json:"expires_in_ms"`
 }
 
-// PairBegin starts pairing (C→S).
+// PairBegin starts pairing (C→S). FromDevice is the initiator's device id; the
+// responder only trusts it after the PAKE confirmation proves the key hash.
 type PairBegin struct {
-	ToDevice string `json:"to_device"`
-	Method   string `json:"method"`
-	Proof    string `json:"proof"`
+	ToDevice   string `json:"to_device"`
+	FromDevice string `json:"from_device"`
+	Method     string `json:"method"`
+	Proof      string `json:"proof"`
 }
 
-// PairRelay forwards a pairing payload (S→C).
+// PairRelay relays one pairing payload between the two devices. ToDevice must
+// be set by the sender; the server fills FromDevice.
 type PairRelay struct {
+	ToDevice   string `json:"to_device"`
 	FromDevice string `json:"from_device"`
 	Payload    string `json:"payload"`
 }
