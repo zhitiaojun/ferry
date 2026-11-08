@@ -20,9 +20,9 @@ WORK=$TOOLS/android-build
 # Windows path (forward slashes) for native tools: javac, java, aapt2, zip...
 m() { cygpath -m "$1"; }
 
-export GOCACHE=$TOOLS/gocache GOPATH=$TOOLS/gopath GOTMPDIR=$TOOLS/tmp GOFLAGS=-buildvcs=false
-export ANDROID_HOME=$SDK ANDROID_NDK_HOME=$SDK/ndk/27.2.12479018 JAVA_HOME=$JDK
-export TMP=$TOOLS/tmp TEMP=$TOOLS/tmp
+export GOCACHE=$(m "$TOOLS/gocache") GOPATH=$(m "$TOOLS/gopath") GOTMPDIR=$(m "$TOOLS/tmp") GOFLAGS=-buildvcs=false
+export ANDROID_HOME=$(m "$SDK") ANDROID_NDK_HOME=$(m "$SDK/ndk/27.2.12479018") JAVA_HOME=$(m "$JDK")
+export TMP=$(m "$TOOLS/tmp") TEMP=$(m "$TOOLS/tmp")
 export PATH="$TOOLS/go/bin:$TOOLS/gopath/bin:$JDK/bin:$PATH"
 
 echo "== go build =="

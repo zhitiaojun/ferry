@@ -1,6 +1,7 @@
 package cn.cwlindean.ft;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
@@ -351,6 +352,31 @@ public class MainActivity extends Activity {
             toast("先把对方配对 URI 粘贴到输入框");
             return;
         }
+        // Trusting a stranger is a deliberate act: show who the key belongs to
+        // before it lands in paired.json.
+        String peer = shortPeerId(uri);
+        new AlertDialog.Builder(this)
+                .setTitle("信任这台设备？")
+                .setMessage("设备 ID：" + peer + "\n\n导入后对方可不经你同意向你发起传输。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("导入", (d, w) -> doImportPairUri(uri))
+                .show();
+    }
+
+    /** shortPeerId pulls the device id out of ftpair://v1/<id>/<pub>/<secret>. */
+    private static String shortPeerId(String uri) {
+        try {
+            String rest = uri.substring(uri.indexOf("://") + 3);
+            String[] parts = rest.split("/");
+            if (parts.length >= 3 && parts[1].length() >= 12) {
+                return parts[1].substring(0, 12) + "…";
+            }
+        } catch (RuntimeException ignored) {
+        }
+        return uri;
+    }
+
+    private void doImportPairUri(String uri) {
         File dir = new File(getExternalFilesDir(null), "received");
         try {
             Mobile.pairImport(uri, new File(dir, "paired.json").getAbsolutePath());
