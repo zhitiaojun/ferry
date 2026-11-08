@@ -176,3 +176,11 @@ magic(4) | version(1) | type(1) | flags(2) | session_id(16) | seq(8) | len(4) | 
 - `ft share` 负责把设备登记到服务器：起 lanweb、注册 6 位码、打印码/房间/LAN 地址/二维码、每 2 分钟心跳，并保持 `/web/<room>` 的 host 连接。
 - 目录片段（`#key`）留给 M6：浏览器到设备的中继载荷加密在 M5 暂用服务器可见的明文（与 M6 PAKE 一并收紧）。
 - 中继模式的文件传输由设备侧 `cmd/ft/webhost.go` 承担：文本帧走 JSON 控制（`list`/`get`/`put.begin`/`put.end`），二进制帧是 64 KiB 载荷，`put` 先写 `.part` 再按大小与 SHA-256 校验后改名登记；`coder/websocket` 默认读上限 32 KiB，设备侧必须 `SetReadLimit(4 MiB)`，否则第一块就断。
+
+## 13. 桌面主界面（M7）
+
+- 形态：**纯 Win32 自绘窗口**（`cmd/ft-desktop/mainwin.go`，GDI、无 cgo、复用 `win32.go` 的 LazyDLL 绑定）。评估过的 WebView2 / Edge `--app` 方案常驻 120–250 MB（多进程浏览器引擎），而本程序是常驻小工具，原生窗口约 8–15 MB、冷启动 <0.2 s，故不引入浏览器引擎。
+- 布局：`layout()` 一处计算所有矩形（标题区、左栏设备、右栏投放区与最近传输、底栏按钮），`WM_PAINT` 与鼠标命中测试共用，避免两套坐标漂移。
+- 内容：标题「ft · 文件传递」；副标题「本机名 · 设备 ID · 端口 · 接收中/已暂停」；左栏列出已配对设备（名称 + 完整设备 ID，选中行用系统高亮色）；右栏投放区（拖放或「选择文件…」）与「最近传输」台账（时间、方向、对端、文件数、字节数，时间倒序）；底栏三个按钮。
+- 交互：`DragAcceptFiles` + `WM_DROPFILES` 拖放即发送给选中设备；`GetOpenFileNameW`（`OFN_ALLOWMULTISELECT|OFN_EXPLORER`）多选；「暂停接收」用 `recvEnabled atomic.Bool`，托盘 accept 循环据此拒新会话但保留监听端口（避免端口被抢）；传输完成由 `app.note()` 记台账并经 `PostMessage` 重绘。
+- 实现注意：`WM_PRINT/WM_PRINTCLIENT` 必须走与 `WM_PAINT` 相同的 `paintDC()`，否则 `PrintWindow` 截图与部分辅助工具会挂起；`openMainWindow` 不得在持锁时 `CreateWindowExW`（`WM_CREATE` 回调查同一把锁会死锁）；文字颜色用 `COLOR_WINDOWTEXT`（8）而不是 `sysColor(0)`。

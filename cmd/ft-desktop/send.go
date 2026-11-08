@@ -84,6 +84,7 @@ func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error)
 		"to": truncID(peer.ID), "bytes": res.Bytes, "chunks": res.Chunks,
 		"duration_ms": res.Duration.Milliseconds(), "transfer_id": res.TransferID,
 	})
+	a.note(fmt.Sprintf("%s  → %s  %d 个文件 · %s", time.Now().Format("15:04"), peerLabel(peer), len(res.Files), humanBytes(res.Bytes)))
 	return res, nil
 }
 

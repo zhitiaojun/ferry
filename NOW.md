@@ -88,9 +88,11 @@
 - [x] 安卓后台保活入口：「后台保活」按钮请求忽略电池优化（`ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`），减少锁屏后被系统杀进程
 - [x] 开机自启：托盘菜单「开机自启」勾选项 + `-startup on/off/status` 诊断；HKCU `Run\filetransfer`（`cmd/ft-desktop/autostart.go`，经 reg.exe）。读取与勾选已验证；本沙箱内派生进程写入注册表被拒（宿主 shell 直接写成功），写入路径待用户机复核
 
+- [x] 原生主界面（`cmd/ft-desktop/mainwin.go`，880×468、GDI 自绘）：左栏已配对设备（选中高亮）、右侧投放区与「最近传输」台账、底栏「选择文件…／打开接收目录／暂停接收」；拖放与多选发送、暂停接收用 `recvEnabled` 拒新会话但保留端口；`WM_PRINT` 走同一 `paintDC()`（截图/辅助工具不再挂起）；托盘菜单加「打开主界面」，`-main` 可直接拉起。设计说明见 `docs/context/design.md` §13，截图 `evidence/stage3/20261108-2227-mainwin.png`
+
 ## 下一步（按优先级，由 work agent 执行）
 
-M7 剩余（按 `PLAN.md` M7 卡）：开机自启（HKCU Run）、右键「发送到」快捷方式、投放窗多设备分区与选择、WebView2 主界面、安卓分享菜单/自启白名单/VPN 绕过、锁屏收 10MB 与切网续传、耗电记录；G7 报告。
+M7 剩余（按 `PLAN.md` M7 卡）：锁屏状态下收 10MB、切网续传、耗电记录；安卓分享/后台保活需真机点验；G7 报告。
 
 M5 结论（G5）：
 

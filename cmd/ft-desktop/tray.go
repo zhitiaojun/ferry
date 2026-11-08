@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/cwlindean/filetransfer/core/identity"
@@ -24,6 +25,7 @@ const (
 	menuStartup = 4
 	menuQuit    = 5
 	menuSendTo  = 6
+	menuMain    = 7
 )
 
 type tray struct {
@@ -37,6 +39,7 @@ type tray struct {
 }
 
 func runTray(a *app, keyPath string) int {
+	trayApp = a
 	t := &tray{app: a}
 	key, err := identity.LoadOrCreateKey(keyPath)
 	if err != nil {
@@ -70,6 +73,9 @@ func runTray(a *app, keyPath string) int {
 		return 1
 	}
 	t.addIcon()
+	if a.showMain {
+		openMainWindow(a)
+	}
 
 	var msg msgT
 	for {
@@ -171,6 +177,7 @@ func (t *tray) menu() {
 	appendMenu(menu, mfString, menuOpenDir, "打开接收目录")
 	appendMenu(menu, mfString, menuInfo, "显示接收信息")
 	appendMenu(menu, mfSeparator, 0, "")
+	appendMenu(menu, mfString, menuMain, "打开主界面")
 	appendMenu(menu, mfString, menuDrop, "显示投放小窗")
 	startupFlags := uint32(mfString)
 	if autostartEnabled() {
@@ -208,6 +215,8 @@ func (t *tray) command(id uint16) {
 		messageBox("ft 接收信息", fmt.Sprintf(
 			"设备 ID：%x\n端口：%d\n目录：%s\n\n在手机/电脑上用这个地址即可发送：\n%s",
 			t.devID[:4], t.app.port, t.app.dir, localAddr(t.app.port)))
+	case menuMain:
+		openMainWindow(t.app)
 	case menuDrop:
 		exe, err := os.Executable()
 		if err == nil {
@@ -252,6 +261,12 @@ func (t *tray) acceptLoop() {
 		if err != nil {
 			return
 		}
+		if !recvEnabled.Load() {
+			// Paused: keep the socket bound but refuse new sessions so the
+			// sender fails fast instead of hanging in the handshake.
+			nc.Close()
+			continue
+		}
 		go t.handle(nc)
 	}
 }
@@ -267,6 +282,10 @@ func (t *tray) handle(nc net.Conn) {
 	peer := fmt.Sprintf("%x", sess.Peer.DeviceID[:4])
 	t.app.event("desktop.session_ready", map[string]any{"peer": peer, "name": sess.Peer.Name})
 
+	if !recvEnabled.Load() {
+		nc.Close()
+		return
+	}
 	res, err := transfer.Receive(sess, t.app.dir, transfer.Config{})
 	if err != nil {
 		t.app.event("desktop.transfer_error", map[string]any{"peer": peer, "error": err.Error()})
@@ -276,6 +295,7 @@ func (t *tray) handle(nc net.Conn) {
 	t.app.event("desktop.transfer_done", map[string]any{
 		"peer": peer, "files": res.Files, "bytes": res.Bytes,
 	})
+	t.app.note(fmt.Sprintf("%s  ← %s  %d 个文件 · %s", time.Now().Format("15:04"), peer, len(res.Files), humanBytes(res.Bytes)))
 	title := fmt.Sprintf("已接收 %d 个文件", len(res.Files))
 	t.balloon(title, fmt.Sprintf("来自 %s，共 %d 字节，已存入 %s", peer, res.Bytes, t.app.dir))
 }

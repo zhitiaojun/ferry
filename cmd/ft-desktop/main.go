@@ -15,8 +15,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/pprof"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/cwlindean/filetransfer/core/identity"
 )
 
 var (
@@ -31,6 +35,7 @@ var (
 	flagSig    = flag.String("signal", "wss://ft.cwlindean.cn/signal", "signaling URL used to send via the relay")
 	flagSend   = flag.String("send", "", "diagnostic: send these comma-separated files to the paired device, then exit")
 	flagAuto   = flag.String("startup", "", "diagnostic: on/off/status for the HKCU Run entry, then exit")
+	flagMain   = flag.Bool("main", false, "open the main window at startup")
 	flagSendTo = flag.Bool("install-sendto", false, "install the Explorer \"Send to\" shortcut, then exit")
 )
 
@@ -137,6 +142,8 @@ func main() {
 		return
 	}
 
+	app.showMain = *flagMain
+	dumpStacks()
 	os.Exit(runTray(app, keyPath))
 }
 
@@ -179,6 +186,45 @@ type app struct {
 	pairedPath string
 	signalURL  string
 	logOut     *os.File
+	showMain   bool
+
+	mu     sync.Mutex
+	recent []string
+}
+
+// deviceID returns the short id of this device, or "" when the key is not
+// loaded yet (the main window shows the port instead).
+func (a *app) deviceID() string {
+	if a.keyPath == "" {
+		return ""
+	}
+	k, err := identity.LoadKey(a.keyPath)
+	if err != nil {
+		return ""
+	}
+	id := k.ID()
+	return fmt.Sprintf("%x", id[:6])
+}
+
+// note records a one-line summary for the main window's "最近传输" list.
+func (a *app) note(line string) {
+	a.mu.Lock()
+	a.recent = append([]string{line}, a.recent...)
+	if len(a.recent) > 8 {
+		a.recent = a.recent[:8]
+	}
+	a.mu.Unlock()
+}
+
+func (a *app) recentLines(n int) []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if n > len(a.recent) {
+		n = len(a.recent)
+	}
+	out := make([]string, n)
+	copy(out, a.recent[:n])
+	return out
 }
 
 func newApp(dir string, port int) *app { return &app{dir: dir, port: port} }
@@ -221,4 +267,36 @@ func (a *app) event(kind string, kv map[string]any) {
 		a.logOut.WriteString(line)
 	}
 	fmt.Fprint(os.Stderr, line)
+}
+
+// humanBytes keeps the ledger readable without pulling in a formatter.
+func humanBytes(n int64) string {
+	switch {
+	case n >= 1<<30:
+		return fmt.Sprintf("%.1f GB", float64(n)/(1<<30))
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
+}
+
+// dumpStacks is a debugging aid for hangs: with FT_DEBUG_STACKS=1 the process
+// writes all goroutine stacks to the file named there after a delay.
+func dumpStacks() {
+	path := os.Getenv("FT_DEBUG_STACKS")
+	if path == "" {
+		return
+	}
+	go func() {
+		time.Sleep(8 * time.Second)
+		f, err := os.Create(path)
+		if err != nil {
+			return
+		}
+		defer f.Close()
+		pprof.Lookup("goroutine").WriteTo(f, 1)
+	}()
 }
