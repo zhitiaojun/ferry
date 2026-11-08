@@ -28,7 +28,7 @@
 
 完整路线图见 `PLAN.md`；需求与判据见 `docs/context/requirements.md`；实现由 work agent 按 `WORK_AGENT.md` 执行。
 
-> ⚠ 在 M6 完成前不可用于真实数据（R8）。
+> M6 已完成安全收尾：一次性 6 位码走 SPAKE2（密码不上线）、私钥在 Windows 用 DPAPI 封装、服务端限频与限流已生效；自查清单见 `docs/security-checklist.md`。仍建议先用自己的测试文件验证（R8）。
 
 ## 怎么用
 

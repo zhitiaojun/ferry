@@ -35,8 +35,13 @@ mkdir -p "$OUT"
 echo "== extract AAR =="
 rm -rf "$WORK"
 mkdir -p "$WORK/aar" "$WORK/classes" "$WORK/dex"
-(cd "$WORK/aar" && unzip -q -o "$ROOT/android/ft.aar" classes.jar)
-(cd "$WORK" && unzip -q -o "$ROOT/android/ft.aar" jni/arm64-v8a/libgojni.so)
+python - "$(m "$ROOT/android/ft.aar")" "$(m "$WORK/aar")" "$(m "$WORK")" <<'PY'
+import sys, zipfile
+aar, aarout, work = sys.argv[1], sys.argv[2], sys.argv[3]
+with zipfile.ZipFile(aar) as z:
+    z.extract("classes.jar", aarout)
+    z.extract("jni/arm64-v8a/libgojni.so", work)
+PY
 mkdir -p "$WORK/lib/arm64-v8a"
 cp "$WORK/jni/arm64-v8a/libgojni.so" "$WORK/lib/arm64-v8a/libgojni.so"
 

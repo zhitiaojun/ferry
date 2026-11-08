@@ -76,6 +76,31 @@ func (r *room) splice(ctx context.Context, idle time.Duration) {
 	}
 }
 
+// throttle keeps one room under RelayRate bytes per second by sleeping once
+// the budget for the current second is spent. A zero rate disables it.
+func (r *room) throttle(ctx context.Context, n int) {
+	if r.rate <= 0 {
+		return
+	}
+	r.rateMu.Lock()
+	now := time.Now()
+	if r.rateWindow.IsZero() || now.Sub(r.rateWindow) >= time.Second {
+		r.rateWindow = now
+		r.rateBytes = 0
+	}
+	r.rateBytes += int64(n)
+	over := r.rateBytes > r.rate
+	wait := time.Until(r.rateWindow.Add(time.Second))
+	r.rateMu.Unlock()
+	if !over || wait <= 0 {
+		return
+	}
+	select {
+	case <-time.After(wait):
+	case <-ctx.Done():
+	}
+}
+
 func (r *room) pump(ctx context.Context, from int, idle time.Duration) error {
 	src, dst := r.conns[from], r.conns[1-from]
 	if src == nil || dst == nil {
@@ -98,6 +123,7 @@ func (r *room) pump(ctx context.Context, from int, idle time.Duration) error {
 			return err
 		}
 		r.addBytes(from, len(data))
+		r.throttle(ctx, len(data))
 	}
 }
 

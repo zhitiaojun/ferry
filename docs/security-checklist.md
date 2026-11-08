@@ -46,6 +46,7 @@
 | 登录挑战有效期 | 30 s | `server.Limits.LoginTTL` |
 | 信令空闲断开 | 90 s（客户端 15 s 心跳） | `PingIdle` |
 | 中继房间上限 / 空闲 | 50 间 / 60 s | `MaxRelayRooms`、`RelayIdle` |
+| 每房间带宽 | 16 MiB/s，超预算挂起至下一秒（不缓冲） | `Limits.RelayRate`、`room.throttle`、`TestRoomThrottleParksOverBudget` |
 | 中继令牌 | 24 hex，61 s 过期，一次性 | `server/server.go` `openRelay` |
 | 配对消息限频 | 每设备 30 条/分钟，超出 `rate_limited` | `Server.allowPair` + `TestPairBudgetPerPeer` |
 | Web 解锁失败 | 8 次/5 分钟，失败固定 350 ms 延迟 | `server/web.go` `WebLimits` |

@@ -259,3 +259,19 @@ func TestPairBudgetPerPeer(t *testing.T) {
 		t.Fatal("budget not restored after the window")
 	}
 }
+
+func TestRoomThrottleParksOverBudget(t *testing.T) {
+	r := &room{rate: 100}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	start := time.Now()
+	r.throttle(ctx, 40)
+	if d := time.Since(start); d > 500*time.Millisecond {
+		t.Fatalf("under budget waited %v", d)
+	}
+	start = time.Now()
+	r.throttle(ctx, 80) // 40+80 > 100/s
+	if d := time.Since(start); d < 300*time.Millisecond {
+		t.Fatalf("over budget did not wait (%v)", d)
+	}
+}

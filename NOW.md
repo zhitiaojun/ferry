@@ -65,8 +65,8 @@
 
 - [x] 一次性会话码 PAKE：`core/pairing/spake2.go`（SPAKE2/P-256，M/N 固定点）+ `ft pair --code/--wait` 经信令 `pair_begin`/`pair_relay` 配对；同码双向互通、错码不落盘，证据 `evidence/stage2/20261108-1532-pake.log`。
 - [x] 服务端配对限频：每设备每分钟 30 条 `pair_*`，超出回 `rate_limited`（`server/server.go` 的 `allowPair`，单测 `TestPairBudgetPerPeer`）。
-- [ ] 陌生设备确认弹窗（安卓 UI）
-- [ ] 自查清单（文件名清洗 / 超长帧 / 超大清单 / 日志脱敏 / 私钥存储）
+- [x] 陌生设备信任确认弹窗（App 导入配对 URI 时显示设备 ID 并二次确认；APK 已构建，待手机联网复验）
+- [x] 自查清单 `docs/security-checklist.md`：文件名清洗、帧/清单上限、日志脱敏、私钥 DPAPI 封装，均有单测或脚本证据
 - [ ] G6 证据与报告
 
 ## 下一步（按优先级，由 work agent 执行）

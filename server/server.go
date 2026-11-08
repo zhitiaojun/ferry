@@ -31,6 +31,8 @@ type Limits struct {
 	LoginTTL      time.Duration // time allowed between challenge and login
 	PingIdle      time.Duration // close a signaling socket after this much silence
 
+	RelayRate int64 // bytes/second per relay room (0 = unlimited)
+
 	PairBurst  int           // pairing messages allowed per window, per peer
 	PairWindow time.Duration // window length for PairBurst
 }
@@ -44,6 +46,7 @@ func DefaultLimits() Limits {
 		RelayIdle:     60 * time.Second,
 		LoginTTL:      30 * time.Second,
 		PingIdle:      90 * time.Second,
+		RelayRate:     16 << 20,
 		PairBurst:     30,
 		PairWindow:    time.Minute,
 	}
@@ -100,6 +103,13 @@ type room struct {
 	log     *logging.Logger
 	bytesMu sync.Mutex
 	bytes   [2]int64
+
+	// Per-room bandwidth budget (bytes/second). Exceeding it parks the pump
+	// until the next second instead of buffering.
+	rate       int64
+	rateMu     sync.Mutex
+	rateWindow time.Time
+	rateBytes  int64
 }
 
 // addBytes records how much data one side pushed through the splice. It backs
@@ -467,7 +477,7 @@ func (s *Server) openRelay(ctx context.Context, from *peer, e *signaling.Envelop
 	rm := &room{
 		token: token, transfer: req.TransferID, created: time.Now(),
 		readyCh: make(chan struct{}), done: make(chan struct{}),
-		log: s.log,
+		log: s.log, rate: s.limits.RelayRate,
 	}
 	s.rooms[token] = rm
 	s.mu.Unlock()
