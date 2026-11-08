@@ -49,6 +49,7 @@
 | 每房间带宽 | 16 MiB/s，超预算挂起至下一秒（不缓冲） | `Limits.RelayRate`、`room.throttle`、`TestRoomThrottleParksOverBudget` |
 | 中继令牌 | 24 hex，61 s 过期，一次性 | `server/server.go` `openRelay` |
 | 配对消息限频 | 每设备 30 条/分钟，超出 `rate_limited` | `Server.allowPair` + `TestPairBudgetPerPeer` |
+| 登录尝试限频（按 IP） | 每源地址 10 次/分钟，超出 429 并断开 | `Server.allowLogin` + `TestLoginBudgetPerIP` |
 | Web 解锁失败 | 8 次/5 分钟，失败固定 350 ms 延迟 | `server/web.go` `WebLimits` |
 | Web 6 位码查询 | 20 次/5 分钟，200 ms 假延迟，不返回设备列表 | 同上 |
 | Web 设备注册有效期 | 10 分钟心跳续期 | `WebLimits.DeviceTTL` |
