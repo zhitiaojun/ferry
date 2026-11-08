@@ -229,15 +229,14 @@ public class MainActivity extends Activity {
         stopBtn.setText("停止");
         stopBtn.setOnClickListener(v -> stopReceiver());
         relayBtn = new Button(this);
-        relayBtn.setText("中继接收");
-        relayBtn.setOnClickListener(v -> startRelayReceiver());
+        relayBtn.setText("远程接收");
+        relayBtn.setOnClickListener(v -> startAutoReceiver());
         punchBtn = new Button(this);
         punchBtn.setText("打洞接收");
         punchBtn.setOnClickListener(v -> startPunchReceiver());
         receiverRow.addView(startBtn);
         receiverRow.addView(stopBtn);
         receiverRow.addView(relayBtn);
-        receiverRow.addView(punchBtn);
         root.addView(receiverRow);
 
         LinearLayout webRow = new LinearLayout(this);
@@ -345,14 +344,12 @@ public class MainActivity extends Activity {
         root.addView(peerRow);
 
         sendBtn = new Button(this);
-        sendBtn.setText("选文件并发送");
-        sendBtn.setOnClickListener(v -> pickFiles(false));
+        sendBtn.setText("发送（自动选路）");
+        sendBtn.setOnClickListener(v -> pickFiles(true));
         root.addView(sendBtn);
 
         punchSendBtn = new Button(this);
-        punchSendBtn.setText("打洞发送（对方设备 ID）");
-        punchSendBtn.setOnClickListener(v -> pickFiles(true));
-        root.addView(punchSendBtn);
+        punchSendBtn.setVisibility(android.view.View.GONE);
 
         return root;
     }
@@ -527,6 +524,44 @@ public class MainActivity extends Activity {
                 ui.post(() -> {
                     relayBtn.setEnabled(true);
                     toast("中继启动失败：" + e.getMessage());
+                });
+            }
+        }).start();
+    }
+
+    /** 一次“开始接收”：打洞与服务器中继同时等，先接通的那条路胜出（D1/D2）。 */
+    private void startAutoReceiver() {
+        if (receiverRunning) {
+            toast("已经在接收");
+            return;
+        }
+        relayBtn.setEnabled(false);
+        final String name = currentName();
+        new Thread(() -> {
+            try {
+                File dir = new File(getExternalFilesDir(null), "received");
+                File key = new File(dir, "device.key");
+                File paired = new File(dir, "paired.json");
+                String uri = Mobile.pairURIFor(name, key.getAbsolutePath());
+                String id = Mobile.startAutoReceive(name, dir.getAbsolutePath(),
+                        "wss://ft.cwlindean.cn/signal", key.getAbsolutePath(), paired.getAbsolutePath(),
+                        lanHint(), "");
+                ui.post(() -> {
+                    relayBtn.setEnabled(true);
+                    stopBtn.setEnabled(true);
+                    receiverRunning = true;
+                    relayInfo.setText("接收中（自动选路）\n设备 ID：" + id
+                            + "\n配对 URI 文件：" + key.getAbsolutePath() + ".uri");
+                    status.setText("等待发送方（局域网 / 打洞 / 中继自动）…");
+                    startKeepAlive("正在接收");
+                });
+                Log.i(TAG, "auto uri " + uri);
+                ui.post(this::acquireMulticastLock);
+            } catch (Exception e) {
+                Log.e(TAG, "startAutoReceiver", e);
+                ui.post(() -> {
+                    relayBtn.setEnabled(true);
+                    toast("接收启动失败：" + e.getMessage());
                 });
             }
         }).start();
@@ -844,9 +879,9 @@ public class MainActivity extends Activity {
     }
 
     private void sendPunch(List<Uri> uris, String name, String peerId) {
-        status.setText("打洞发送 " + uris.size() + " 个文件…");
+        status.setText("发送 " + uris.size() + " 个文件（局域网/打洞/中继自动竞速）…");
         punchSendBtn.setEnabled(false);
-        startKeepAlive("打洞发送中");
+        startKeepAlive("正在发送");
         new Thread(() -> {
             try {
                 File dir = new File(getExternalFilesDir(null), "received");
@@ -854,21 +889,21 @@ public class MainActivity extends Activity {
                 for (Uri u : uris) {
                     paths.put(copyToCache(u));
                 }
-                String summary = Mobile.sendViaPunch("wss://ft.cwlindean.cn/signal",
+                String summary = Mobile.sendAuto("wss://ft.cwlindean.cn/signal",
                         new File(dir, "device.key").getAbsolutePath(),
                         new File(dir, "paired.json").getAbsolutePath(),
                         peerId, name, paths.toString(), lanHint(), "");
                 ui.post(() -> {
                     punchSendBtn.setEnabled(true);
                     stopKeepAlive();
-                    status.setText("打洞发送结果：" + summary);
+                    status.setText("发送结果：" + summary);
                 });
             } catch (Exception e) {
                 Log.e(TAG, "sendPunch", e);
                 ui.post(() -> {
                     punchSendBtn.setEnabled(true);
                     stopKeepAlive();
-                    status.setText("打洞发送失败：" + e.getMessage());
+                    status.setText("发送失败：" + e.getMessage());
                 });
             }
         }).start();
