@@ -1,0 +1,24 @@
+# M6 App 端 6 位码配对点验（无数据线，经公网信令）
+
+日期：2026-11-08 20:09 CST
+设备：PC Windows 11（ft 0.5.0-m6）↔ 手机 Redmi M332BF（Android 17）
+信令：wss://ft.cwlindean.cn/signal（经 ESA）
+APK：android/build/ft-debug.apk 20,193,754 B sha256 dde0e1d812672c4be2a1f9f0cf1b6b54c22b4894b0df6c99315fe00262c59f69
+安装方式：手机浏览器经 https://ft.cwlindean.cn/app 下载（无 USB 线）
+配对码：246810（一次性，用后作废）
+
+## 手机侧操作
+1. App 内“6 位一次性配对码”填 246810；
+2. 点“等待配对”（对方设备 ID 留空）。
+
+## 电脑侧命令与输出
+$ ft pair --code 246810 --with c6d743a5... --signal wss://ft.cwlindean.cn/signal --key .tools/keys/t13-pc.key --paired .tools/keys/paired-pc.json --timeout 40s
+{"action":"pake","device_id":"91695a021bdb36720c30ccd36327f2adb9d2e6997d48fbd49cc166e8e72c8bf7","ok":true,"paired":1,"peer":{"device_id":"c6d743a5bc8393848d0ee1a6eb1dd9c4400bdfe3dba98017ad4c0afecaed9313","pubkey":"32947ae2a06568de536b70161afc017ff9cc703eaa5b6e7ea65319144fa42315"}}
+exit=0
+
+## 手机侧显示（用户回报）
+配对成功：{"ok":true,"paired":1,"peer":"91695a021bdb36720c30ccd36327f2adb9d2e6997d48fbd49cc166e8e72c8bf7","pubkey":"e2a2603a216743c4b7b66b693f7dc332d96af11b79a24e1e88ea59c2ee8dedfc"}
+
+## 结论
+两侧互相写入对端条目，peer 公钥与既有配对表一致；PAKE 经公网（ESA）完成，配对码未出现在信令明文里。
+M6_APP_PAKE=PASS

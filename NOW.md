@@ -74,7 +74,7 @@
 - [x] 按 IP 登录限频：每源地址 10 次/分钟，超出 429 并断开（`Server.allowLogin`、`TestLoginBudgetPerIP`）
 - [x] PAKE 流程抽到 `core/pairing.Run`，CLI 与移动端共用；App 端 `PairWithCode/WaitPairCode` 与“等待配对 / 用 6 位码配对”按钮已编入 APK（20,193,754B）
 - [x] G6 报告成文：`evidence/stage2/20261108-1600-g6-report.md`（八项判据全 PASS）
-- [ ] 手机联网后复验：App 的配对确认弹窗、6 位码配对 UI 点验（代码已进 APK）
+- [x] App 端 6 位码配对已真机点验（2026-11-08 20:12，无数据线经公网；证据 `evidence/stage2/20261108-2012-pake-app.log`）
 
 ## 下一步（按优先级，由 work agent 执行）
 
