@@ -67,6 +67,9 @@ public class MainActivity extends Activity {
     private Button punchSendBtn;
     private TextView punchInfo;
     private boolean pickPunch;
+    // sharedUris holds files handed over by another app through ACTION_SEND,
+    // so "分享到 ft" lands in the same send buttons as an in-app pick.
+    private List<Uri> sharedUris;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private WifiManager.MulticastLock multicastLock;
@@ -84,6 +87,49 @@ public class MainActivity extends Activity {
         status.setText("未启动。先在电脑上运行 ft recv --lan，再点“开始接收”。");
         importBootstrapPairs();
         applyDebugPeerId();
+        prefillLastPeer();
+        handleShareIntent(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleShareIntent(intent);
+    }
+
+    // handleShareIntent accepts files from other apps' share sheets.
+    private void handleShareIntent(Intent intent) {
+        if (intent == null) {
+            return;
+        }
+        String action = intent.getAction();
+        if (!Intent.ACTION_SEND.equals(action) && !Intent.ACTION_SEND_MULTIPLE.equals(action)) {
+            return;
+        }
+        List<Uri> uris = new ArrayList<>();
+        if (intent.getClipData() != null) {
+            for (int i = 0; i < intent.getClipData().getItemCount(); i++) {
+                uris.add(intent.getClipData().getItemAt(i).getUri());
+            }
+        } else if (intent.getParcelableExtra(Intent.EXTRA_STREAM) instanceof Uri) {
+            uris.add(intent.getParcelableExtra(Intent.EXTRA_STREAM));
+        }
+        if (uris.isEmpty()) {
+            return;
+        }
+        sharedUris = uris;
+        status.setText("已从其他应用收到 " + uris.size() + " 个文件；填好对方设备 ID 后点“打洞发送”或“发送”。");
+        if (peerField.getText().toString().trim().isEmpty()) {
+            toast("还没有对方设备 ID：先在电脑上配对并复制设备 ID");
+        }
+    }
+
+    private void prefillLastPeer() {
+        String last = getPreferences(MODE_PRIVATE).getString("lastPeer", "");
+        if (!last.isEmpty() && peerField.getText().toString().trim().isEmpty()) {
+            peerField.setText(last);
+        }
     }
 
     // applyDebugPeerId lets adb pre-fill the peer field for tests (typing a
@@ -202,7 +248,12 @@ public class MainActivity extends Activity {
         webInfo = new TextView(this);
         webInfo.setTextSize(12);
         webInfo.setText("网页分享：未启动（同一 Wi-Fi 用浏览器打开）");
+        webBtn.setOnClickListener(v -> startWebShare());
+        Button battBtn = new Button(this);
+        battBtn.setText("后台保活");
+        battBtn.setOnClickListener(v -> requestBatteryExemption());
         webRow.addView(webBtn);
+        webRow.addView(battBtn);
         root.addView(webRow);
         root.addView(webInfo);
 
@@ -659,9 +710,44 @@ public class MainActivity extends Activity {
         }
     }
 
+    // requestBatteryExemption asks the system to stop killing the receiver in
+    // the background (Doze / OEM battery managers). Without it the app dies
+    // silently minutes after the screen locks.
+    private void requestBatteryExemption() {
+        try {
+            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null && pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                toast("系统已允许后台运行");
+                return;
+            }
+            Intent i = new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+            i.setData(Uri.parse("package:" + getPackageName()));
+            startActivity(i);
+        } catch (Exception e) {
+            try {
+                startActivity(new Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+            } catch (Exception e2) {
+                toast("请到系统设置允许 ft 后台运行");
+            }
+        }
+    }
+
     private void pickFiles(boolean punch) {
         if (peerField.getText().toString().trim().isEmpty()) {
             toast(punch ? "先填写对方设备 ID（64 位 hex）" : "先搜索或填写对方地址");
+            return;
+        }
+        getPreferences(MODE_PRIVATE).edit().putString("lastPeer", peerField.getText().toString().trim()).apply();
+        if (sharedUris != null && !sharedUris.isEmpty()) {
+            List<Uri> uris = sharedUris;
+            sharedUris = null;
+            final String peer = peerField.getText().toString().trim();
+            final String name = currentName();
+            if (punch) {
+                sendPunch(uris, name, peer);
+            } else {
+                sendRelay(uris, name, peer);
+            }
             return;
         }
         pickPunch = punch;
@@ -697,6 +783,11 @@ public class MainActivity extends Activity {
             sendPunch(uris, name, peer);
             return;
         }
+        sendRelay(uris, name, peer);
+    }
+
+    // sendRelay uploads the chosen files to the peer over the server relay.
+    private void sendRelay(List<Uri> uris, String name, String peer) {
         status.setText("准备发送 " + uris.size() + " 个文件…");
         sendBtn.setEnabled(false);
         startKeepAlive("正在发送 " + uris.size() + " 个文件");

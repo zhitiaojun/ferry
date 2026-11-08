@@ -84,6 +84,8 @@
 - [x] 桌面端新增 `-paired`/`-signal` 参数；设备密钥默认 `%LOCALAPPDATA%\ft\device.key`（`~/.ft` 与 `%LOCALAPPDATA%` 在沙箱内不可写时用 `-key`）
 - [x] 本机中继回归：`ft-desktop -send test-2.1m.bin` → `{"ok":true,"to":"recv-bj","bytes":2100000,"chunks":33}`，接收端 sha256 `58bbe9ba…` 一致；证据 `evidence/stage3/20261108-2035-desktop-send.log`
 - [x] 右键「发送到」：`-install-sendto` 与托盘菜单项生成 `%APPDATA%\Microsoft\Windows\SendTo\ft 发送到.lnk`；Explorer 调用时文件路径作为位置参数，走与 `-send` 相同的中继发送；多设备时投放窗弹菜单选择接收方（`pickPeer`）。证据 `evidence/stage3/20261108-2050-sendto.log`（SendTo 目录在沙箱内不可写，.lnk 生成与路径发送已分别验证）
+- [x] 安卓分享菜单：Manifest 加 `ACTION_SEND`/`ACTION_SEND_MULTIPLE` 过滤器，`MainActivity.handleShareIntent` 接管其他应用的分享；回填上次设备 ID（SharedPreferences `lastPeer`），点「打洞发送 / 发送」即发；APK 20,197,850B（aapt2 确认两条 intent-filter 在内，未上真机点验）
+- [x] 安卓后台保活入口：「后台保活」按钮请求忽略电池优化（`ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`），减少锁屏后被系统杀进程
 - [x] 开机自启：托盘菜单「开机自启」勾选项 + `-startup on/off/status` 诊断；HKCU `Run\filetransfer`（`cmd/ft-desktop/autostart.go`，经 reg.exe）。读取与勾选已验证；本沙箱内派生进程写入注册表被拒（宿主 shell 直接写成功），写入路径待用户机复核
 
 ## 下一步（按优先级，由 work agent 执行）
