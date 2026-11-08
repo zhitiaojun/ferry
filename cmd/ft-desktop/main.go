@@ -20,17 +20,18 @@ import (
 )
 
 var (
-	flagDrop = flag.Bool("drop", false, "show the drop window instead of the tray receiver")
-	flagDir  = flag.String("dir", "", "receive directory (default: %USERPROFILE%\\Downloads\\ft)")
-	flagPort = flag.Int("port", 18800, "receive port on all interfaces")
-	flagPos  = flag.String("pos", "", "drop window position X,Y (drop mode only)")
-	flagSize = flag.String("size", "260x90", "drop window size WxH (drop mode only)")
-	flagLog  = flag.String("log", "", "append JSONL events to this file")
-	flagKey  = flag.String("key", "", "device key file (default: %LOCALAPPDATA%\\ft\\device.key)")
-	flagPair = flag.String("paired", "", "trusted device table (default: %LOCALAPPDATA%\\ft\\paired.json)")
-	flagSig  = flag.String("signal", "wss://ft.cwlindean.cn/signal", "signaling URL used to send via the relay")
-	flagSend = flag.String("send", "", "diagnostic: send these comma-separated files to the paired device, then exit")
-	flagAuto = flag.String("startup", "", "diagnostic: on/off/status for the HKCU Run entry, then exit")
+	flagDrop   = flag.Bool("drop", false, "show the drop window instead of the tray receiver")
+	flagDir    = flag.String("dir", "", "receive directory (default: %USERPROFILE%\\Downloads\\ft)")
+	flagPort   = flag.Int("port", 18800, "receive port on all interfaces")
+	flagPos    = flag.String("pos", "", "drop window position X,Y (drop mode only)")
+	flagSize   = flag.String("size", "260x90", "drop window size WxH (drop mode only)")
+	flagLog    = flag.String("log", "", "append JSONL events to this file")
+	flagKey    = flag.String("key", "", "device key file (default: %LOCALAPPDATA%\\ft\\device.key)")
+	flagPair   = flag.String("paired", "", "trusted device table (default: %LOCALAPPDATA%\\ft\\paired.json)")
+	flagSig    = flag.String("signal", "wss://ft.cwlindean.cn/signal", "signaling URL used to send via the relay")
+	flagSend   = flag.String("send", "", "diagnostic: send these comma-separated files to the paired device, then exit")
+	flagAuto   = flag.String("startup", "", "diagnostic: on/off/status for the HKCU Run entry, then exit")
+	flagSendTo = flag.Bool("install-sendto", false, "install the Explorer \"Send to\" shortcut, then exit")
 )
 
 func main() {
@@ -60,6 +61,15 @@ func main() {
 			fatal("open log: %v", err)
 		}
 		app.logOut = f
+	}
+
+	if *flagSendTo {
+		if err := installSendTo(); err != nil {
+			fmt.Fprintln(os.Stderr, "install-sendto:", err)
+			os.Exit(1)
+		}
+		fmt.Println("sendto shortcut installed")
+		return
 	}
 
 	if *flagAuto != "" {
@@ -92,8 +102,31 @@ func main() {
 	}
 	app.keyPath = keyPath
 
+	files := flag.Args()
 	if *flagSend != "" {
-		files := strings.Split(*flagSend, ",")
+		files = strings.Split(*flagSend, ",")
+	}
+	if len(files) > 0 && app.logOut == nil {
+		// Explorer's "Send to" starts us without a console: keep a log so the
+		// outcome is still inspectable.
+		if d, err := localAppData(); err == nil {
+			_ = os.MkdirAll(filepath.Join(d, "ft"), 0o755)
+			if f, err := os.OpenFile(filepath.Join(d, "ft", "events.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
+				app.logOut = f
+			}
+		}
+	}
+	if len(files) > 0 && *flagSend == "" {
+		res, peer, err := sendViaRelay(app, files)
+		if err != nil {
+			app.event("desktop.send_error", map[string]any{"error": err.Error()})
+			fmt.Fprintln(os.Stderr, "send:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("{\"ok\":true,\"to\":%q,\"bytes\":%d,\"chunks\":%d}\n", peer.Name, res.Bytes, res.Chunks)
+		return
+	}
+	if *flagSend != "" {
 		res, peer, err := sendViaRelay(app, files)
 		if err != nil {
 			app.event("desktop.send_error", map[string]any{"error": err.Error()})

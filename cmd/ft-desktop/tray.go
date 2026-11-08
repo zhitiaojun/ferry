@@ -23,6 +23,7 @@ const (
 	menuDrop    = 3
 	menuStartup = 4
 	menuQuit    = 5
+	menuSendTo  = 6
 )
 
 type tray struct {
@@ -176,6 +177,7 @@ func (t *tray) menu() {
 		startupFlags |= mfChecked
 	}
 	appendMenu(menu, startupFlags, menuStartup, "开机自启")
+	appendMenu(menu, mfString, menuSendTo, "安装右键「发送到」")
 	appendMenu(menu, mfSeparator, 0, "")
 	appendMenu(menu, mfString, menuQuit, "退出")
 
@@ -220,6 +222,12 @@ func (t *tray) command(id uint16) {
 			t.balloon("开机自启", "已设置：登录后自动在通知区运行")
 		} else {
 			t.balloon("开机自启", "已取消开机自启")
+		}
+	case menuSendTo:
+		if err := installSendTo(); err != nil {
+			t.balloon("发送到", fmt.Sprintf("安装失败：%v", err))
+		} else {
+			t.balloon("发送到", "已在右键菜单加入「ft 发送到」")
 		}
 	case menuQuit:
 		procPostQuitMessage.Call(0)
