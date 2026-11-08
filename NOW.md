@@ -4,7 +4,7 @@
 
 ## 当前目标
 
-以“我的手机 ↔ 我的电脑”之间的最佳传输体验为主、兼顾陌生设备（D12），按 `PLAN.md` 的 M0–M9 推进至 v1.0。当前处于 **M5 已收口（lanweb 与服务器 web 端已部署，G5 证据齐备，待确认）**，由 work agent 执行（D25，规约见 `WORK_AGENT.md`）：M0（G0 关闸）、M1（G1）、M2（G2）、M3（G3）之后，M4 的 STUN 服务端、候选收集、UDP 打洞（QUIC，TLS 1.3 钉定）、路径竞速与降级均已落地，真实 NAT 实测按环境如实记录（T5 成功、T6 因校园网 UDP 过滤回退中继）。
+以“我的手机 ↔ 我的电脑”之间的最佳传输体验为主、兼顾陌生设备（D12），按 `PLAN.md` 的 M0–M9 推进至 v1.0。当前处于 **M6 已完成（安全收尾，G6 通过，2026-11-08）**，由 work agent 执行（D25，规约见 `WORK_AGENT.md`）：M0（G0 关闸）、M1（G1）、M2（G2）、M3（G3）之后，M4 的 STUN 服务端、候选收集、UDP 打洞（QUIC，TLS 1.3 钉定）、路径竞速与降级均已落地，真实 NAT 实测按环境如实记录（T5 成功、T6 因校园网 UDP 过滤回退中继）。
 
 ## 进展（截至 2026-11-07）
 
@@ -69,10 +69,14 @@
 - [x] 自查清单 `docs/security-checklist.md`：文件名清洗、帧/清单上限、日志脱敏、私钥 DPAPI 封装，均有单测或脚本证据
 - [x] 中继房间带宽上限 16 MiB/s（挂起式，`room.throttle` + `TestRoomThrottleParksOverBudget`）
 - [x] 部署 BJ：新二进制 sha256 `32fc1b2c…65c0e8`，`ft-server` active、healthz 200、公网 `/` 200；备份 `ft-server.bak-20261108-m6`，运维 `修改log.md` 已记
-- [ ] G6 报告成文（判据已全部有证据，见 `evidence/stage2/20261108-1549-g6.log`）
-- [ ] 手机联网后复验：APK 配对确认弹窗、6 位码在 App 端的入口（当前仅 CLI）
+- [x] 按 IP 登录限频：每源地址 10 次/分钟，超出 429 并断开（`Server.allowLogin`、`TestLoginBudgetPerIP`）
+- [x] PAKE 流程抽到 `core/pairing.Run`，CLI 与移动端共用；App 端 `PairWithCode/WaitPairCode` 与“等待配对 / 用 6 位码配对”按钮已编入 APK（20,193,754B）
+- [x] G6 报告成文：`evidence/stage2/20261108-1600-g6-report.md`（八项判据全 PASS）
+- [ ] 手机联网后复验：App 的配对确认弹窗、6 位码配对 UI 点验（代码已进 APK）
 
 ## 下一步（按优先级，由 work agent 执行）
+
+M6 已完成，G6 报告见 `evidence/stage2/20261108-1600-g6-report.md`；下一步 M7 产品化（托盘/投放小窗/右键菜单/安卓后台与分享/续传/UI，见 `PLAN.md` M7 卡）。
 
 M5 结论（G5）：
 
