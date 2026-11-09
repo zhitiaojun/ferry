@@ -213,4 +213,4 @@ M5 剩余：无（G5 已出，2026-11-08 收尾记录见文末）。
 - [x] Windows 安装包 `dist/windows/ft-setup.exe`（内嵌两个二进制，装到 `%LOCALAPPDATA%\ft`，写 Run 与 SendTo，`-uninstall` 清理），沙箱内安装/卸载冒烟通过。
 - [x] 版本号 0.8.0（`ft -version`、`core/mobile.Version`）、`CHANGELOG.md`、README「安装与使用」、`history/` 索引。
 - [x] 回滚演练（2026-11-09 20:20，旧版 `/metrics` 404、恢复后 200；证据 `evidence/stage3/20261109-2020-m8-rollback.log`）
-- [ ] 压测（按 PLAN 要避开 `wb-status` 的 5 分钟边界；尚未做）
+- [x] 压测：8 轮中继（2.1MB×5、10MB×3）全部通过，服务端 heap <1.4MB，证据 `evidence/stage3/20261109-2015-m8-soak.log`
