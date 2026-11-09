@@ -165,6 +165,13 @@ FT_WEB_PASSWORD=test123 ./.tools/bin/ft-server.exe -listen 127.0.0.1:18791 -log 
 - 上传任意文件，设备目录出现同名文件，`sha256sum` 与页面显示一致。
 - 参考证据：`evidence/stage2/20261108-0117-web-relay.log`（`M5_WEB_RELAY=PASS`）。
 
+## I. M8：服务器监控与日志轮转（2026-11-09 已执行，`evidence/stage3/20261109-2010-m8-monitor.log`）
+
+1. 指标：`ssh BJ 'curl -fsS http://127.0.0.1:18790/metrics'` 返回 JSON（version、uptime_s、peers、relay_rooms、relay_bytes、goroutines、heap_mb、sys_mb）；也可用 `tools/bj-metrics.sh` 一次取 systemd 状态 + healthz + metrics。
+2. 判读：`peers` 长期为 0 说明客户端没连上；`relay_bytes` 只在中继承载时增长（直接路径不增长，可作 R7 反证）；`heap_mb` 长期爬升需查中继房间是否泄漏。
+3. 日志轮转：`/etc/logrotate.d/ft-server`，daily / 14 天 / compress / copytruncate；手工验证 `logrotate -d /etc/logrotate.d/ft-server`。
+4. 回滚二进制：`cp -a /opt/ft-server/ft-server.bak-20261109-metrics /opt/ft-server/ft-server && systemctl restart ft-server`。
+
 ## F. 证据归档
 
 每次验证后，把原始输出写入 `evidence/stageN/YYYYMMDD-HHMM.log`，并在 `NOW.md` 的「证据入口」表登记路径。

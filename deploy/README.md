@@ -59,3 +59,9 @@ rm -rf /opt/ft-server /var/log/ft-server
 ```
 
 回滚只删本项目新增文件，不触碰任何既有站点配置。
+
+## 监控与日志（M8）
+
+- `/metrics`（loopback，经 openresty 不对外）：`version/uptime_s/peers/relay_rooms/relay_bytes/goroutines/heap_mb/sys_mb`。
+- `deploy/logrotate/ft-server` 安装到 `/etc/logrotate.d/ft-server`：daily、14 天、compress、copytruncate。
+- 二进制回滚前先备份：`cp -a /opt/ft-server/ft-server /opt/ft-server/ft-server.bak-$(date +%Y%m%d-%H%M)`。

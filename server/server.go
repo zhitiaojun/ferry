@@ -3,6 +3,7 @@
 // holds no pairing data.
 package server
 
+
 import (
 	"context"
 	"crypto/rand"
@@ -13,7 +14,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -22,6 +25,9 @@ import (
 	"github.com/cwlindean/filetransfer/core/logging"
 	"github.com/cwlindean/filetransfer/core/signaling"
 )
+
+// buildVersion is stamped by the release build (-ldflags -X).
+var buildVersion = "0.8.0-dev"
 
 // Limits are the resource bounds for one server process.
 type Limits struct {
@@ -63,6 +69,8 @@ type Server struct {
 	log    *logging.Logger
 	web    *Web
 	start  time.Time
+
+	relayBytes atomic.Int64 // bytes spliced through relay rooms since start
 
 	mu     sync.Mutex
 	peers  map[string]*peer // device id hex → connection
@@ -117,6 +125,7 @@ type room struct {
 	log     *logging.Logger
 	bytesMu sync.Mutex
 	bytes   [2]int64
+	onBytes func(int) // optional hook: total relay bytes for /metrics
 
 	// Per-room bandwidth budget (bytes/second). Exceeding it parks the pump
 	// until the next second instead of buffering.
@@ -132,6 +141,9 @@ func (r *room) addBytes(side int, n int) {
 	r.bytesMu.Lock()
 	r.bytes[side] += int64(n)
 	r.bytesMu.Unlock()
+	if r.onBytes != nil {
+		r.onBytes(n)
+	}
 }
 
 func (r *room) byteCounts() (int64, int64) {
@@ -159,6 +171,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/signal", s.handleSignal)
 	mux.HandleFunc("/relay", s.handleRelay)
 	mux.HandleFunc("/healthz", s.handleHealth)
+	mux.HandleFunc("/metrics", s.handleMetrics)
 	if s.web != nil {
 		s.web.registerRoutes(mux)
 	}
@@ -171,6 +184,31 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	fmt.Fprintf(w, "ok uptime=%s peers=%d relay_rooms=%d\n",
 		time.Since(s.start).Round(time.Second), peers, rooms)
+}
+
+// handleMetrics exposes a small JSON snapshot for monitoring: liveness,
+// online peers, relay rooms and relay bytes. It is intentionally unauthenticated
+// but bound behind the site's private path (openresty only proxies /healthz and
+// /metrics to loopback).
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	peers, rooms := len(s.peers), len(s.rooms)
+	s.mu.Unlock()
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"ok":           true,
+		"version":      buildVersion,
+		"uptime_s":     int64(time.Since(s.start).Seconds()),
+		"peers":        peers,
+		"relay_rooms":  rooms,
+		"relay_bytes":  s.relayBytes.Load(),
+		"goroutines":   runtime.NumGoroutine(),
+		"heap_mb":      float64(ms.HeapAlloc) / (1 << 20),
+		"sys_mb":       float64(ms.Sys) / (1 << 20),
+		"num_gc":       ms.NumGC,
+	})
 }
 
 // accept upgrades an HTTP request to a WebSocket with the project's limits.
@@ -523,6 +561,7 @@ func (s *Server) openRelay(ctx context.Context, from *peer, e *signaling.Envelop
 		token: token, transfer: req.TransferID, created: time.Now(),
 		readyCh: make(chan struct{}), done: make(chan struct{}),
 		log: s.log, rate: s.limits.RelayRate,
+		onBytes: func(n int) { s.relayBytes.Add(int64(n)) },
 	}
 	s.rooms[token] = rm
 	s.mu.Unlock()

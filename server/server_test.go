@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"encoding/hex"
 	"net/http/httptest"
 	"strings"
@@ -203,6 +205,27 @@ func TestRelaySplice(t *testing.T) {
 	}
 	if string(buf[:n]) != "pong over relay" {
 		t.Fatalf("relay payload back = %q", buf[:n])
+	}
+
+	// /metrics must report the bytes that went through the splice, plus the
+	// build version and the liveness fields the monitoring relies on.
+	resp, err := http.Get(ts.URL + "/metrics")
+	if err != nil {
+		t.Fatalf("metrics: %v", err)
+	}
+	defer resp.Body.Close()
+	var m map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
+		t.Fatalf("metrics json: %v", err)
+	}
+	if ok, _ := m["ok"].(bool); !ok {
+		t.Fatalf("metrics ok = %v", m["ok"])
+	}
+	if b, _ := m["relay_bytes"].(float64); b <= 0 {
+		t.Fatalf("relay_bytes = %v, want > 0", m["relay_bytes"])
+	}
+	if m["version"] == "" {
+		t.Fatal("metrics version is empty")
 	}
 }
 
