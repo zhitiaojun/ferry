@@ -212,5 +212,5 @@ M5 剩余：无（G5 已出，2026-11-08 收尾记录见文末）。
 - [x] 签名 APK：发布密钥在 `.tools/release/`（不入库），`dist/android/ft-0.8.0.apk`（证书 SHA-256 `a6c3d541…`）。
 - [x] Windows 安装包 `dist/windows/ft-setup.exe`（内嵌两个二进制，装到 `%LOCALAPPDATA%\ft`，写 Run 与 SendTo，`-uninstall` 清理），沙箱内安装/卸载冒烟通过。
 - [x] 版本号 0.8.0（`ft -version`、`core/mobile.Version`）、`CHANGELOG.md`、README「安装与使用」、`history/` 索引。
-- [ ] 回滚演练（步骤已写入 deploy/README 与 RUNBOOK §I，尚未实际执行一次）
+- [x] 回滚演练（2026-11-09 20:20，旧版 `/metrics` 404、恢复后 200；证据 `evidence/stage3/20261109-2020-m8-rollback.log`）
 - [ ] 压测（按 PLAN 要避开 `wb-status` 的 5 分钟边界；尚未做）

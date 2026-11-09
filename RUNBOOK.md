@@ -170,7 +170,7 @@ FT_WEB_PASSWORD=test123 ./.tools/bin/ft-server.exe -listen 127.0.0.1:18791 -log 
 1. 指标：`ssh BJ 'curl -fsS http://127.0.0.1:18790/metrics'` 返回 JSON（version、uptime_s、peers、relay_rooms、relay_bytes、goroutines、heap_mb、sys_mb）；也可用 `tools/bj-metrics.sh` 一次取 systemd 状态 + healthz + metrics。
 2. 判读：`peers` 长期为 0 说明客户端没连上；`relay_bytes` 只在中继承载时增长（直接路径不增长，可作 R7 反证）；`heap_mb` 长期爬升需查中继房间是否泄漏。
 3. 日志轮转：`/etc/logrotate.d/ft-server`，daily / 14 天 / compress / copytruncate；手工验证 `logrotate -d /etc/logrotate.d/ft-server`。
-4. 回滚二进制：`cp -a /opt/ft-server/ft-server.bak-20261109-metrics /opt/ft-server/ft-server && systemctl restart ft-server`。
+4. 回滚二进制：**先 `systemctl stop ft-server`**（运行中直接 cp 会报 `Text file busy`）→ `cp -a /opt/ft-server/ft-server.bak-20261109-metrics /opt/ft-server/ft-server` → `systemctl start ft-server`；演练记录见 `evidence/stage3/20261109-2020-m8-rollback.log`（旧版 `/metrics` 404，恢复后 200）。
 
 ## F. 证据归档
 
