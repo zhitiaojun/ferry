@@ -1,0 +1,4 @@
+LIBRARY ftmenu.dll
+EXPORTS
+DllGetClassObject
+DllCanUnloadNow

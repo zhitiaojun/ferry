@@ -172,6 +172,18 @@ FT_WEB_PASSWORD=test123 ./.tools/bin/ft-server.exe -listen 127.0.0.1:18791 -log 
 3. 日志轮转：`/etc/logrotate.d/ft-server`，daily / 14 天 / compress / copytruncate；手工验证 `logrotate -d /etc/logrotate.d/ft-server`。
 4. 回滚二进制：**先 `systemctl stop ft-server`**（运行中直接 cp 会报 `Text file busy`）→ `cp -a /opt/ft-server/ft-server.bak-20261109-metrics /opt/ft-server/ft-server` → `systemctl start ft-server`；演练记录见 `evidence/stage3/20261109-2020-m8-rollback.log`（旧版 `/metrics` 404，恢复后 200）。
 
+## J. Windows 11 一级右键菜单（`evidence/stage3/20261109-2305-shellmenu.log`）
+
+1. 构建：`tools/build-shellmenu.sh`（llvm-mingw 编 `ftmenu.dll`/`ftmenu_test.exe`，Go 编 `ftstub.exe`，并把 payload 打进 `dist/windows/ft-setup.exe`）。
+2. 前提：设置 → 系统 → 开发者选项 → 打开“开发人员模式”（宽松注册 `Add-AppxPackage -Register` 需要；否则报 `0x80073CF9/0x80073CFD`）。
+3. 安装：运行 `dist/windows/ft-setup.exe`，会把 `menu\` 复制到安装目录并注册稀疏包；卸载时自动 `Remove-AppxPackage FileTransfer.ShellMenu`。
+4. 自检：
+   - COM 层：`.tools/dist/ftmenu_test.exe .tools/msix-stage/ftmenu.dll <某个文件> --invoke`，应打印各方法 hr=0 并拉起 `ft-desktop`。
+   - 包装层：`Get-AppxPackage FileTransfer.ShellMenu` 应返回版本与 `InstallLocation`。
+   - 真机层：资源管理器里右键任意文件，一级菜单应出现「用 ft 发送」；点击后 `ft-desktop` 发送到已配对设备。
+5. 排障：右键无响应/explorer 卡死时看 `%TEMP%\ftmenu.log` 的最后一行（每个 COM 入口都会写 `GetTickCount + 方法名`），最后一行即阻塞点；`GetIcon` 必须返回 `E_NOTIMPL`（`S_OK + NULL` 会让 shell 无限等图标）。
+6. 回滚：`Get-AppxPackage FileTransfer.ShellMenu | Remove-AppxPackage`，然后重启资源管理器。
+
 ## F. 证据归档
 
 每次验证后，把原始输出写入 `evidence/stageN/YYYYMMDD-HHMM.log`，并在 `NOW.md` 的「证据入口」表登记路径。

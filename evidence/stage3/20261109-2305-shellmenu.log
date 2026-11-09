@@ -1,0 +1,45 @@
+# M7 追加：Windows 11 一级右键菜单（IExplorerCommand + 稀疏 MSIX）
+# 2026-11-09 23:05 +08:00
+
+## 1. 构建（tools/build-shellmenu.sh）
+$ clang --target=x86_64-w64-mingw32 -shared -O2 -o .tools/dist/ftmenu.dll ...
+ftmenu.dll     476672 B  sha256 详见 sha256sum 输出
+ftmenu_test.exe           (COM 单元测试，不依赖 explorer)
+ftstub.exe                (稀疏包 Executable，空 main，windowsgui)
+
+$ sha256sum .tools/dist/ftmenu.dll .tools/dist/ftstub.exe dist/windows/ft-setup.exe
+  bbd5c2e3f1fe676ae221a8308533fb16a0a74264fb12436a12601716678dbeae  .tools/dist/ftmenu.dll
+  378fce940efed3e7f79eea65b15ec3851f3b662fb4f713bc88318aae04b3436f  .tools/dist/ftstub.exe
+  f462ff18f1a23262e55fd916ea49c049371e28f149a40f5b30e146624d108919  dist/windows/ft-setup.exe
+
+## 2. 卡死根因（%TEMP%\ftmenu.log 的 COM 调用轨迹）
+# 修复前，右键后 explorer 无响应，轨迹停在 GetIcon：
+#   12721796 FT_QueryInterface ... FT_GetState / FT_GetTitle / FT_GetIcon  ← 无后续
+# IExplorerCommand::GetIcon 返回 S_OK 且 *icon = NULL 会让 shell 等待一张永不出现的图标。
+# 修复：返回 E_NOTIMPL（使用 verb 默认图标）。修复后轨迹继续到 GetFlags：
+#   12773406 FT_GetState
+#   12773406 FT_GetTitle
+#   12773406 FT_GetIcon
+#   12773406 FT_GetIcon
+#   12773406 FT_QueryInterface
+#   12773406 FT_GetFlags
+
+## 3. 菜单出现（截图 .tools/shots/menu-test.png）
+# Win11 一级菜单出现「用 ft 发送」，与「火绒安全软件」「通过 QQ 发送到」并列；
+# explorer 响应正常（SendMessageTimeout 2 s 返回）。
+
+## 4. 端到端：Invoke → ft-desktop → 中继 → 接收端
+# 预置默认配对（%LOCALAPPDATA%\ft\{device.key,paired.json}），接收端：
+#   ft recv --signal wss://ft.cwlindean.cn/signal --key .tools/keys/recv.key --out .tools/recv-menu
+# 触发同一 COM 对象的 Invoke（ftmenu_test.exe --invoke，与菜单点击走同一代码路径）：
+  Invoke hr=0x00000000
+  接收端 events.jsonl：
+    {"bytes":3,"chunk_size":65536,"event":"transfer.accept","files":1,"peer":"windows-desktop","resume_file":0,"resume_from":0,"ts":"2026-11-09T14:55:02.1840304Z"}
+    {"bytes":3,"chunks":1,"duration_ms":212,"event":"transfer.done","files":1,"transfer_id":"e3c4e1df3c062b8fdbf66dc693590434","ts":"2026-11-09T14:55:02.3287057Z"}
+  落地文件：3 B sha256 98ea6e4f216f2fb4b69fff9b3a44842c38686ca685f3f55dc48c5d3fb1107be4
+
+## 5. 安装包集成
+# ft-setup.exe 安装时把 menu\ 复制到 <install>\menu 并执行
+#   Add-AppxPackage -Register <install>\menu\AppxManifest.xml -ExternalLocation <install>\menu
+# 卸载时 Remove-AppxPackage FileTransfer.ShellMenu。
+# 注意：需要“开发者模式”（设置 → 系统 → 开发者选项），否则松散注册被拒。

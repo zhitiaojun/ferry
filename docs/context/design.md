@@ -184,3 +184,14 @@ magic(4) | version(1) | type(1) | flags(2) | session_id(16) | seq(8) | len(4) | 
 - 内容：标题「ft · 文件传递」；副标题「本机名 · 设备 ID · 端口 · 接收中/已暂停」；左栏列出已配对设备（名称 + 完整设备 ID，选中行用系统高亮色）；右栏投放区（拖放或「选择文件…」）与「最近传输」台账（时间、方向、对端、文件数、字节数，时间倒序）；底栏三个按钮。
 - 交互：`DragAcceptFiles` + `WM_DROPFILES` 拖放即发送给选中设备；`GetOpenFileNameW`（`OFN_ALLOWMULTISELECT|OFN_EXPLORER`）多选；「暂停接收」用 `recvEnabled atomic.Bool`，托盘 accept 循环据此拒新会话但保留监听端口（避免端口被抢）；传输完成由 `app.note()` 记台账并经 `PostMessage` 重绘。
 - 实现注意：`WM_PRINT/WM_PRINTCLIENT` 必须走与 `WM_PAINT` 相同的 `paintDC()`，否则 `PrintWindow` 截图与部分辅助工具会挂起；`openMainWindow` 不得在持锁时 `CreateWindowExW`（`WM_CREATE` 回调查同一把锁会死锁）；文字颜色用 `COLOR_WINDOWTEXT`（8）而不是 `sysColor(0)`。
+
+## 14. Windows 11 一级右键菜单（M7 追加）
+
+- 目标：在资源管理器**一级**右键菜单（不是「显示更多选项」）出现「用 ft 发送」，且**不**把系统切换成 Windows 10 经典菜单。
+- 事实约束：注册表 verb（`HKCU\Software\Classes\*\shell\...`）在 Win11 只能进旧菜单；新菜单只接受 **`IExplorerCommand` + MSIX 稀疏包（`desktop4/5:FileExplorerContextMenus` + 打包 COM 注册）**。
+- 实现：
+  - `cmd/ft-shellmenu/ftmenu.c`：C 实现 `IExplorerCommand`（`GetTitle`/`GetToolTip`/`GetState`/`GetFlags`/`Invoke`/`EnumSubCommands`）+ `IClassFactory`，CLSID `{B7F1D2C4-8A31-4C77-9D2E-3A5B7C1E9F10}`；`Invoke` 从 `IShellItemArray` 取 `SIGDN_FILESYSPATH`，拼引号参数后 `ShellExecuteW` 拉起 `ft-desktop.exe`（路径优先 `HKCU\Software\filetransfer\DesktopExe`，兜底 `%LOCALAPPDATA%\ft\bin\ft-desktop.exe`）。
+  - `deploy/msix/AppxManifest.xml`：`desktop4:Extension Category="windows.fileExplorerContextMenus"` + `desktop5:ItemType Type="*"` + `desktop5:Verb`；`com:SurrogateServer`（`ThreadingModel="Both"`）；`uap10:AllowExternalContent`；`rescap:runFullTrust` + `unvirtualizedResources`；Application 的 `Executable` 指向空 main 的 `ftstub.exe`（`uap10:RuntimeBehavior="win32App"`，`AppListEntry="none"`）。
+  - 注册：`Add-AppxPackage -Register <dir>\AppxManifest.xml -ExternalLocation <dir>`（松散注册，需开发者模式）。签名 MSIX 路线在本机不可行（`signtool` 对 `appxsip.dll` 签名报 `0x80070032`，`Add-AppxPackage -Path` 又要求有效签名）。
+  - 安装包：`ft-setup.exe` 把 `menu\` 复制进安装目录并注册；卸载时 `Remove-AppxPackage FileTransfer.ShellMenu`。
+- **关键坑（曾导致 explorer 卡死）**：`IExplorerCommand::GetIcon` 返回 `S_OK` 且 `*icon = NULL` 时，shell 会一直等待一张永远不会到的图标 → 右键整棵树卡住。必须返回 `E_NOTIMPL`（使用 verb 默认图标）。定位方法是给每个 COM 入口写一行 `%TEMP%\ftmenu.log`（`GetTickCount` + 方法名），卡死时最后一行就是阻塞点。
