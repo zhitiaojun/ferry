@@ -4,7 +4,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"syscall"
 	"unsafe"
 
@@ -23,6 +22,7 @@ var (
 	procScreenToClient  = user32.NewProc("ScreenToClient")
 	procRoundRect       = gdi32.NewProc("RoundRect")
 	procCreatePen       = gdi32.NewProc("CreatePen")
+	procRectangle       = gdi32.NewProc("Rectangle")
 	procCreateRoundRgn  = gdi32.NewProc("CreateRoundRectRgn")
 	procSetWindowRgn    = user32.NewProc("SetWindowRgn")
 	procSetWinEventHook = user32.NewProc("SetWinEventHook")
@@ -44,8 +44,14 @@ const (
 	hwndTopmost     = ^uintptr(0)
 
 	// Design pixels at 96 dpi; scaled by the monitor DPI at creation time.
-	panelW = 280
-	panelH = 170
+	// The panel has two shapes: a small "drop here" window that appears when a
+	// drag starts, and the three-device picker it grows into once the pointer
+	// reaches it. Both are pinned to the bottom-right corner of the work area.
+	panelW   = 300
+	panelH   = 180
+	compactW = 196
+	compactH = 60
+	anchorGap = 24
 
 	panelTimerID = 7
 
@@ -64,8 +70,10 @@ type dropPanel struct {
 	peers  []client.Peer
 	active int
 	hover  int
-	shown  bool
-	pw, ph int32
+	shown    bool
+	expanded bool
+	outside  int
+	pw, ph   int32
 	dpi    int32
 	timer  uintptr
 	fontLg syscall.Handle
@@ -109,11 +117,12 @@ func (p *dropPanel) ensure() error {
 			return fmt.Errorf("注册面板窗口类失败: %v", err)
 		}
 	}
+	cw, ch := p.size()
 	h, _, err := procCreateWindowExW.Call(
 		uintptr(wsExTopmost|wsExToolWindow|wsExNoActivate),
 		uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(utf16Ptr("ft 投放"))),
 		uintptr(wsPopup),
-		0, 0, panelW, panelH, 0, 0, uintptr(hinst), 0)
+		0, 0, uintptr(cw), uintptr(ch), 0, 0, uintptr(hinst), 0)
 	if h == 0 {
 		return fmt.Errorf("创建面板窗口失败: %v", err)
 	}
@@ -137,14 +146,15 @@ func (p *dropPanel) applyDPI() {
 		return
 	}
 	p.dpi = int32(dpi)
-	p.pw = int32(float64(panelW) * float64(p.dpi) / 96.0)
-	p.ph = int32(float64(panelH) * float64(p.dpi) / 96.0)
-	if p.fontLg != 0 {
-		procDeleteObject.Call(uintptr(p.fontLg))
-		procDeleteObject.Call(uintptr(p.fontNm))
-		procDeleteObject.Call(uintptr(p.fontSm))
-	}
+	p.pw, p.ph = p.size()
 	p.makeFonts()
+	p.applyRegion()
+}
+
+// applyRegion clips the window to a rounded rectangle matching its current
+// size. Both shapes are resized at runtime, so this must follow every resize
+// or the expanded panel gets cut off at the compact window's outline.
+func (p *dropPanel) applyRegion() {
 	rad := uintptr(float64(14) * float64(p.dpi) / 96.0)
 	r, _, _ := procCreateRoundRgn.Call(0, 0, uintptr(p.pw+1), uintptr(p.ph+1), rad, rad)
 	procSetWindowRgn.Call(uintptr(p.hwnd), r, 1)
@@ -156,9 +166,10 @@ func (p *dropPanel) makeFonts() {
 			1, 0, 0, 5, 0, uintptr(unsafe.Pointer(utf16Ptr(face))))
 		return syscall.Handle(h)
 	}
-	p.fontLg = mk(-16, 700, "Microsoft YaHei UI")
-	p.fontNm = mk(-13, 600, "Microsoft YaHei UI")
-	p.fontSm = mk(-11, 400, "Consolas")
+	sc := func(v int32) int32 { return int32(float64(v) * float64(p.dpi) / 96.0) }
+	p.fontLg = mk(-sc(16), 700, "Microsoft YaHei UI")
+	p.fontNm = mk(-sc(13), 600, "Microsoft YaHei UI")
+	p.fontSm = mk(-sc(11), 400, "Consolas")
 }
 
 func (p *dropPanel) reloadPeers() {
@@ -186,31 +197,13 @@ func (p *dropPanel) show() {
 		p.app.event("desktop.panel_skip", map[string]any{"reason": "no peers"})
 		return
 	}
-	var pt pointT
-	procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
-	var wa rectT
-	procSystemParametersInfoW.Call(uintptr(spiGetWorkArea), 0, uintptr(unsafe.Pointer(&wa)), 0)
-	x := int32(pt.x) + 18
-	y := int32(pt.y) + 18
-	w, h := p.pw, p.ph
-	if x+w > wa.right-8 {
-		x = int32(pt.x) - w - 18
-	}
-	if y+h > wa.bottom-8 {
-		y = int32(pt.y) - h - 18
-	}
-	if x < wa.left+8 {
-		x = wa.left + 8
-	}
-	if y < wa.top+8 {
-		y = wa.top + 8
-	}
-	r1, _, err1 := procSetWindowPos.Call(uintptr(p.hwnd), hwndTopmost, uintptr(x), uintptr(y), uintptr(w), uintptr(h),
+	p.expanded = false
+	p.outside = 0
+	w, h := p.size()
+	p.pw, p.ph = w, h
+	x, y := p.place(w, h)
+	procSetWindowPos.Call(uintptr(p.hwnd), hwndTopmost, uintptr(x), uintptr(y), uintptr(w), uintptr(h),
 		swpNoActivate|swpShowWindow)
-	var got rectT
-	procGetWindowRect.Call(uintptr(p.hwnd), uintptr(unsafe.Pointer(&got)))
-	os.WriteFile("panel-set.txt", []byte(fmt.Sprintf("ret=%d err=%v want=%dx%d at %d,%d got=%dx%d at %d,%d\n",
-		r1, err1, w, h, x, y, got.right-got.left, got.bottom-got.top, got.left, got.top)), 0644)
 	p.shown = true
 	p.app.event("desktop.panel_show", map[string]any{"peers": len(p.peers), "x": x, "y": y})
 	p.timer, _, _ = procSetTimer.Call(uintptr(p.hwnd), panelTimerID, 60, 0)
@@ -227,6 +220,46 @@ func (p *dropPanel) hide() {
 	}
 	procShowWindow.Call(uintptr(p.hwnd), swHide)
 	p.shown = false
+}
+
+// size returns the panel size in physical pixels for the current shape.
+func (p *dropPanel) size() (int32, int32) {
+	w, h := int32(panelW), int32(panelH)
+	if !p.expanded {
+		w, h = compactW, compactH
+	}
+	dpi := p.dpi
+	if dpi == 0 {
+		dpi = 96
+	}
+	return int32(int64(w) * int64(dpi) / 96), int32(int64(h) * int64(dpi) / 96)
+}
+
+// place returns the top-left corner that pins the window to the bottom-right
+// of the work area, keeping that corner fixed when the shape changes.
+func (p *dropPanel) place(w, h int32) (int32, int32) {
+	var wa rectT
+	procSystemParametersInfoW.Call(uintptr(spiGetWorkArea), 0, uintptr(unsafe.Pointer(&wa)), 0)
+	gap := int32(int64(anchorGap) * int64(p.dpi) / 96)
+	return wa.right - w - gap, wa.bottom - h - gap
+}
+
+// setExpanded morphs between the drop hint and the device picker. The
+// bottom-right corner stays put, so the window grows up and to the left.
+func (p *dropPanel) setExpanded(v bool) {
+	if p.expanded == v {
+		return
+	}
+	p.expanded = v
+	p.outside = 0
+	w, h := p.size()
+	p.pw, p.ph = w, h
+	p.applyRegion()
+	x, y := p.place(w, h)
+	procSetWindowPos.Call(uintptr(p.hwnd), hwndTopmost, uintptr(x), uintptr(y), uintptr(w), uintptr(h),
+		swpNoActivate|swpShowWindow)
+	procInvalidateRect.Call(uintptr(p.hwnd), 0, 1)
+	p.app.event("desktop.panel_shape", map[string]any{"expanded": v})
 }
 
 // layout splits the client area into the title row, three device boxes and the
@@ -249,7 +282,7 @@ func (p *dropPanel) layout(w, h int32) (title rectT, boxes []rectT, foot rectT) 
 	for i := range p.peers {
 		weights[i] = 1
 		if i == p.active {
-			weights[i] = 2.35
+			weights[i] = 2.0
 		}
 		total += weights[i]
 	}
@@ -294,6 +327,22 @@ func (p *dropPanel) paint(hwnd syscall.Handle) {
 	procDeleteObject.Call(brush)
 
 	procSetBkMode.Call(d, bkTransparent)
+	if !p.expanded {
+		// Small landing pad: dashed accent frame with one line of text.
+		inset := int32(9)
+		if sc := int32(float64(9) * float64(p.dpi) / 96.0); sc > inset {
+			inset = sc
+		}
+		dotPen, _, _ := procCreatePen.Call(2, 1, uintptr(colAccent)) // PS_DOT
+		old, _, _ := procSelectObject.Call(d, dotPen)
+		procRectangle.Call(d, uintptr(inset), uintptr(inset), uintptr(p.pw-inset), uintptr(p.ph-inset))
+		procSelectObject.Call(d, old)
+		procDeleteObject.Call(dotPen)
+		drawText(d, p.fontNm, "拖到此处开始传文件",
+			rectT{inset + 6, inset + 4, p.pw - inset - 6, p.ph - inset - 4},
+			dtSingleLine|dtVCenter|dtCenter, colMuted)
+		return
+	}
 	title, boxes, foot := p.layout(p.pw, p.ph)
 	drawText(d, p.fontLg, "发送到设备", title, dtSingleLine|dtVCenter, colInk)
 
@@ -319,10 +368,10 @@ func (p *dropPanel) paint(hwnd syscall.Handle) {
 		if name == "" {
 			name = "未命名设备"
 		}
-		narrow := b.right-b.left < 100
+		narrow := b.right-b.left < 150
 		if narrow {
 			// A narrow box only has room for the name, wrapped over two lines.
-			nm := rectT{b.left + 4, b.top + 10, b.right - 4, b.bottom - 10}
+			nm := rectT{b.left + 3, b.top + 8, b.right - 3, b.bottom - 8}
 			drawText(d, p.fontSm, name, nm, dtSingleLine|dtVCenter|dtCenter|dtEndEllipsis, colInk)
 		} else {
 			nm := rectT{b.left + 6, b.top + 10, b.right - 6, b.top + 32}
@@ -356,6 +405,11 @@ func (p *dropPanel) onDrop(hdrop syscall.Handle) {
 	ok, _, _ := procDragQueryPoint.Call(uintptr(hdrop), uintptr(unsafe.Pointer(&pt)))
 	procDragFinish.Call(uintptr(hdrop))
 	idx := p.active
+	if !p.expanded {
+		// Dropped straight onto the small window: send to the first device.
+		idx = 0
+		ok = 0
+	}
 	if ok != 0 {
 		if h := p.hit(pt.x, pt.y); h >= 0 {
 			idx = h
@@ -396,8 +450,28 @@ func panelWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintp
 		if !p.shown {
 			return 0
 		}
-		var pt pointT
-		procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
+		var cursor pointT
+		procGetCursorPos.Call(uintptr(unsafe.Pointer(&cursor)))
+		var wr rectT
+		procGetWindowRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&wr)))
+		inside := cursor.x >= wr.left && cursor.x < wr.right && cursor.y >= wr.top && cursor.y < wr.bottom
+		if !p.expanded {
+			// The small "drop here" window turns into the picker as soon as
+			// the dragged file reaches it.
+			if inside {
+				p.setExpanded(true)
+			}
+			return 0
+		}
+		if !inside {
+			p.outside++
+			if p.outside*60 >= 260 {
+				p.setExpanded(false)
+			}
+			return 0
+		}
+		p.outside = 0
+		pt := cursor
 		procScreenToClient.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&pt)))
 		if h := p.hit(pt.x, pt.y); h >= 0 && h != p.active {
 			p.active = h
