@@ -194,4 +194,5 @@ magic(4) | version(1) | type(1) | flags(2) | session_id(16) | seq(8) | len(4) | 
   - `deploy/msix/AppxManifest.xml`：`desktop4:Extension Category="windows.fileExplorerContextMenus"` + `desktop5:ItemType Type="*"` + `desktop5:Verb`；`com:SurrogateServer`（`ThreadingModel="Both"`）；`uap10:AllowExternalContent`；`rescap:runFullTrust` + `unvirtualizedResources`；Application 的 `Executable` 指向空 main 的 `ftstub.exe`（`uap10:RuntimeBehavior="win32App"`，`AppListEntry="none"`）。
   - 注册：`Add-AppxPackage -Register <dir>\AppxManifest.xml -ExternalLocation <dir>`（松散注册，需开发者模式）。签名 MSIX 路线在本机不可行（`signtool` 对 `appxsip.dll` 签名报 `0x80070032`，`Add-AppxPackage -Path` 又要求有效签名）。
   - 安装包：`ft-setup.exe` 把 `menu\` 复制进安装目录并注册；卸载时 `Remove-AppxPackage FileTransfer.ShellMenu`。
+- 图标：`GetIcon` 返回 `<DLL 目录>\ft.ico`（不存在时才返回 `E_NOTIMPL`）；`ft.ico` 是 256×256 PNG 负载的 ICO（深绿圆角方块 + 白色 `ft`），随 DLL 一起放在 `menu\`。
 - **关键坑（曾导致 explorer 卡死）**：`IExplorerCommand::GetIcon` 返回 `S_OK` 且 `*icon = NULL` 时，shell 会一直等待一张永远不会到的图标 → 右键整棵树卡住。必须返回 `E_NOTIMPL`（使用 verb 默认图标）。定位方法是给每个 COM 入口写一行 `%TEMP%\ftmenu.log`（`GetTickCount` + 方法名），卡死时最后一行就是阻塞点。

@@ -95,7 +95,7 @@
 
 - [x] VPN 常开兼容：`cmd/ft/lan.go` 新增 `checkLANPath`（本地地址落在 198.18/15 而远端不是 → 立即判定 LAN 被 TUN 接管，不再重试 2 分钟），`core/discovery.IsTunnelFakeIP` 导出该判定并加单测 `cmd/ft/lan_test.go`。证据 `evidence/stage3/20261108-2253-vpn-compat.log`：同一 VPN 下 LAN 直连 0 秒拒绝、经中继 2.1MB 3.2s 成功且手机侧 sha256 一致。
 
-- [x] Windows 11 一级右键菜单：`cmd/ft-shellmenu/ftmenu.c`（`IExplorerCommand` + `IClassFactory`）经稀疏 MSIX（`deploy/msix/AppxManifest.xml`，`desktop4/5:FileExplorerContextMenus` + `com:SurrogateServer`）注册后，「用 ft 发送」出现在一级菜单（与火绒、QQ 发送并列），explorer 响应正常；端到端 Invoke → `ft-desktop` → 中继 → 接收端 `hello.txt` 3 B 送达。卡死根因是 `GetIcon` 返回 `S_OK + NULL`，改为 `E_NOTIMPL` 后恢复。证据 `evidence/stage3/20261109-2305-shellmenu.log`、截图 `.tools/shots/menu-test.png`；设计说明 `docs/context/design.md` §14；`ft-setup` 安装时自动注册、卸载时移除（需开发者模式）。
+- [x] Windows 11 一级右键菜单：`cmd/ft-shellmenu/ftmenu.c`（`IExplorerCommand` + `IClassFactory`）经稀疏 MSIX（`deploy/msix/AppxManifest.xml`，`desktop4/5:FileExplorerContextMenus` + `com:SurrogateServer`）注册后，「用 ft 发送」出现在一级菜单（与火绒、QQ 发送并列），explorer 响应正常；端到端 Invoke → `ft-desktop` → 中继 → 接收端 `hello.txt` 3 B 送达。卡死根因是 `GetIcon` 返回 `S_OK + NULL`，改为 `E_NOTIMPL` 后恢复。图标为深绿圆角方块 + 白色 `ft`（`ft.ico`，`GetIcon` 返回其路径）；证据 `evidence/stage3/20261109-2305-shellmenu.log`、截图 `.tools/shots/menu-test.png`；设计说明 `docs/context/design.md` §14；`ft-setup` 安装时自动注册、卸载时移除（需开发者模式）。
 
 ## 下一步（按优先级，由 work agent 执行）
 

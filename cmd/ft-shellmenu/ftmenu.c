@@ -56,6 +56,8 @@ static void dbg(const char *m) {
     fclose(f);
 }
 
+static BOOL icon_path(wchar_t *out, DWORD cap);
+
 static HRESULT dup_wide(const wchar_t *s, LPWSTR *out) {
     size_t n = (wcslen(s) + 1) * sizeof(wchar_t);
     LPWSTR p = (LPWSTR)CoTaskMemAlloc(n);
@@ -100,10 +102,13 @@ static HRESULT STDMETHODCALLTYPE FT_GetTitle(IExplorerCommand *iface, IShellItem
 
 static HRESULT STDMETHODCALLTYPE FT_GetIcon(IExplorerCommand *iface, IShellItemArray *items, LPWSTR *icon) {
     dbg(__func__);
-    (void)iface; (void)items; (void)icon;
-    /* Returning S_OK with *icon = NULL makes the shell wait for an image that
-       never arrives; E_NOTIMPL tells it to use the verb's default icon. */
-    return E_NOTIMPL;
+    (void)iface; (void)items;
+    if (!icon) return E_POINTER;
+    wchar_t path[MAX_PATH];
+    /* S_OK with *icon = NULL makes the shell wait for an image that never
+       arrives (Explorer freezes); only answer S_OK with a real path. */
+    if (!icon_path(path, MAX_PATH)) return E_NOTIMPL;
+    return dup_wide(path, icon);
 }
 
 static HRESULT STDMETHODCALLTYPE FT_GetToolTip(IExplorerCommand *iface, IShellItemArray *items, LPWSTR *tip) {
@@ -304,7 +309,21 @@ DllGetClassObject(REFCLSID rclsid, REFIID riid, void **ppv) {
 
 HRESULT __stdcall DllCanUnloadNow(void) { return S_FALSE; }
 
+static HINSTANCE g_hinst;
+
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved) {
-    (void)hinst; (void)reason; (void)reserved;
+    (void)reason; (void)reserved;
+    if (reason == DLL_PROCESS_ATTACH) g_hinst = hinst;
     return TRUE;
+}
+
+/* icon_path resolves ft.ico next to this DLL; returns FALSE when it is absent,
+   in which case the shell should fall back to the verb's default icon. */
+static BOOL icon_path(wchar_t *out, DWORD cap) {
+    if (!g_hinst || !GetModuleFileNameW(g_hinst, out, cap)) return FALSE;
+    wchar_t *slash = wcsrchr(out, L'\\');
+    if (!slash) return FALSE;
+    wcscpy(slash + 1, L"ft.ico");
+    DWORD attr = GetFileAttributesW(out);
+    return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
 }

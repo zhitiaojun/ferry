@@ -43,3 +43,13 @@ $ sha256sum .tools/dist/ftmenu.dll .tools/dist/ftstub.exe dist/windows/ft-setup.
 #   Add-AppxPackage -Register <install>\menu\AppxManifest.xml -ExternalLocation <install>\menu
 # 卸载时 Remove-AppxPackage FileTransfer.ShellMenu。
 # 注意：需要“开发者模式”（设置 → 系统 → 开发者选项），否则松散注册被拒。
+
+## 6. 菜单图标（2026-11-09 23:15）
+# GetIcon 改为返回 <DLL 所在目录>\ft.ico（存在则 S_OK + 路径，缺失才 E_NOTIMPL）。
+# 图标由 PowerShell/System.Drawing 生成：深绿圆角方块 + 白色等宽 "ft"，256x256 PNG，
+# 以 PNG 负载打包为 ICO。安装包 payload/menu/ft.ico 随 DLL 一起复制。
+$ sha256sum .tools/dist/ftmenu.dll .tools/dist/ft.ico
+a2a7f7791b93c4a6fb208a7fafe7d791b0903b4c165e20f453946ec78493301e  .tools/dist/ftmenu.dll
+837071c20c93366105cf8e0800e46b1e290966d29a483610db047497847fb7c9  .tools/dist/ft.ico
+# 结果：一级菜单显示「用 ft 发送」前的 ft 图标（截图 .tools/shots/menu-test.png），
+# explorer 响应正常（SendMessageTimeout 2s 返回），包版本 1.0.0.3。
