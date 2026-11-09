@@ -61,7 +61,8 @@ find .tools/android-build/classes -name '*.class' >"$WORK/classes.txt"
 echo "== aapt2 link =="
 "$BT/aapt2.exe" link -o "$(m "$WORK/base.apk")" \
   --manifest "$(m "$ROOT/android/AndroidManifest.xml")" \
-  -I "$(m "$AJAR")" --min-sdk-version 21 --target-sdk-version 34
+  -I "$(m "$AJAR")" --min-sdk-version 21 --target-sdk-version 34 \
+  --version-code 800 --version-name 0.8.0
 
 echo "== package =="
 cp "$WORK/dex/classes.dex" "$WORK/classes.dex"

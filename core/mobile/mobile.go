@@ -28,7 +28,7 @@ import (
 )
 
 // Version is the core version shown in the Android UI.
-const Version = "0.1.0-m3"
+const Version = "0.8.0"
 
 var (
 	mu  sync.Mutex

@@ -31,7 +31,7 @@ import (
 	qrcode "github.com/skip2/go-qrcode"
 )
 
-var version = "0.0.0-dev"
+var version = "0.8.0"
 
 var (
 	goVersion  = runtime.Version()

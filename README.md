@@ -55,3 +55,10 @@ ft send --addr 127.0.0.1:18800 --file ./a.bin --file ./b.txt
 - 服务器事实 → `docs/context/infra-bj.md`
 - 设计 → `docs/context/design.md`
 - 参考实现 → `docs/context/references.md`
+
+## 安装与使用（0.8.0）
+
+- **Windows**：运行 `ft-setup.exe`（`dist/windows/`）安装到 `%LOCALAPPDATA%\ft`，登录时自启托盘、注册右键「发送到」；卸载用 `ft-setup.exe -uninstall`。
+- **安卓**：安装 `dist/android/ft-0.8.0.apk`（发布密钥签名）。首次使用在电脑上 `ft pair --show` 生成配对 URI，手机「导入对方配对 URI」；接收时点一次「远程接收」（打洞/中继自动竞速），发送时选文件点「发送（自动选路）」。
+- **命令行**：`ft send --addr host:port --file a`（LAN）、`ft send --punch --allow relay --signal wss://ft.cwlindean.cn/signal --to-id <设备ID>`（竞速）、`ft recv --signal ...`（等发送方）。
+- 已知限制见 `CHANGELOG.md` 末尾与 `RUNBOOK.md` §C。

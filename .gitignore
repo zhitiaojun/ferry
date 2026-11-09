@@ -10,3 +10,7 @@ android/ft.aar
 android/ft-sources.jar
 android/build/
 nohup.out
+
+# 发布产物与安装包载荷（构建时生成）
+dist/
+cmd/ft-setup/payload/*.exe

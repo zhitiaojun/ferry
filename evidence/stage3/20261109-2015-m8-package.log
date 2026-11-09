@@ -1,0 +1,21 @@
+# M8：签名 APK 与 Windows 安装包
+2026-11-09T20:12:09+08:00
+
+## 发布签名密钥（不入库）
+.tools/release/ft-release.keystore（RSA 4096，别名 ft），口令在 .tools/release/keystore.properties
+
+## APK
+dist/android/ft-0.8.0.apk 20308430 B
+证书 SHA-256 a6c3d541a6882adc40f7c1d6035c44ac82e6ebb09ba98a28261dff9a96341e75
+apksigner verify: Signer #1 CN=filetransfer
+
+## Windows 安装包
+dist/windows/ft-setup.exe 29654016 B（内嵌 ft.exe 与 ft-desktop.exe）
+安装：ft-setup.exe → %LOCALAPPDATA%\ft\bin，写 HKCU Run(filetransfer) 与 SendTo 快捷方式
+卸载：ft-setup.exe -uninstall → 结束进程、删 Run 键、删 SendTo、删目录
+
+## 冒烟（沙箱内 -dir .tools/installtest）
+安装 exit=0，bin 下 ft.exe/ft-desktop.exe 就位；卸载 exit=0，目录已删除
+
+## 版本
+ft -version: ft 0.8.0 / protocol 1 / go go1.27.3 / platform windows/amd64
