@@ -214,3 +214,7 @@ M5 剩余：无（G5 已出，2026-11-08 收尾记录见文末）。
 - [x] 版本号 0.8.0（`ft -version`、`core/mobile.Version`）、`CHANGELOG.md`、README「安装与使用」、`history/` 索引。
 - [x] 回滚演练（2026-11-09 20:20，旧版 `/metrics` 404、恢复后 200；证据 `evidence/stage3/20261109-2020-m8-rollback.log`）
 - [x] 压测：8 轮中继（2.1MB×5、10MB×3）全部通过，服务端 heap <1.4MB，证据 `evidence/stage3/20261109-2015-m8-soak.log`
+
+## 计划调整（2026-11-09）
+
+- 用户决定：界面统一放到功能完成之后做，新增 **M10 界面重做（Material Design 3）**（D29），M0–M9 只保证可用；M9 只做功能验收，发布授权顺延到 G10 之后。
