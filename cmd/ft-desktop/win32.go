@@ -53,6 +53,10 @@ var (
 	procDragFinish            = shell32.NewProc("DragFinish")
 	procSystemParametersInfoW = user32.NewProc("SystemParametersInfoW")
 	procInvalidateRect        = user32.NewProc("InvalidateRect")
+	procSetDpiAwareCtx        = user32.NewProc("SetProcessDpiAwarenessContext")
+	procSetDPIAware           = user32.NewProc("SetProcessDPIAware")
+	procGetDpiForWindow       = user32.NewProc("GetDpiForWindow")
+	procGetDpiForSystem       = user32.NewProc("GetDpiForSystem")
 )
 
 const (
@@ -215,4 +219,24 @@ func messageBox(title, text string) {
 func shellOpen(path string) {
 	op := utf16Ptr("open")
 	procShellExecuteW.Call(0, uintptr(unsafe.Pointer(op)), uintptr(unsafe.Pointer(utf16Ptr(path))), 0, 0, swShow)
+}
+
+// setDPIAware makes the process per-monitor DPI aware. Without it Windows
+// bitmap-stretches our windows (blurry text) and reports virtualized
+// coordinates, which is why the drop panel looked fuzzy and misplaced.
+func setDPIAware() {
+	const perMonitorV2 = ^uintptr(0) - 3 // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 == -4
+	if r, _, _ := procSetDpiAwareCtx.Call(perMonitorV2); r != 0 {
+		return
+	}
+	procSetDPIAware.Call()
+}
+
+// scaleForDPI converts design pixels (96 dpi) to device pixels.
+func scaleForDPI(hwnd syscall.Handle, v int32) int32 {
+	dpi, _, _ := procGetDpiForWindow.Call(uintptr(hwnd))
+	if dpi == 0 {
+		dpi = 96
+	}
+	return int32(float64(v) * float64(dpi) / 96.0)
 }

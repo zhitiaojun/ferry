@@ -88,6 +88,13 @@ func runTray(a *app, keyPath string) int {
 		openMainWindow(a)
 	}
 
+	if os.Getenv("FT_PANEL_DEMO") != "" && thePanel != nil {
+		go func() {
+			time.Sleep(600 * time.Millisecond)
+			procPostMessageW.Call(uintptr(thePanel.hwnd), wmPanelShow, 0, 0)
+		}()
+	}
+
 	var msg msgT
 	for {
 		r, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(&msg)), 0, 0, 0)

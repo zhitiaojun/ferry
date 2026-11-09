@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"syscall"
 	"unsafe"
 
@@ -42,8 +43,9 @@ const (
 	swpShowWindow   = 0x0040
 	hwndTopmost     = ^uintptr(0)
 
-	panelW = 360
-	panelH = 260
+	// Design pixels at 96 dpi; scaled by the monitor DPI at creation time.
+	panelW = 280
+	panelH = 170
 
 	panelTimerID = 7
 
@@ -63,6 +65,8 @@ type dropPanel struct {
 	active int
 	hover  int
 	shown  bool
+	pw, ph int32
+	dpi    int32
 	timer  uintptr
 	fontLg syscall.Handle
 	fontSm syscall.Handle
@@ -114,13 +118,36 @@ func (p *dropPanel) ensure() error {
 		return fmt.Errorf("创建面板窗口失败: %v", err)
 	}
 	p.hwnd = syscall.Handle(h)
-	dpiScale := 1.0
-	_ = dpiScale
-	p.makeFonts()
-	rgn, _, _ := procCreateRoundRgn.Call(0, 0, panelW+1, panelH+1, 18, 18)
-	procSetWindowRgn.Call(uintptr(p.hwnd), rgn, 1)
+	p.applyDPI()
 	procDragAcceptFiles.Call(uintptr(p.hwnd), 1)
 	return nil
+}
+
+// applyDPI sizes the panel for the monitor it is on. The window's DPI is only
+// reliable once it has been shown at least once, so this runs again on show.
+func (p *dropPanel) applyDPI() {
+	dpi, _, _ := procGetDpiForWindow.Call(uintptr(p.hwnd))
+	if dpi == 0 {
+		dpi, _, _ = procGetDpiForSystem.Call()
+	}
+	if dpi == 0 {
+		dpi = 96
+	}
+	if int32(dpi) == p.dpi && p.pw != 0 {
+		return
+	}
+	p.dpi = int32(dpi)
+	p.pw = int32(float64(panelW) * float64(p.dpi) / 96.0)
+	p.ph = int32(float64(panelH) * float64(p.dpi) / 96.0)
+	if p.fontLg != 0 {
+		procDeleteObject.Call(uintptr(p.fontLg))
+		procDeleteObject.Call(uintptr(p.fontNm))
+		procDeleteObject.Call(uintptr(p.fontSm))
+	}
+	p.makeFonts()
+	rad := uintptr(float64(14) * float64(p.dpi) / 96.0)
+	r, _, _ := procCreateRoundRgn.Call(0, 0, uintptr(p.pw+1), uintptr(p.ph+1), rad, rad)
+	procSetWindowRgn.Call(uintptr(p.hwnd), r, 1)
 }
 
 func (p *dropPanel) makeFonts() {
@@ -129,9 +156,9 @@ func (p *dropPanel) makeFonts() {
 			1, 0, 0, 5, 0, uintptr(unsafe.Pointer(utf16Ptr(face))))
 		return syscall.Handle(h)
 	}
-	p.fontLg = mk(-20, 700, "Microsoft YaHei UI")
-	p.fontNm = mk(-15, 600, "Microsoft YaHei UI")
-	p.fontSm = mk(-12, 400, "Consolas")
+	p.fontLg = mk(-16, 700, "Microsoft YaHei UI")
+	p.fontNm = mk(-13, 600, "Microsoft YaHei UI")
+	p.fontSm = mk(-11, 400, "Consolas")
 }
 
 func (p *dropPanel) reloadPeers() {
@@ -153,6 +180,7 @@ func (p *dropPanel) show() {
 	if err := p.ensure(); err != nil {
 		return
 	}
+	p.applyDPI()
 	p.reloadPeers()
 	if len(p.peers) == 0 {
 		p.app.event("desktop.panel_skip", map[string]any{"reason": "no peers"})
@@ -164,7 +192,7 @@ func (p *dropPanel) show() {
 	procSystemParametersInfoW.Call(uintptr(spiGetWorkArea), 0, uintptr(unsafe.Pointer(&wa)), 0)
 	x := int32(pt.x) + 18
 	y := int32(pt.y) + 18
-	w, h := int32(panelW), int32(panelH)
+	w, h := p.pw, p.ph
 	if x+w > wa.right-8 {
 		x = int32(pt.x) - w - 18
 	}
@@ -177,8 +205,12 @@ func (p *dropPanel) show() {
 	if y < wa.top+8 {
 		y = wa.top + 8
 	}
-	procSetWindowPos.Call(uintptr(p.hwnd), hwndTopmost, uintptr(x), uintptr(y), uintptr(w), uintptr(h),
+	r1, _, err1 := procSetWindowPos.Call(uintptr(p.hwnd), hwndTopmost, uintptr(x), uintptr(y), uintptr(w), uintptr(h),
 		swpNoActivate|swpShowWindow)
+	var got rectT
+	procGetWindowRect.Call(uintptr(p.hwnd), uintptr(unsafe.Pointer(&got)))
+	os.WriteFile("panel-set.txt", []byte(fmt.Sprintf("ret=%d err=%v want=%dx%d at %d,%d got=%dx%d at %d,%d\n",
+		r1, err1, w, h, x, y, got.right-got.left, got.bottom-got.top, got.left, got.top)), 0644)
 	p.shown = true
 	p.app.event("desktop.panel_show", map[string]any{"peers": len(p.peers), "x": x, "y": y})
 	p.timer, _, _ = procSetTimer.Call(uintptr(p.hwnd), panelTimerID, 60, 0)
@@ -201,8 +233,8 @@ func (p *dropPanel) hide() {
 // footer. The active box gets 2.35x the width of the others, matching the HTML
 // prototype the user approved.
 func (p *dropPanel) layout(w, h int32) (title rectT, boxes []rectT, foot rectT) {
-	pad := int32(16)
-	title = rectT{pad, pad, w - pad, pad + 22}
+	pad := int32(12)
+	title = rectT{pad, pad, w - pad, pad + 18}
 	foot = rectT{pad, h - pad - 18, w - pad, h - pad}
 	top := title.bottom + 12
 	bottom := foot.top - 12
@@ -234,7 +266,7 @@ func (p *dropPanel) layout(w, h int32) (title rectT, boxes []rectT, foot rectT) 
 }
 
 func (p *dropPanel) hit(x, y int32) int {
-	_, boxes, _ := p.layout(panelW, panelH)
+	_, boxes, _ := p.layout(p.pw, p.ph)
 	for i, b := range boxes {
 		if ptIn(b, x, y) {
 			return i
@@ -254,25 +286,16 @@ func (p *dropPanel) paint(hwnd syscall.Handle) {
 	brush, _, _ := procCreateBrush.Call(uintptr(colSurface))
 	oldPen, _, _ := procSelectObject.Call(d, pen)
 	oldBrush, _, _ := procSelectObject.Call(d, brush)
-	procRoundRect.Call(d, 0, 0, panelW+1, panelH+1, 18, 18)
+	rad := uintptr(float64(14) * float64(p.dpi) / 96.0)
+	procRoundRect.Call(d, 0, 0, uintptr(p.pw+1), uintptr(p.ph+1), rad, rad)
 	procSelectObject.Call(d, oldPen)
 	procSelectObject.Call(d, oldBrush)
 	procDeleteObject.Call(pen)
 	procDeleteObject.Call(brush)
 
 	procSetBkMode.Call(d, bkTransparent)
-	title, boxes, foot := p.layout(panelW, panelH)
+	title, boxes, foot := p.layout(p.pw, p.ph)
 	drawText(d, p.fontLg, "发送到设备", title, dtSingleLine|dtVCenter, colInk)
-	hint := "拖到某个设备上，松手即发送"
-	if len(p.peers) > 0 {
-		name := p.peers[p.active].Name
-		if name == "" {
-			name = shortID(p.peers[p.active].ID)
-		}
-		hint = "松手发送到 " + name
-	}
-	drawText(d, p.fontSm, hint, rectT{title.left, title.bottom, panelW - 16, title.bottom + 16},
-		dtSingleLine|dtRight, colMuted)
 
 	for i, b := range boxes {
 		active := i == p.active
@@ -313,7 +336,7 @@ func (p *dropPanel) paint(hwnd syscall.Handle) {
 		}
 	}
 	if len(p.peers) == 0 {
-		drawText(d, p.fontSm, "还没有配对设备", rectT{16, 120, panelW - 16, 150},
+		drawText(d, p.fontSm, "还没有配对设备", rectT{12, p.ph / 2, p.pw - 12, p.ph/2 + 20},
 			dtSingleLine|dtCenter, colMuted)
 	}
 	drawText(d, p.fontSm, "拖动时出现，松手后自动隐藏", foot, dtSingleLine|dtVCenter|dtCenter, colMuted)

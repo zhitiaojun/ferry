@@ -41,6 +41,13 @@ var (
 )
 
 func main() {
+	setDPIAware()
+	if os.Getenv("FT_DPI_DEBUG") != "" {
+		d, _, _ := procGetDpiForSystem.Call()
+		w, _, _ := user32.NewProc("GetSystemMetrics").Call(0)
+		h, _, _ := user32.NewProc("GetSystemMetrics").Call(1)
+		os.WriteFile("dpi-debug.txt", []byte(fmt.Sprintf("dpi=%d screen=%dx%d\n", d, w, h)), 0644)
+	}
 	flag.Parse()
 
 	dir := *flagDir
