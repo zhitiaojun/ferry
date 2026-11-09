@@ -29,6 +29,7 @@ var (
 	procSetWinEventHook = user32.NewProc("SetWinEventHook")
 	procUnhookWinEvent  = user32.NewProc("UnhookWinEvent")
 	procGetClassNameW   = user32.NewProc("GetClassNameW")
+	procIsWindow        = user32.NewProc("IsWindow")
 	procDragQueryPoint  = shell32.NewProc("DragQueryPoint")
 )
 
@@ -460,6 +461,20 @@ func panelWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintp
 		// Wait a few ticks first: the shell sometimes recreates that window in
 		// the middle of one continuous drag.
 		dragMu.Lock()
+		// Also drop entries whose window no longer exists: when a drag ends the
+		// shell may tear the image window down without us seeing that exact
+		// destroy event (and hwnd reuse would otherwise pin it forever).
+		for h := range dragWins {
+			if r, _, _ := procIsWindow.Call(h); r == 0 {
+				delete(dragWins, h)
+				continue
+			}
+			var buf [64]uint16
+			n, _, _ := procGetClassNameW.Call(h, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+			if n == 0 || syscall.UTF16ToString(buf[:n]) != "SysDragImage" {
+				delete(dragWins, h)
+			}
+		}
 		live := len(dragWins)
 		dragMu.Unlock()
 		if live == 0 {
