@@ -205,3 +205,12 @@ M5 剩余：无（G5 已出，2026-11-08 收尾记录见文末）。
 - 公网经 ESA 中继上传 10,000,000 B 实测约 16.3 s，设备侧 sha256 `778808fb0725dab6b474fa946ac59f0262c5d96d09e791a66ffd01880b725c5c` 与浏览器生成数据一致；证据 `evidence/stage2/20261108-1521-web-upload10m.log`。
 - G5 判据全部可复核：T3（设备 LAN 地址，lanweb）与 T4（公网 ESA 中继，下载 10MB/上传 10MB 哈希一致）均通过。
 - 下一步：M6（配对二维码/6 位码 PAKE、中继内层端到端加密与密钥协商），涉及 protocol.md 扩展时先给用户方案再改。
+
+## M8 进展（2026-11-09）
+
+- [x] ft-server `/metrics`（version/uptime_s/peers/relay_rooms/relay_bytes/goroutines/heap_mb/sys_mb）+ `/etc/logrotate.d/ft-server`（daily/14 天/compress/copytruncate）；BJ 已换 0.8.0 二进制（备份 `ft-server.bak-20261109-metrics`），2.1MB 中继后 `relay_bytes=2114146`。证据 `evidence/stage3/20261109-2010-m8-monitor.log`。
+- [x] 签名 APK：发布密钥在 `.tools/release/`（不入库），`dist/android/ft-0.8.0.apk`（证书 SHA-256 `a6c3d541…`）。
+- [x] Windows 安装包 `dist/windows/ft-setup.exe`（内嵌两个二进制，装到 `%LOCALAPPDATA%\ft`，写 Run 与 SendTo，`-uninstall` 清理），沙箱内安装/卸载冒烟通过。
+- [x] 版本号 0.8.0（`ft -version`、`core/mobile.Version`）、`CHANGELOG.md`、README「安装与使用」、`history/` 索引。
+- [ ] 回滚演练（步骤已写入 deploy/README 与 RUNBOOK §I，尚未实际执行一次）
+- [ ] 压测（按 PLAN 要避开 `wb-status` 的 5 分钟边界；尚未做）
