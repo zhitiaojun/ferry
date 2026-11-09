@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"runtime"
 	"net"
 	"os"
 	"os/exec"
@@ -39,6 +40,9 @@ type tray struct {
 }
 
 func runTray(a *app, keyPath string) int {
+	// Windows are created here and the message loop below runs on this thread,
+	// so the panel window must be born on it too.
+	runtime.LockOSThread()
 	trayApp = a
 	t := &tray{app: a}
 	key, err := identity.LoadOrCreateKey(keyPath)
@@ -73,6 +77,13 @@ func runTray(a *app, keyPath string) int {
 		return 1
 	}
 	t.addIcon()
+	if thePanel != nil {
+		if err := thePanel.ensure(); err != nil {
+			a.event("desktop.panel_error", map[string]any{"error": err.Error()})
+		} else if h := startDragWatch(); h == 0 {
+			a.event("desktop.panel_hook_error", nil)
+		}
+	}
 	if a.showMain {
 		openMainWindow(a)
 	}

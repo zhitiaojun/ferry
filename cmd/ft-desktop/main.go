@@ -37,6 +37,7 @@ var (
 	flagAuto   = flag.String("startup", "", "diagnostic: on/off/status for the HKCU Run entry, then exit")
 	flagMain   = flag.Bool("main", false, "open the main window at startup")
 	flagSendTo = flag.Bool("install-sendto", false, "install the Explorer \"Send to\" shortcut, then exit")
+	flagPanel  = flag.Bool("panel", true, "show the drop panel while files are dragged")
 )
 
 func main() {
@@ -143,6 +144,9 @@ func main() {
 	}
 
 	app.showMain = *flagMain
+	if *flagPanel {
+		newDropPanel(app) // window + hook are created on the tray thread
+	}
 	dumpStacks()
 	os.Exit(runTray(app, keyPath))
 }
