@@ -9,6 +9,17 @@
 3. 备选：`WH_MOUSE_LL` 低级鼠标钩子（按下左键 + 位移超阈值）。粗糙、会误触发（拖窗口/框选），只作为 `SysDragImage` 不可用时的降级。
 4. 不采用“全屏透明窗口”：会吃掉所有点击并挡住资源管理器，且 UIPI 下无效。
 
+## 实测验证（2026-11-09，Win11 本机）
+
+探针 `.tools/dragprobe/probe.exe`（`SetWinEventHook(EVENT_OBJECT_CREATE/DESTROY)` + `GetClassNameW`），用户从资源管理器拖动文件约 1.7 s，日志：
+
+```
+79.60s CREATE  hwnd=150574 class="SysDragImage" title="Drag"
+81.31s DESTROY hwnd=150574 class="SysDragImage" title="Drag"
+```
+
+结论：机制 A 在本机可用，`SysDragImage` 的创建/销毁就是拖动开始/结束，且 `WINEVENT_OUTOFCONTEXT` 回调里没出现卡顿。证据 `evidence/stage3/20261109-2337-drag-probe.log`。
+
 ## 机制 A：SysDragImage + WinEvent
 
 - 微软 Q&A 中给出的可行方案：`UIAutomation` 结构变化事件里找 `ClassName == "SysDragImage"` 的子窗口；同一线程里也有人用 WinEvent 的 `EVENT_SYSTEM_CAPTURESTART`（噪声大，不推荐）。

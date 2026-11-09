@@ -1,0 +1,17 @@
+# dragprobe start 2026-11-09T23:35:27+08:00
+# hook installed, waiting for drag... (Ctrl+C to stop)
+ 23.25s NEWCLASS       class="OleMainThreadWndClass" title="OleMainThreadWndName"
+ 39.15s NEWCLASS       class="Chrome_WidgetWin_1" title=""
+ 39.15s NEWCLASS       class="Chrome_WidgetWin_0" title=""
+ 39.15s NEWCLASS       class="Intermediate D3D Window" title=""
+ 43.40s NEWCLASS       class="CicMarshalWndClass" title="CicMarshalWnd"
+ 78.34s NEWCLASS       class="LivePreview" title=""
+ 79.60s CREATE  hwnd=150574 class="SysDragImage" title="Drag"
+ 81.31s DESTROY hwnd=150574 class="SysDragImage" title="Drag"
+
+# 结论（2026-11-09 23:37 CST）
+# 探针 .tools/dragprobe/probe.exe：SetWinEventHook(EVENT_OBJECT_CREATE/DESTROY) + GetClassNameW，
+# 用户从资源管理器拖动一个文件到桌面约 1.7 s。
+#   CREATE  hwnd=150574 class="SysDragImage" title="Drag"   (t=79.60s)
+#   DESTROY hwnd=150574 class="SysDragImage" title="Drag"   (t=81.31s)
+# => SysDragImage 可作为“拖动开始/结束”的可靠判定点（Win11 26200，本机实测）。
