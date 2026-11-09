@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"sync"
 	"syscall"
 	"unsafe"
 
@@ -73,6 +74,7 @@ type dropPanel struct {
 	shown    bool
 	expanded bool
 	outside  int
+	dragGone int
 	pw, ph   int32
 	dpi    int32
 	timer  uintptr
@@ -188,6 +190,9 @@ func (p *dropPanel) reloadPeers() {
 
 // show places the panel next to the cursor, clamped to the work area.
 func (p *dropPanel) show() {
+	if p.shown {
+		return
+	}
 	if err := p.ensure(); err != nil {
 		return
 	}
@@ -220,6 +225,7 @@ func (p *dropPanel) hide() {
 	}
 	procShowWindow.Call(uintptr(p.hwnd), swHide)
 	p.shown = false
+	p.expanded = false
 }
 
 // size returns the panel size in physical pixels for the current shape.
@@ -450,6 +456,22 @@ func panelWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintp
 		if !p.shown {
 			return 0
 		}
+		// A drag ends when the shell has torn down every drag-image window.
+		// Wait a few ticks first: the shell sometimes recreates that window in
+		// the middle of one continuous drag.
+		dragMu.Lock()
+		live := len(dragWins)
+		dragMu.Unlock()
+		if live == 0 {
+			p.dragGone++
+			if p.dragGone*60 >= 300 {
+				p.dragGone = 0
+				p.hide()
+				return 0
+			}
+		} else {
+			p.dragGone = 0
+		}
 		var cursor pointT
 		procGetCursorPos.Call(uintptr(unsafe.Pointer(&cursor)))
 		var wr rectT
@@ -514,23 +536,35 @@ func winEventProc(hook uintptr, event uint32, hwnd uintptr, idObject, idChild in
 		return 0
 	}
 	cls := syscall.UTF16ToString(buf[:n])
-	if thePanel != nil && thePanel.app != nil {
-		thePanel.app.event("desktop.panel_event", map[string]any{"class": cls, "event": int(event)})
-	}
 	if cls != "SysDragImage" {
 		return 0
 	}
 	if thePanel == nil || thePanel.hwnd == 0 {
 		return 0
 	}
+	// The shell may create and destroy helper drag-image windows while one drag
+	// is in flight (for example when the pointer crosses into our own panel).
+	// Only the transition between "no drag window" and "at least one" decides
+	// visibility, otherwise the panel would flicker between its two shapes.
+	dragMu.Lock()
 	switch event {
 	case eventObjectCreate:
-		procPostMessageW.Call(uintptr(thePanel.hwnd), wmPanelShow, 0, 0)
+		dragWins[hwnd] = true
 	case eventObjectDestroy:
-		procPostMessageW.Call(uintptr(thePanel.hwnd), wmPanelHide, 0, 0)
+		delete(dragWins, hwnd)
+	}
+	alive := len(dragWins)
+	dragMu.Unlock()
+	if event == eventObjectCreate && alive > 0 {
+		procPostMessageW.Call(uintptr(thePanel.hwnd), wmPanelShow, 0, 0)
 	}
 	return 0
 }
+
+var (
+	dragMu   sync.Mutex
+	dragWins = map[uintptr]bool{}
+)
 
 // startDragWatch installs the WinEvent hook on the calling thread, which must
 // be the thread that pumps messages (the tray thread). Out-of-context WinEvents
