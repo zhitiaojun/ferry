@@ -30,6 +30,7 @@ var (
 	procUnhookWinEvent  = user32.NewProc("UnhookWinEvent")
 	procGetClassNameW   = user32.NewProc("GetClassNameW")
 	procIsWindow        = user32.NewProc("IsWindow")
+	procGetAsyncKeyState = user32.NewProc("GetAsyncKeyState")
 	procDragQueryPoint  = shell32.NewProc("DragQueryPoint")
 )
 
@@ -76,6 +77,7 @@ type dropPanel struct {
 	expanded bool
 	outside  int
 	dragGone int
+	buttonUp int
 	pw, ph   int32
 	dpi    int32
 	timer  uintptr
@@ -457,9 +459,22 @@ func panelWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintp
 		if !p.shown {
 			return 0
 		}
-		// A drag ends when the shell has torn down every drag-image window.
-		// Wait a few ticks first: the shell sometimes recreates that window in
-		// the middle of one continuous drag.
+		// A drag is one continuous button-down gesture. The shell creates and
+		// tears down its drag-image window repeatedly while the pointer crosses
+		// windows, so visibility follows the mouse button instead: hide a few
+		// ticks after the left button comes up. This is what keeps the panel
+		// from blinking while the drag passes over other windows.
+		ks, _, _ := procGetAsyncKeyState.Call(1) // VK_LBUTTON
+		if int32(ks)&0x8000 == 0 {
+			p.buttonUp++
+			if p.buttonUp*60 >= 180 {
+				p.buttonUp = 0
+				p.hide()
+				return 0
+			}
+		} else {
+			p.buttonUp = 0
+		}
 		dragMu.Lock()
 		// Also drop entries whose window no longer exists: when a drag ends the
 		// shell may tear the image window down without us seeing that exact
