@@ -3,30 +3,56 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>山径笔记</title>
 <style>
-  :root { color-scheme: light; }
-  body { margin:0; font-family: "Iowan Old Style", Georgia, "Songti SC", serif;
-         background:#f6f3ec; color:#2f2a24; line-height:1.75; }
-  header { padding:2.4rem 1.2rem 1rem; max-width:44rem; margin:0 auto; }
-  h1 { font-size:1.7rem; letter-spacing:.04em; margin:0 0 .3rem; }
-  .sub { color:#8a8177; font-size:.9rem; }
-  main { max-width:44rem; margin:0 auto; padding:0 1.2rem 4rem; }
-  article { border-top:1px solid #e2dccf; padding:1.1rem 0; }
-  article h2 { font-size:1.05rem; margin:0 0 .3rem; font-weight:600; }
-  article p { margin:.2rem 0; color:#5c554b; font-size:.95rem; }
-  footer { max-width:44rem; margin:2rem auto 3rem; padding:0 1.2rem; color:#a39a8d;
-           font-size:.8rem; display:flex; justify-content:space-between; }
-  .dot { color:#c9c0b1; cursor:default; user-select:none; }
-  #gate { display:none; position:fixed; inset:0; background:rgba(246,243,236,.97);
-          place-items:center; }
-  #gate.on { display:grid; }
-  #gate form { width:min(20rem,80vw); text-align:center; }
-  #gate input { width:100%; box-sizing:border-box; padding:.6rem .7rem; margin:.6rem 0;
-                border:1px solid #d8d0c0; background:#fffdf8; font-size:1rem; }
-  #gate button { width:100%; padding:.6rem; border:1px solid #cfc6b5; background:#efe9dc;
-                 font-size:.95rem; cursor:pointer; }
-  #gate .msg { color:#a4533f; font-size:.85rem; min-height:1.2em; }
+  :root{
+    color-scheme: light dark;
+    --paper:#F7F6F0; --ink:#16211C; --ink-2:#505955; --ink-3:#7E8783;
+    --line:#D6D4CC; --line-soft:#E1E0D8;
+    --accent:#2C5C49; --accent-ink:#FBFAF7; --err:#B64036;
+    --serif:"Iowan Old Style","Palatino Linotype","Songti SC","SimSun",serif;
+    --sans:system-ui,"Segoe UI","Microsoft YaHei UI",sans-serif;
+    --scrim:rgba(247,246,240,.97);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --paper:#0E1411; --ink:#E8E6DF; --ink-2:#ABA9A1; --ink-3:#7E7C74;
+      --line:#2B3430; --line-soft:#222A26;
+      --accent:#89C7AB; --accent-ink:#111916; --err:#ED8174;
+      --scrim:rgba(14,20,17,.97);
+    }
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{font-family:var(--serif);font-size:17px;line-height:1.75;
+       background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased}
+  header{max-width:44rem;margin:0 auto;padding:2.6rem 1.2rem 1rem}
+  h1{font-size:1.7rem;font-weight:500;letter-spacing:.04em;margin:0 0 .3rem}
+  .sub{color:var(--ink-3);font-size:.9rem}
+  main{max-width:44rem;margin:0 auto;padding:0 1.2rem 4rem}
+  article{border-top:1px solid var(--line-soft);padding:1.1rem 0}
+  article h2{font-size:1.05rem;margin:0 0 .3rem;font-weight:500;letter-spacing:.02em}
+  article p{margin:.2rem 0;color:var(--ink-2);font-size:.95rem}
+  a{color:var(--accent);text-decoration:underline;text-underline-offset:3px;
+    text-decoration-color:var(--line)}
+  a:hover{text-decoration-color:var(--accent)}
+  footer{max-width:44rem;margin:2rem auto 3rem;padding:0 1.2rem;color:var(--ink-3);
+         font-size:.8rem;display:flex;justify-content:space-between}
+  .dot{color:var(--line);cursor:default;user-select:none}
+  .dot:active{color:var(--ink-3)}
+  #gate{display:none;position:fixed;inset:0;background:var(--scrim);place-items:center}
+  #gate.on{display:grid}
+  #gate form{width:min(20rem,80vw);text-align:center}
+  #gate .label{font-family:var(--sans);font-size:.9rem;color:var(--ink-2)}
+  #gate input{width:100%;box-sizing:border-box;padding:.6rem .7rem;margin:.6rem 0;
+              border:1px solid var(--line);border-radius:6px;background:var(--paper);
+              color:var(--ink);font-family:var(--sans);font-size:1rem}
+  #gate input:focus{outline:0;border-color:var(--accent)}
+  #gate button{width:100%;padding:.62rem;border:1px solid var(--accent);border-radius:6px;
+               background:var(--accent);color:var(--accent-ink);
+               font-family:var(--sans);font-size:.95rem;cursor:pointer}
+  #gate .msg{color:var(--err);font-size:.85rem;min-height:1.2em;font-family:var(--sans)}
 </style>
 </head>
 <body>
@@ -55,7 +81,7 @@
 
 <div id="gate">
   <form id="gate-form" autocomplete="off">
-    <div style="font-size:.95rem;color:#6b6256">请输入访问口令</div>
+    <div class="label">请输入访问口令</div>
     <input id="pw" type="password" inputmode="text" autocomplete="current-password">
     <button type="submit">进入</button>
     <div class="msg" id="msg"></div>
