@@ -196,3 +196,13 @@ magic(4) | version(1) | type(1) | flags(2) | session_id(16) | seq(8) | len(4) | 
   - 安装包：`ft-setup.exe` 把 `menu\` 复制进安装目录并注册；卸载时 `Remove-AppxPackage FileTransfer.ShellMenu`。
 - 图标：`GetIcon` 返回 `<DLL 目录>\ft.ico`（不存在时才返回 `E_NOTIMPL`）；`ft.ico` 是 256×256 PNG 负载的 ICO（深绿圆角方块 + 白色 `ft`），随 DLL 一起放在 `menu\`。
 - **关键坑（曾导致 explorer 卡死）**：`IExplorerCommand::GetIcon` 返回 `S_OK` 且 `*icon = NULL` 时，shell 会一直等待一张永远不会到的图标 → 右键整棵树卡住。必须返回 `E_NOTIMPL`（使用 verb 默认图标）。定位方法是给每个 COM 入口写一行 `%TEMP%\ftmenu.log`（`GetTickCount` + 方法名），卡死时最后一行就是阻塞点。
+
+## 15. 界面设计系统（M10）
+
+- **单一来源**：`design/tokens.md`（色板、字体、字号、间距、圆角、路径印章、三端布局基线）。三端实现必须引用它，不在代码里另起色值；改视觉先改令牌。
+- 取向沿用方案 A「仪表台账」（`design/NOTES.md`、静态稿 `design/mock-desktop.html`，用户已确认）：纸面 / 墨色、衬线标题、等宽数字、发丝分隔线；三条链路用**印章**（颜色 + 边框 + 文字三重编码）而不是只靠颜色。
+- 布局基线：桌面 880×520（最小 720×420，左栏 206、标题栏 32、设备行 34、台账行 28）；Android 390×844（padding 16dp、按钮 44dp、圆角 8dp）；Web 内容宽 `min(1080px, 100% - 48px)`，720px 断点单列。
+- 状态：空状态一句话 + 主按钮；接收中仅一个 `accent` 呼吸点（1.6 s）；失败用 `danger` 文字 + 短原因，不用图标。
+- 深色模式不是反色：三端都按 tokens 的深色列取值（桌面读注册表 `AppsUseLightTheme`；Android 读 `uiMode`；Web 用 `prefers-color-scheme`）。
+- 拖动投放小窗（原 M2/M10 的「拖动开始浮出小窗 → 三格」）按用户 2026-11-11 指示**暂停**：触发依赖全局鼠标钩子与 OLE，在受限进程里读不到全局按键状态，先不做；相关改动在 `git stash`（`WIP: 拖动小窗/OLE 触发`）里保留。
+- 三端截图证据放 `evidence/stage3/`，G10 报告逐端对照本节的布局与令牌。
