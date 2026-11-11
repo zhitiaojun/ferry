@@ -96,6 +96,8 @@ public class MainActivity extends Activity {
     private int accent, accentInk, accentSoft, accentPressed, danger, amber, violet;
 
     private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
+    /** 曾经开过接收：状态胶囊据此区分“未启动”与“已暂停”。 */
+    private boolean recvEverStarted;
     private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
 
     // ---- 顶部状态：接收中呼吸点 / 端口 / 设备 ID 前 12 位 ----
@@ -263,7 +265,7 @@ public class MainActivity extends Activity {
         recvDot = new View(this);
         recvDot.setBackground(dotDrawable(ink3));
         recvChip.addView(recvDot, new LinearLayout.LayoutParams(dp(7), dp(7)));
-        recvStateText = text("已暂停", 12, ink2, Typeface.DEFAULT);
+        recvStateText = text("未启动", 12, ink2, Typeface.DEFAULT);
         LinearLayout.LayoutParams stateLp = new LinearLayout.LayoutParams(WRAP, WRAP);
         stateLp.leftMargin = dp(6);
         recvChip.addView(recvStateText, stateLp);
@@ -905,7 +907,10 @@ public class MainActivity extends Activity {
     private void setRunning(boolean running) {
         receiverRunning = running;
         if (recvStateText != null) {
-            recvStateText.setText(running ? "接收中" : "已暂停");
+            if (running) {
+            recvEverStarted = true;
+        }
+        recvStateText.setText(running ? "接收中" : (recvEverStarted ? "已暂停" : "未启动"));
             recvStateText.setTextColor(running ? accent : ink2);
         }
         if (recvDot != null) {
