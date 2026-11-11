@@ -13,8 +13,9 @@
 
     <application
         android:label="ft"
+        android:icon="@mipmap/ic_launcher"
         android:debuggable="true"
-        android:theme="@android:style/Theme.Material.Light"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:usesCleartextTraffic="true">
 
         <activity

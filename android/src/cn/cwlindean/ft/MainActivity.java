@@ -63,7 +63,7 @@ public class MainActivity extends Activity {
     private static final int PICK_PAIR_FILE = 43;
 
     private TextView status;
-    private TextView deviceList;
+    private DeviceList deviceList;
     private EditText nameField;
     private EditText peerField;
     private Button startBtn;
@@ -107,6 +107,11 @@ public class MainActivity extends Activity {
     private TextView failStamp;
     private ValueAnimator dotAnimator;
 
+    // ---- 三段式页签：发送 / 接收 / 配对（切换只改 visibility） ----
+    private final TextView[] tabs = new TextView[3];
+    private LinearLayout panelSend, panelRecv, panelPair;
+    private int activeTab;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -117,7 +122,6 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 33) {
             requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 7);
         }
-        status.setText("未启动。先在电脑上运行 ft recv --lan，再点“开始接收”。");
         importBootstrapPairs();
         applyDebugPeerId();
         prefillLastPeer();
@@ -240,24 +244,16 @@ public class MainActivity extends Activity {
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16), dp(14), dp(16), dp(28));
+        root.setPadding(dp(16), dp(12), dp(16), dp(24));
         page.addView(root, new ScrollView.LayoutParams(MATCH, WRAP));
 
-        // ---- 顶部：ft / 接收状态点 / 接收端口；本机名；设备 ID ----
-        LinearLayout head = new LinearLayout(this);
-        head.setOrientation(LinearLayout.VERTICAL);
-        head.setPadding(dp(14), dp(12), dp(14), dp(14));
-        head.setBackground(box(paper2, line, 8));
-        root.addView(head, new LinearLayout.LayoutParams(MATCH, WRAP));
-
-        LinearLayout titleRow = new LinearLayout(this);
-        titleRow.setOrientation(LinearLayout.HORIZONTAL);
-        titleRow.setGravity(Gravity.CENTER_VERTICAL);
-        titleRow.addView(text("ft", 21, ink, Typeface.SERIF), new LinearLayout.LayoutParams(WRAP, WRAP));
-        LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(WRAP, WRAP);
-        subLp.leftMargin = dp(10);
-        titleRow.addView(text("文件传递", 12, ink3, Typeface.DEFAULT), subLp);
-        titleRow.addView(new View(this), new LinearLayout.LayoutParams(0, dp(1), 1f));
+        // ---- 一行 App 头：ft + 接收状态胶囊；第二行小字：端口 / 设备 ID ----
+        LinearLayout headRow = new LinearLayout(this);
+        headRow.setOrientation(LinearLayout.HORIZONTAL);
+        headRow.setGravity(Gravity.CENTER_VERTICAL);
+        headRow.addView(text("ft", 21, ink, Typeface.SERIF),
+                new LinearLayout.LayoutParams(WRAP, WRAP));
+        headRow.addView(new View(this), new LinearLayout.LayoutParams(0, dp(1), 1f));
 
         recvChip = new LinearLayout(this);
         recvChip.setOrientation(LinearLayout.HORIZONTAL);
@@ -266,40 +262,47 @@ public class MainActivity extends Activity {
         recvChip.setBackground(box(Color.TRANSPARENT, 0, 99));
         recvDot = new View(this);
         recvDot.setBackground(dotDrawable(ink3));
-        recvChip.addView(recvDot, new LinearLayout.LayoutParams(dp(8), dp(8)));
+        recvChip.addView(recvDot, new LinearLayout.LayoutParams(dp(7), dp(7)));
         recvStateText = text("已暂停", 12, ink2, Typeface.DEFAULT);
         LinearLayout.LayoutParams stateLp = new LinearLayout.LayoutParams(WRAP, WRAP);
         stateLp.leftMargin = dp(6);
         recvChip.addView(recvStateText, stateLp);
-        titleRow.addView(recvChip, new LinearLayout.LayoutParams(WRAP, WRAP));
+        headRow.addView(recvChip, new LinearLayout.LayoutParams(WRAP, WRAP));
+        root.addView(headRow, new LinearLayout.LayoutParams(MATCH, WRAP));
 
+        LinearLayout metaRow = new LinearLayout(this);
+        metaRow.setOrientation(LinearLayout.HORIZONTAL);
+        metaRow.setGravity(Gravity.CENTER_VERTICAL);
         portText = text("端口 —", 11, ink3, Typeface.MONOSPACE);
-        LinearLayout.LayoutParams portLp = new LinearLayout.LayoutParams(WRAP, WRAP);
-        portLp.leftMargin = dp(10);
-        titleRow.addView(portText, portLp);
-        head.addView(titleRow, new LinearLayout.LayoutParams(MATCH, WRAP));
-
-        View hair = new View(this);
-        hair.setBackgroundColor(lineSoft);
-        LinearLayout.LayoutParams hairLp = new LinearLayout.LayoutParams(MATCH, dp(1));
-        hairLp.topMargin = dp(12);
-        hairLp.bottomMargin = dp(12);
-        head.addView(hair, hairLp);
-
-        head.addView(labelView("本机名"), new LinearLayout.LayoutParams(WRAP, WRAP));
-        nameField = new EditText(this);
-        nameField.setText(deviceName);
-        input(nameField, "本机名（对端看到的名字）");
-        LinearLayout.LayoutParams nameLp = new LinearLayout.LayoutParams(MATCH, dp(44));
-        nameLp.topMargin = dp(6);
-        head.addView(nameField, nameLp);
-
+        portText.setLetterSpacing(0.06f);
+        metaRow.addView(portText, new LinearLayout.LayoutParams(WRAP, WRAP));
+        TextView metaSep = text("·", 11, ink3, Typeface.DEFAULT);
+        LinearLayout.LayoutParams sepLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        sepLp.leftMargin = dp(6);
+        sepLp.rightMargin = dp(6);
+        metaRow.addView(metaSep, sepLp);
         idText = text("ID —", 11, ink3, Typeface.MONOSPACE);
-        LinearLayout.LayoutParams idLp = new LinearLayout.LayoutParams(WRAP, WRAP);
-        idLp.topMargin = dp(10);
-        head.addView(idText, idLp);
+        idText.setLetterSpacing(0.06f);
+        metaRow.addView(idText, new LinearLayout.LayoutParams(WRAP, WRAP));
+        LinearLayout.LayoutParams metaLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        metaLp.topMargin = dp(3);
+        root.addView(metaRow, metaLp);
 
-        // ---- 台账/状态行：12sp，数字等宽；含失败/错误的句子整行转 danger ----
+        // ---- 三段式页签：选中 accent 实底 + accent-ink，未选 paper-2 底 + ink-2 ----
+        LinearLayout tabBar = new LinearLayout(this);
+        tabBar.setOrientation(LinearLayout.HORIZONTAL);
+        for (int i = 0; i < 3; i++) {
+            LinearLayout.LayoutParams segLp = new LinearLayout.LayoutParams(0, dp(44), 1f);
+            if (i > 0) {
+                segLp.leftMargin = dp(6);
+            }
+            tabBar.addView(seg(i), segLp);
+        }
+        LinearLayout.LayoutParams tabLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        tabLp.topMargin = dp(14);
+        root.addView(tabBar, tabLp);
+
+        // ---- 台账/状态行：跨页签常驻；空文本时自动收起 ----
         LinearLayout statusRow = new LinearLayout(this);
         statusRow.setOrientation(LinearLayout.HORIZONTAL);
         statusRow.setGravity(Gravity.CENTER_VERTICAL);
@@ -312,52 +315,114 @@ public class MainActivity extends Activity {
         statusRow.addView(failStamp, failLp);
         ((Ledger) status).bindBadge(failStamp);
         LinearLayout.LayoutParams statusLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        statusLp.topMargin = dp(14);
+        statusLp.topMargin = dp(10);
         root.addView(statusRow, statusLp);
 
-        // ---- 配对 ----
-        LinearLayout pairCard = card("配对");
-        addCard(root, pairCard);
+        // ---- 三个页签面板：切换只改 visibility，视图不销毁 ----
+        panelSend = new LinearLayout(this);
+        panelSend.setOrientation(LinearLayout.VERTICAL);
+        buildSendPanel(panelSend);
+        panelRecv = new LinearLayout(this);
+        panelRecv.setOrientation(LinearLayout.VERTICAL);
+        buildReceivePanel(panelRecv);
+        panelPair = new LinearLayout(this);
+        panelPair.setOrientation(LinearLayout.VERTICAL);
+        buildPairPanel(panelPair);
+        LinearLayout.LayoutParams panelLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        panelLp.topMargin = dp(14);
+        root.addView(panelSend, panelLp);
+        LinearLayout.LayoutParams panelLp2 = new LinearLayout.LayoutParams(MATCH, WRAP);
+        panelLp2.topMargin = dp(14);
+        root.addView(panelRecv, panelLp2);
+        LinearLayout.LayoutParams panelLp3 = new LinearLayout.LayoutParams(MATCH, WRAP);
+        panelLp3.topMargin = dp(14);
+        root.addView(panelPair, panelLp3);
 
-        pairField = new EditText(this);
-        input(pairField, "配对 URI（ftpair://…）");
-        pairCard.addView(pairField, new LinearLayout.LayoutParams(MATCH, dp(44)));
+        selectTab(0);
+        return page;
+    }
 
-        Button showPairBtn = filledBtn("显示本机配对 URI");
-        showPairBtn.setOnClickListener(v -> showPairUri());
-        pairCard.addView(showPairBtn, fullRow(10));
+    /** 页签按钮：44dp 高、圆角 8，由 selectTab 统一上色。 */
+    private TextView seg(int index) {
+        TextView t = new TextView(this);
+        t.setGravity(Gravity.CENTER);
+        t.setIncludeFontPadding(false);
+        t.setOnClickListener(v -> selectTab(index));
+        tabs[index] = t;
+        return t;
+    }
 
-        Button importPairBtn = outlineBtn("导入对方配对 URI");
-        importPairBtn.setOnClickListener(v -> importPairUri());
-        Button pickPairBtn = outlineBtn("导入配对文件");
-        pickPairBtn.setOnClickListener(v -> pickPairFile());
-        pairCard.addView(row2(importPairBtn, pickPairBtn), fullRow(8));
+    /** 切页签：只改 visibility 与选中底色，不重建视图，呼吸动画继续跑。 */
+    private void selectTab(int index) {
+        activeTab = index;
+        final String[] labels = {"发送", "接收", "配对"};
+        View[] panels = {panelSend, panelRecv, panelPair};
+        for (int k = 0; k < panels.length; k++) {
+            boolean on = k == index;
+            TextView t = tabs[k];
+            if (t != null) {
+                t.setText(labels[k]);
+                t.setTextSize(13);
+                t.setBackground(box(on ? accent : paper2, 0, 8));
+                t.setTextColor(on ? accentInk : ink2);
+                t.setTypeface(on ? Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                        : Typeface.DEFAULT);
+            }
+            if (panels[k] != null) {
+                panels[k].setVisibility(on ? View.VISIBLE : View.GONE);
+            }
+        }
+        if (status != null && statusText()) {
+            status.setText(indexHint(index));
+        }
+    }
 
-        // One-time 6-digit code pairing (protocol 8.6): the code is never sent,
-        // both sides prove knowledge of it with SPAKE2.
-        pakeCodeField = new EditText(this);
-        pakeCodeField.setInputType(InputType.TYPE_CLASS_NUMBER);
-        input(pakeCodeField, "6 位一次性配对码");
-        pairCard.addView(pakeCodeField, fullRow(10));
+    /** 空状态提示只在该页签没有其它状态文本时出现。 */
+    private boolean statusText() {
+        return status == null || ((Ledger) status).getText().length() == 0;
+    }
 
-        pakePeerField = new EditText(this);
-        input(pakePeerField, "对方设备 ID（点“等待配对”时留空）");
-        pairCard.addView(pakePeerField, fullRow(8));
+    private String indexHint(int index) {
+        if (index == 1) {
+            return "未启动。先在电脑上运行 ft recv --lan，再点“开始接收”。";
+        }
+        return "";
+    }
 
-        Button waitPairBtn = outlineBtn("等待配对");
-        waitPairBtn.setOnClickListener(v -> startPake(true));
-        Button doPairBtn = filledBtn("用 6 位码配对");
-        doPairBtn.setOnClickListener(v -> startPake(false));
-        pairCard.addView(row2(waitPairBtn, doPairBtn), fullRow(8));
+    /** 发送：附近设备（可点选）+ 对方地址 + 主操作发送。 */
+    private void buildSendPanel(LinearLayout p) {
+        LinearLayout devCard = card("附近设备");
+        addCard(p, devCard, 0);
 
-        pakeInfo = new Ledger(12, ink3);
-        LinearLayout.LayoutParams pakeLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        pakeLp.topMargin = dp(10);
-        pairCard.addView(pakeInfo, pakeLp);
+        deviceList = new DeviceList();
+        deviceList.setText("");
+        devCard.addView(deviceList, new LinearLayout.LayoutParams(MATCH, WRAP));
 
-        // ---- 接收与发送 ----
-        LinearLayout ioCard = card("接收与发送");
-        addCard(root, ioCard);
+        discoverBtn = outlineBtn("搜索设备");
+        discoverBtn.setOnClickListener(v -> discover());
+        LinearLayout.LayoutParams devLp = new LinearLayout.LayoutParams(MATCH, dp(44));
+        devLp.topMargin = dp(10);
+        devCard.addView(discoverBtn, devLp);
+
+        LinearLayout sendCard = card("发送");
+        addCard(p, sendCard, 12);
+
+        sendCard.addView(labelView("对方地址"), new LinearLayout.LayoutParams(WRAP, WRAP));
+        peerField = new EditText(this);
+        input(peerField, "点上面的设备自动填入，也可手输 192.168.x.x:端口");
+        LinearLayout.LayoutParams peerLp = new LinearLayout.LayoutParams(MATCH, dp(44));
+        peerLp.topMargin = dp(6);
+        sendCard.addView(peerField, peerLp);
+
+        sendBtn = filledBtn("发送（自动选路）");
+        sendBtn.setOnClickListener(v -> pickFiles(true));
+        sendCard.addView(sendBtn, fullRow(10));
+    }
+
+    /** 接收：接收按钮组 + 自动选路图例；状态信息另起一块。 */
+    private void buildReceivePanel(LinearLayout p) {
+        LinearLayout ioCard = card("接收");
+        addCard(p, ioCard, 0);
 
         startBtn = filledBtn("开始接收");
         startBtn.setOnClickListener(v -> startReceiver());
@@ -369,7 +434,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams stopLp = new LinearLayout.LayoutParams(0, dp(44), 1f);
         stopLp.leftMargin = dp(8);
         recvRow.addView(stopBtn, stopLp);
-        ioCard.addView(recvRow, fullRow(0));
+        ioCard.addView(recvRow, new LinearLayout.LayoutParams(MATCH, WRAP));
 
         relayBtn = outlineBtn("远程接收");
         relayBtn.setOnClickListener(v -> startAutoReceiver());
@@ -396,51 +461,176 @@ public class MainActivity extends Activity {
         }
         ioCard.addView(legend, fullRow(12));
 
+        LinearLayout stateCard = card("状态");
+        addCard(p, stateCard, 12);
         webInfo = new Ledger(12, ink2);
         webInfo.setText("网页分享：未启动（同一 Wi-Fi 用浏览器打开）");
-        ioCard.addView(webInfo, fullRow(10));
-
+        stateCard.addView(webInfo, new LinearLayout.LayoutParams(MATCH, WRAP));
         relayInfo = new Ledger(12, ink2);
         relayInfo.setText("中继：未连接（信令 wss://ft.cwlindean.cn/signal）");
-        ioCard.addView(relayInfo, fullRow(6));
-
+        stateCard.addView(relayInfo, fullRow(6));
         punchInfo = new Ledger(12, ink2);
         punchInfo.setText("打洞：未启动（STUN 123.57.253.208:40000/40001）");
-        ioCard.addView(punchInfo, fullRow(6));
+        stateCard.addView(punchInfo, fullRow(6));
+    }
 
-        // ---- 附近设备 ----
-        LinearLayout devCard = card("附近设备");
-        addCard(root, devCard);
+    /** 配对：URI 与 6 位码两条路，唯一主操作是用 6 位码配对。 */
+    private void buildPairPanel(LinearLayout p) {
+        LinearLayout pairCard = card("配对");
+        addCard(p, pairCard, 0);
 
-        discoverBtn = outlineBtn("搜索设备");
-        discoverBtn.setOnClickListener(v -> discover());
-        devCard.addView(discoverBtn, new LinearLayout.LayoutParams(MATCH, dp(44)));
+        pairCard.addView(labelView("本机名"), new LinearLayout.LayoutParams(WRAP, WRAP));
+        nameField = new EditText(this);
+        nameField.setText(deviceName);
+        input(nameField, "本机名（对端看到的名字）");
+        LinearLayout.LayoutParams nameLp = new LinearLayout.LayoutParams(MATCH, dp(44));
+        nameLp.topMargin = dp(6);
+        nameLp.bottomMargin = dp(12);
+        pairCard.addView(nameField, nameLp);
 
-        deviceList = new Ledger(12, ink2);
-        deviceList.setText("还没有搜索过。两端连同一网络后点「搜索设备」。");
-        LinearLayout.LayoutParams listLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        listLp.topMargin = dp(10);
-        devCard.addView(deviceList, listLp);
+        pairField = new EditText(this);
+        input(pairField, "配对 URI（ftpair://…）");
+        pairCard.addView(pairField, new LinearLayout.LayoutParams(MATCH, dp(44)));
 
-        // ---- 发送 ----
-        LinearLayout sendCard = card("发送");
-        addCard(root, sendCard);
+        Button showPairBtn = outlineBtn("显示本机配对 URI");
+        showPairBtn.setOnClickListener(v -> showPairUri());
+        Button importPairBtn = outlineBtn("导入对方配对 URI");
+        importPairBtn.setOnClickListener(v -> importPairUri());
+        Button pickPairBtn = outlineBtn("导入配对文件");
+        pickPairBtn.setOnClickListener(v -> pickPairFile());
+        pairCard.addView(row2(showPairBtn, importPairBtn), fullRow(8));
+        pairCard.addView(pickPairBtn, tallRow(8));
 
-        sendCard.addView(labelView("对方地址"), new LinearLayout.LayoutParams(WRAP, WRAP));
-        peerField = new EditText(this);
-        input(peerField, "点搜索后自动填入，也可手输 192.168.x.x:端口");
-        LinearLayout.LayoutParams peerLp = new LinearLayout.LayoutParams(MATCH, dp(44));
-        peerLp.topMargin = dp(6);
-        sendCard.addView(peerField, peerLp);
+        // One-time 6-digit code pairing (protocol 8.6): the code is never sent,
+        // both sides prove knowledge of it with SPAKE2.
+        pakeCodeField = new EditText(this);
+        pakeCodeField.setInputType(InputType.TYPE_CLASS_NUMBER);
+        input(pakeCodeField, "6 位一次性配对码");
+        pairCard.addView(pakeCodeField, tallRow(12));
 
-        sendBtn = filledBtn("发送（自动选路）");
-        sendBtn.setOnClickListener(v -> pickFiles(true));
-        sendCard.addView(sendBtn, fullRow(10));
+        pakePeerField = new EditText(this);
+        input(pakePeerField, "对方设备 ID（点“等待配对”时留空）");
+        pairCard.addView(pakePeerField, tallRow(8));
 
-        punchSendBtn = new Button(this);
-        punchSendBtn.setVisibility(android.view.View.GONE);
+        Button waitPairBtn = outlineBtn("等待配对");
+        waitPairBtn.setOnClickListener(v -> startPake(true));
+        Button doPairBtn = filledBtn("用 6 位码配对");
+        doPairBtn.setOnClickListener(v -> startPake(false));
+        pairCard.addView(row2(waitPairBtn, doPairBtn), fullRow(8));
 
-        return page;
+        pakeInfo = new Ledger(12, ink3);
+        pakeInfo.setText("还没配对：用 6 位码或配对 URI 建立信任，之后在「发送」页可直接看到对方。");
+        LinearLayout.LayoutParams pakeLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        pakeLp.topMargin = dp(10);
+        pairCard.addView(pakeInfo, pakeLp);
+    }
+
+    // ================= 设备列表：可点选行（选中 accent-soft 底 + 2dp accent 竖线） =================
+
+    private class DeviceList extends LinearLayout {
+        private final List<Row> rows = new ArrayList<Row>();
+        private String selected = "";
+
+        DeviceList() {
+            super(MainActivity.this);
+            setOrientation(LinearLayout.VERTICAL);
+        }
+
+        /** 复用 discover() 的既有文本格式：设备名一行，地址缩进一行。 */
+        void setText(CharSequence raw) {
+            String s = raw == null ? "" : raw.toString();
+            removeAllViews();
+            rows.clear();
+            String[] lines = s.split("\n");
+            boolean any = false;
+            for (int i = 0; i < lines.length; i++) {
+                String line = lines[i];
+                if (line.trim().isEmpty()) {
+                    continue;
+                }
+                String next = (i + 1 < lines.length) ? lines[i + 1] : "";
+                if (!line.startsWith("    ") && next.startsWith("    ")) {
+                    addRow(line.trim(), next.trim());
+                    i++;
+                } else {
+                    addNote(line.trim());
+                }
+                any = true;
+            }
+            if (!any) {
+                addNote("还没有配对设备 · 去「配对」页用 6 位码或 URI 添加");
+            }
+            if (selected.isEmpty() && peerField != null) {
+                selected = peerField.getText().toString().trim();
+            }
+            paint();
+        }
+
+        private void addRow(final String name, final String addr) {
+            LinearLayout row = new LinearLayout(MainActivity.this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(6), dp(8), dp(8), dp(8));
+
+            View bar = new View(MainActivity.this);
+            row.addView(bar, new LinearLayout.LayoutParams(dp(2), dp(36)));
+
+            LinearLayout col = new LinearLayout(MainActivity.this);
+            col.setOrientation(LinearLayout.VERTICAL);
+            col.addView(text(name, 13, ink, Typeface.DEFAULT),
+                    new LinearLayout.LayoutParams(WRAP, WRAP));
+            TextView ad = text(addr, 11, ink3, Typeface.MONOSPACE);
+            ad.setLetterSpacing(0.04f);
+            LinearLayout.LayoutParams adLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+            adLp.topMargin = dp(3);
+            col.addView(ad, adLp);
+            LinearLayout.LayoutParams colLp = new LinearLayout.LayoutParams(0, WRAP, 1f);
+            colLp.leftMargin = dp(10);
+            row.addView(col, colLp);
+
+            row.setOnClickListener(v -> {
+                selected = addr;
+                if (peerField != null) {
+                    peerField.setText(addr);
+                }
+                paint();
+            });
+
+            LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+            if (!rows.isEmpty()) {
+                rowLp.topMargin = dp(2);
+            }
+            addView(row, rowLp);
+            rows.add(new Row(addr, row, bar));
+        }
+
+        private void addNote(String note) {
+            Ledger t = new Ledger(12, ink3);
+            t.setText(note);
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(MATCH, WRAP);
+            p.topMargin = dp(4);
+            addView(t, p);
+        }
+
+        private void paint() {
+            for (Row r : rows) {
+                boolean on = r.addr.equals(selected) && !selected.isEmpty();
+                r.row.setBackground(on ? box(accentSoft, 0, 6) : null);
+                r.bar.setBackgroundColor(on ? accent : Color.TRANSPARENT);
+            }
+        }
+    }
+
+    private class Row {
+        final String addr;
+        final LinearLayout row;
+        final View bar;
+
+        Row(String addr, LinearLayout row, View bar) {
+            this.addr = addr;
+            this.row = row;
+            this.bar = bar;
+        }
     }
 
     // ================= 外观层：令牌、圆角、字级、印章 =================
@@ -630,8 +820,12 @@ public class MainActivity extends Activity {
     }
 
     private void addCard(LinearLayout root, LinearLayout card) {
+        addCard(root, card, 18);
+    }
+
+    private void addCard(LinearLayout root, LinearLayout card, int topMarginDp) {
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(MATCH, WRAP);
-        p.topMargin = dp(18);
+        p.topMargin = dp(topMarginDp);
         root.addView(card, p);
     }
 
@@ -641,6 +835,13 @@ public class MainActivity extends Activity {
 
     private LinearLayout.LayoutParams fullRow(int topMarginDp) {
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(MATCH, WRAP);
+        p.topMargin = dp(topMarginDp);
+        return p;
+    }
+
+    /** 整行、固定 44dp 高（输入框与次级按钮统一高度）。 */
+    private LinearLayout.LayoutParams tallRow(int topMarginDp) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(MATCH, dp(44));
         p.topMargin = dp(topMarginDp);
         return p;
     }

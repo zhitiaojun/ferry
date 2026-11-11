@@ -230,8 +230,8 @@ M5 剩余：无（G5 已出，2026-11-08 收尾记录见文末）。
 
 - [x] 设计令牌 `design/tokens.md`（三端单一来源）+ `docs/context/design.md` §15；拖动小窗按用户指示暂停（`git stash` 保留，未恢复）。
 - [x] 桌面 `cmd/ft-desktop/mainwin.go` 重做（+1147/−169）：纸墨配色（读 `AppsUseLightTheme` 取深/浅）、衬线标题、等宽数字、路径印章（LAN/打洞/中继/失败，颜色+边框+文字三重编码）、台账列（时间/方向/对端/文件/大小/用时/路径）、接收呼吸点（`WM_TIMER` 1600 ms 混色，仅重画胶囊）、暂停态；窗口 880×520、最小 720×420、DPI 自适应；拖放/选择文件/暂停/打开目录/设备选中全部保留。`go vet ./...` 静默。截图 `evidence/stage3/20261111-1350-m10-mainwin.png`、`-mainwin-paused.png`、`-ledger-demo.png`。
-- [x] 安卓 `MainActivity.java` 重做（+553/−125，1392 行）：同套令牌、路径印章、Ledger 台账行（数字等宽）、接收呼吸点、空状态、深浅色；APK 20,312,538 B（`android/build/ft-debug.apk`，dex 已核对新文案）。真机截图待补（adb 在当前沙箱无法启动 daemon）。
+- [x] 安卓 `MainActivity.java` 重做并二次返工（用户看真机截图后要求“像正常手机 App”）：三段页签（发送/接收/配对）、单一 App 头（`ft` + 状态胶囊 + 端口/ID）、控件统一 44dp、每页一个实底主操作、空状态文案；启动图标沿用桌面 `ft.ico`（mipmap 48–192，`aapt2 compile res`）。APK 20,333,424 B；真机实拍 `evidence/stage3/20261111-1422-m10-android-tabs-light.png`、`-1425-…-recv.png`、`-1429-…-pair3.png`、`-1430-…-dark.png`。
 - [x] 浏览器三页：`server/assets/app.html`、`server/assets/index.html`（伪装页仍无「传文件」字样）、`core/lanweb/page.go`；深色模式、无 CDN/外链、JS 逐字节不变（仅「局域网直连→LAN」「服务器中继→中继」两处标签缩写）。截图 `evidence/stage3/20261111-1335-m10-web-decoy.jpg`、`-1336-m10-web-app.jpg`、`-1338-m10-lanweb.jpg`。
 - [x] 校验：`go build ./...`、`go vet ./...`、`go test -count=1 ./...` 全过（server 17.9 s）；日志 `evidence/stage3/20261111-1355-m10.log`。
 - [x] 报告：`evidence/stage3/20261111-1400-g10-report.md`（G10 判据对照与偏离说明）。
-- [ ] 待真机：安卓截图（需插手机；沙箱内 adb 起不来）。
+- [x] 真机截图：`adb` 起不来的原因是 `TMP` 被 MSYS 写成 `/c/...`（adb 拼成 `C:\c\...`）；改 `export TMP="$(cygpath -w $PWD/.tools/tmp)"` 后正常，四张截图已归档。

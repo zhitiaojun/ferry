@@ -58,11 +58,14 @@ find .tools/android-build/classes -name '*.class' >"$WORK/classes.txt"
   --min-api 21 --lib "$(m "$AJAR")" \
   --output "$(m "$WORK/dex")" @"$(m "$WORK/classes.txt")" "$(m "$WORK/aar/classes.jar")"
 
+echo "== aapt2 compile (res) =="
+"$BT/aapt2.exe" compile --dir "$(m "$ROOT/android/res")" -o "$(m "$WORK/res.zip")"
+
 echo "== aapt2 link =="
 "$BT/aapt2.exe" link -o "$(m "$WORK/base.apk")" \
   --manifest "$(m "$ROOT/android/AndroidManifest.xml")" \
   -I "$(m "$AJAR")" --min-sdk-version 21 --target-sdk-version 34 \
-  --version-code 800 --version-name 0.8.0
+  --version-code 800 --version-name 0.8.0 "$(m "$WORK/res.zip")"
 
 echo "== package =="
 cp "$WORK/dex/classes.dex" "$WORK/classes.dex"
