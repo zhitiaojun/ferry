@@ -20,6 +20,21 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.animation.ValueAnimator;
+import android.content.res.ColorStateList;
+import android.content.res.Configuration;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.StateListDrawable;
+import android.text.SpannableString;
+import android.text.Spanned;
+import android.text.style.TypefaceSpan;
+import android.view.Gravity;
+import android.view.ViewGroup;
+import android.view.animation.AccelerateDecelerateInterpolator;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -76,9 +91,27 @@ public class MainActivity extends Activity {
     private String deviceName;
     private boolean receiverRunning;
 
+    // ---- 设计令牌（design/tokens.md）：浅色一列 / 深色一列，按系统 uiMode 取一组 ----
+    private int paper, paper2, paper3, ink, ink2, ink3, line, lineSoft;
+    private int accent, accentInk, accentSoft, accentPressed, danger, amber, violet;
+
+    private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
+    private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
+
+    // ---- 顶部状态：接收中呼吸点 / 端口 / 设备 ID 前 12 位 ----
+    private LinearLayout recvChip;
+    private View recvDot;
+    private TextView recvStateText;
+    private TextView portText;
+    private TextView idText;
+    private TextView failStamp;
+    private ValueAnimator dotAnimator;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        loadTokens();
+        applyWindowChrome();
         deviceName = defaultName();
         setContentView(buildUi());
         if (Build.VERSION.SDK_INT >= 33) {
@@ -88,6 +121,7 @@ public class MainActivity extends Activity {
         importBootstrapPairs();
         applyDebugPeerId();
         prefillLastPeer();
+        loadDeviceId();
         handleShareIntent(getIntent());
     }
 
@@ -200,158 +234,550 @@ public class MainActivity extends Activity {
     }
 
     private View buildUi() {
+        ScrollView page = new ScrollView(this);
+        page.setFillViewport(true);
+        page.setBackgroundColor(paper);
+
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        int pad = (int) (16 * getResources().getDisplayMetrics().density);
-        root.setPadding(pad, pad, pad, pad);
+        root.setPadding(dp(16), dp(14), dp(16), dp(28));
+        page.addView(root, new ScrollView.LayoutParams(MATCH, WRAP));
 
-        status = new TextView(this);
-        status.setTextSize(15);
-        root.addView(status);
+        // ---- 顶部：ft / 接收状态点 / 接收端口；本机名；设备 ID ----
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.VERTICAL);
+        head.setPadding(dp(14), dp(12), dp(14), dp(14));
+        head.setBackground(box(paper2, line, 8));
+        root.addView(head, new LinearLayout.LayoutParams(MATCH, WRAP));
 
-        LinearLayout nameRow = new LinearLayout(this);
-        nameRow.setOrientation(LinearLayout.HORIZONTAL);
-        TextView nameLabel = new TextView(this);
-        nameLabel.setText("本机名：");
-        nameRow.addView(nameLabel);
+        LinearLayout titleRow = new LinearLayout(this);
+        titleRow.setOrientation(LinearLayout.HORIZONTAL);
+        titleRow.setGravity(Gravity.CENTER_VERTICAL);
+        titleRow.addView(text("ft", 21, ink, Typeface.SERIF), new LinearLayout.LayoutParams(WRAP, WRAP));
+        LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        subLp.leftMargin = dp(10);
+        titleRow.addView(text("文件传递", 12, ink3, Typeface.DEFAULT), subLp);
+        titleRow.addView(new View(this), new LinearLayout.LayoutParams(0, dp(1), 1f));
+
+        recvChip = new LinearLayout(this);
+        recvChip.setOrientation(LinearLayout.HORIZONTAL);
+        recvChip.setGravity(Gravity.CENTER_VERTICAL);
+        recvChip.setPadding(dp(8), dp(4), dp(10), dp(4));
+        recvChip.setBackground(box(Color.TRANSPARENT, 0, 99));
+        recvDot = new View(this);
+        recvDot.setBackground(dotDrawable(ink3));
+        recvChip.addView(recvDot, new LinearLayout.LayoutParams(dp(8), dp(8)));
+        recvStateText = text("已暂停", 12, ink2, Typeface.DEFAULT);
+        LinearLayout.LayoutParams stateLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        stateLp.leftMargin = dp(6);
+        recvChip.addView(recvStateText, stateLp);
+        titleRow.addView(recvChip, new LinearLayout.LayoutParams(WRAP, WRAP));
+
+        portText = text("端口 —", 11, ink3, Typeface.MONOSPACE);
+        LinearLayout.LayoutParams portLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        portLp.leftMargin = dp(10);
+        titleRow.addView(portText, portLp);
+        head.addView(titleRow, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        View hair = new View(this);
+        hair.setBackgroundColor(lineSoft);
+        LinearLayout.LayoutParams hairLp = new LinearLayout.LayoutParams(MATCH, dp(1));
+        hairLp.topMargin = dp(12);
+        hairLp.bottomMargin = dp(12);
+        head.addView(hair, hairLp);
+
+        head.addView(labelView("本机名"), new LinearLayout.LayoutParams(WRAP, WRAP));
         nameField = new EditText(this);
         nameField.setText(deviceName);
-        nameField.setSingleLine(true);
-        nameRow.addView(nameField, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        root.addView(nameRow);
+        input(nameField, "本机名（对端看到的名字）");
+        LinearLayout.LayoutParams nameLp = new LinearLayout.LayoutParams(MATCH, dp(44));
+        nameLp.topMargin = dp(6);
+        head.addView(nameField, nameLp);
 
-        LinearLayout receiverRow = new LinearLayout(this);
-        receiverRow.setOrientation(LinearLayout.HORIZONTAL);
-        startBtn = new Button(this);
-        startBtn.setText("开始接收");
-        startBtn.setOnClickListener(v -> startReceiver());
-        stopBtn = new Button(this);
-        stopBtn.setText("停止");
-        stopBtn.setOnClickListener(v -> stopReceiver());
-        relayBtn = new Button(this);
-        relayBtn.setText("远程接收");
-        relayBtn.setOnClickListener(v -> startAutoReceiver());
-        punchBtn = new Button(this);
-        punchBtn.setText("打洞接收");
-        punchBtn.setOnClickListener(v -> startPunchReceiver());
-        receiverRow.addView(startBtn);
-        receiverRow.addView(stopBtn);
-        receiverRow.addView(relayBtn);
-        root.addView(receiverRow);
+        idText = text("ID —", 11, ink3, Typeface.MONOSPACE);
+        LinearLayout.LayoutParams idLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        idLp.topMargin = dp(10);
+        head.addView(idText, idLp);
 
-        LinearLayout webRow = new LinearLayout(this);
-        webRow.setOrientation(LinearLayout.HORIZONTAL);
-        webBtn = new Button(this);
-        webBtn.setText("网页分享");
-        webBtn.setOnClickListener(v -> startWebShare());
-        webInfo = new TextView(this);
-        webInfo.setTextSize(12);
-        webInfo.setText("网页分享：未启动（同一 Wi-Fi 用浏览器打开）");
-        webBtn.setOnClickListener(v -> startWebShare());
-        Button battBtn = new Button(this);
-        battBtn.setText("后台保活");
-        battBtn.setOnClickListener(v -> requestBatteryExemption());
-        webRow.addView(webBtn);
-        webRow.addView(battBtn);
-        root.addView(webRow);
-        root.addView(webInfo);
+        // ---- 台账/状态行：12sp，数字等宽；含失败/错误的句子整行转 danger ----
+        LinearLayout statusRow = new LinearLayout(this);
+        statusRow.setOrientation(LinearLayout.HORIZONTAL);
+        statusRow.setGravity(Gravity.CENTER_VERTICAL);
+        status = new Ledger(12, ink3);
+        statusRow.addView(status, new LinearLayout.LayoutParams(0, WRAP, 1f));
+        failStamp = stamp("失败", danger);
+        failStamp.setVisibility(View.GONE);
+        LinearLayout.LayoutParams failLp = new LinearLayout.LayoutParams(WRAP, dp(18));
+        failLp.leftMargin = dp(8);
+        statusRow.addView(failStamp, failLp);
+        ((Ledger) status).bindBadge(failStamp);
+        LinearLayout.LayoutParams statusLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        statusLp.topMargin = dp(14);
+        root.addView(statusRow, statusLp);
 
-        relayInfo = new TextView(this);
-        relayInfo.setTextSize(13);
-        relayInfo.setText("中继：未连接（信令 wss://ft.cwlindean.cn/signal）");
+        // ---- 配对 ----
+        LinearLayout pairCard = card("配对");
+        addCard(root, pairCard);
+
         pairField = new EditText(this);
-        pairField.setHint("配对 URI（ftpair://…）");
-        pairField.setTextSize(12);
-        root.addView(pairField);
+        input(pairField, "配对 URI（ftpair://…）");
+        pairCard.addView(pairField, new LinearLayout.LayoutParams(MATCH, dp(44)));
 
-        LinearLayout pairRow = new LinearLayout(this);
-        pairRow.setOrientation(LinearLayout.HORIZONTAL);
-        Button showPairBtn = new Button(this);
-        showPairBtn.setText("显示本机配对 URI");
+        Button showPairBtn = filledBtn("显示本机配对 URI");
         showPairBtn.setOnClickListener(v -> showPairUri());
-        Button importPairBtn = new Button(this);
-        importPairBtn.setText("导入对方配对 URI");
-        importPairBtn.setOnClickListener(v -> importPairUri());
-        pairRow.addView(showPairBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        pairRow.addView(importPairBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        Button pickPairBtn = new Button(this);
-        pickPairBtn.setText("导入配对文件");
-        pickPairBtn.setOnClickListener(v -> pickPairFile());
-        pairRow.addView(pickPairBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        root.addView(pairRow);
+        pairCard.addView(showPairBtn, fullRow(10));
 
-        // One-time 6-digit code pairing (protocol §8.6): the code is never sent,
+        Button importPairBtn = outlineBtn("导入对方配对 URI");
+        importPairBtn.setOnClickListener(v -> importPairUri());
+        Button pickPairBtn = outlineBtn("导入配对文件");
+        pickPairBtn.setOnClickListener(v -> pickPairFile());
+        pairCard.addView(row2(importPairBtn, pickPairBtn), fullRow(8));
+
+        // One-time 6-digit code pairing (protocol 8.6): the code is never sent,
         // both sides prove knowledge of it with SPAKE2.
         pakeCodeField = new EditText(this);
-        pakeCodeField.setHint("6 位一次性配对码");
         pakeCodeField.setInputType(InputType.TYPE_CLASS_NUMBER);
-        pakeCodeField.setTextSize(14);
-        root.addView(pakeCodeField);
+        input(pakeCodeField, "6 位一次性配对码");
+        pairCard.addView(pakeCodeField, fullRow(10));
 
         pakePeerField = new EditText(this);
-        pakePeerField.setHint("对方设备 ID（点“等待配对”时留空）");
-        pakePeerField.setTextSize(12);
-        root.addView(pakePeerField);
+        input(pakePeerField, "对方设备 ID（点“等待配对”时留空）");
+        pairCard.addView(pakePeerField, fullRow(8));
 
-        LinearLayout pakeRow = new LinearLayout(this);
-        pakeRow.setOrientation(LinearLayout.HORIZONTAL);
-        Button waitPairBtn = new Button(this);
-        waitPairBtn.setText("等待配对");
+        Button waitPairBtn = outlineBtn("等待配对");
         waitPairBtn.setOnClickListener(v -> startPake(true));
-        Button doPairBtn = new Button(this);
-        doPairBtn.setText("用 6 位码配对");
+        Button doPairBtn = filledBtn("用 6 位码配对");
         doPairBtn.setOnClickListener(v -> startPake(false));
-        pakeRow.addView(waitPairBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        pakeRow.addView(doPairBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        root.addView(pakeRow);
+        pairCard.addView(row2(waitPairBtn, doPairBtn), fullRow(8));
 
-        pakeInfo = new TextView(this);
-        pakeInfo.setTextSize(12);
-        root.addView(pakeInfo);
+        pakeInfo = new Ledger(12, ink3);
+        LinearLayout.LayoutParams pakeLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        pakeLp.topMargin = dp(10);
+        pairCard.addView(pakeInfo, pakeLp);
 
-        root.addView(relayInfo);
+        // ---- 接收与发送 ----
+        LinearLayout ioCard = card("接收与发送");
+        addCard(root, ioCard);
 
-        punchInfo = new TextView(this);
-        punchInfo.setTextSize(13);
+        startBtn = filledBtn("开始接收");
+        startBtn.setOnClickListener(v -> startReceiver());
+        stopBtn = outlineBtn("停止");
+        stopBtn.setOnClickListener(v -> stopReceiver());
+        LinearLayout recvRow = new LinearLayout(this);
+        recvRow.setOrientation(LinearLayout.HORIZONTAL);
+        recvRow.addView(startBtn, new LinearLayout.LayoutParams(0, dp(44), 2f));
+        LinearLayout.LayoutParams stopLp = new LinearLayout.LayoutParams(0, dp(44), 1f);
+        stopLp.leftMargin = dp(8);
+        recvRow.addView(stopBtn, stopLp);
+        ioCard.addView(recvRow, fullRow(0));
+
+        relayBtn = outlineBtn("远程接收");
+        relayBtn.setOnClickListener(v -> startAutoReceiver());
+        punchBtn = outlineBtn("打洞接收");
+        punchBtn.setOnClickListener(v -> startPunchReceiver());
+        ioCard.addView(row2(relayBtn, punchBtn), fullRow(10));
+
+        webBtn = outlineBtn("网页分享");
+        webBtn.setOnClickListener(v -> startWebShare());
+        Button battBtn = outlineBtn("后台保活");
+        battBtn.setOnClickListener(v -> requestBatteryExemption());
+        ioCard.addView(row2(webBtn, battBtn), fullRow(8));
+
+        LinearLayout legend = new LinearLayout(this);
+        legend.setOrientation(LinearLayout.HORIZONTAL);
+        legend.setGravity(Gravity.CENTER_VERTICAL);
+        legend.addView(labelView("自动选路"), new LinearLayout.LayoutParams(WRAP, WRAP));
+        String[] pathNames = {"LAN", "打洞", "中继"};
+        int[] pathColors = {accent, amber, violet};
+        for (int i = 0; i < pathNames.length; i++) {
+            LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(WRAP, dp(18));
+            pLp.leftMargin = dp(6);
+            legend.addView(stamp(pathNames[i], pathColors[i]), pLp);
+        }
+        ioCard.addView(legend, fullRow(12));
+
+        webInfo = new Ledger(12, ink2);
+        webInfo.setText("网页分享：未启动（同一 Wi-Fi 用浏览器打开）");
+        ioCard.addView(webInfo, fullRow(10));
+
+        relayInfo = new Ledger(12, ink2);
+        relayInfo.setText("中继：未连接（信令 wss://ft.cwlindean.cn/signal）");
+        ioCard.addView(relayInfo, fullRow(6));
+
+        punchInfo = new Ledger(12, ink2);
         punchInfo.setText("打洞：未启动（STUN 123.57.253.208:40000/40001）");
-        root.addView(punchInfo);
+        ioCard.addView(punchInfo, fullRow(6));
 
-        TextView title = new TextView(this);
-        title.setText("附近的设备（需对方也在公告）：");
-        title.setPadding(0, pad, 0, 0);
-        root.addView(title);
+        // ---- 附近设备 ----
+        LinearLayout devCard = card("附近设备");
+        addCard(root, devCard);
 
-        ScrollView scroll = new ScrollView(this);
-        deviceList = new TextView(this);
-        deviceList.setTextSize(14);
-        scroll.addView(deviceList);
-        root.addView(scroll, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
-
-        discoverBtn = new Button(this);
-        discoverBtn.setText("搜索设备");
+        discoverBtn = outlineBtn("搜索设备");
         discoverBtn.setOnClickListener(v -> discover());
-        root.addView(discoverBtn);
+        devCard.addView(discoverBtn, new LinearLayout.LayoutParams(MATCH, dp(44)));
 
-        LinearLayout peerRow = new LinearLayout(this);
-        peerRow.setOrientation(LinearLayout.HORIZONTAL);
-        TextView peerLabel = new TextView(this);
-        peerLabel.setText("对方地址：");
-        peerRow.addView(peerLabel);
+        deviceList = new Ledger(12, ink2);
+        deviceList.setText("还没有搜索过。两端连同一网络后点「搜索设备」。");
+        LinearLayout.LayoutParams listLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        listLp.topMargin = dp(10);
+        devCard.addView(deviceList, listLp);
+
+        // ---- 发送 ----
+        LinearLayout sendCard = card("发送");
+        addCard(root, sendCard);
+
+        sendCard.addView(labelView("对方地址"), new LinearLayout.LayoutParams(WRAP, WRAP));
         peerField = new EditText(this);
-        peerField.setSingleLine(true);
-        peerField.setHint("点搜索后自动填入，也可手输 192.168.x.x:端口");
-        peerRow.addView(peerField, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        root.addView(peerRow);
+        input(peerField, "点搜索后自动填入，也可手输 192.168.x.x:端口");
+        LinearLayout.LayoutParams peerLp = new LinearLayout.LayoutParams(MATCH, dp(44));
+        peerLp.topMargin = dp(6);
+        sendCard.addView(peerField, peerLp);
 
-        sendBtn = new Button(this);
-        sendBtn.setText("发送（自动选路）");
+        sendBtn = filledBtn("发送（自动选路）");
         sendBtn.setOnClickListener(v -> pickFiles(true));
-        root.addView(sendBtn);
+        sendCard.addView(sendBtn, fullRow(10));
 
         punchSendBtn = new Button(this);
         punchSendBtn.setVisibility(android.view.View.GONE);
 
-        return root;
+        return page;
+    }
+
+    // ================= 外观层：令牌、圆角、字级、印章 =================
+
+    private int dp(float v) {
+        return Math.round(v * getResources().getDisplayMetrics().density);
+    }
+
+    private boolean isNight() {
+        return (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
+                == Configuration.UI_MODE_NIGHT_YES;
+    }
+
+    /** 按 tokens.md 的两列取色；深色不是反色，用对应深色值。 */
+    private void loadTokens() {
+        if (isNight()) {
+            paper = Color.parseColor("#0E1411");
+            paper2 = Color.parseColor("#161E1A");
+            paper3 = Color.parseColor("#1E2823");
+            ink = Color.parseColor("#E8E6DF");
+            ink2 = Color.parseColor("#ABA9A1");
+            ink3 = Color.parseColor("#7E7C74");
+            line = Color.parseColor("#2B3430");
+            lineSoft = Color.parseColor("#222A26");
+            accent = Color.parseColor("#89C7AB");
+            accentInk = Color.parseColor("#111916");
+            accentSoft = Color.parseColor("#1B2F26");
+            accentPressed = Color.parseColor("#6FAF95");
+            danger = Color.parseColor("#ED8174");
+            amber = Color.parseColor("#E3B667");
+            violet = Color.parseColor("#BEA3DF");
+        } else {
+            paper = Color.parseColor("#F7F6F0");
+            paper2 = Color.parseColor("#F0EEE7");
+            paper3 = Color.parseColor("#E6E4DB");
+            ink = Color.parseColor("#16211C");
+            ink2 = Color.parseColor("#505955");
+            ink3 = Color.parseColor("#7E8783");
+            line = Color.parseColor("#D6D4CC");
+            lineSoft = Color.parseColor("#E1E0D8");
+            accent = Color.parseColor("#2C5C49");
+            accentInk = Color.parseColor("#FBFAF7");
+            accentSoft = Color.parseColor("#D6EDE2");
+            accentPressed = Color.parseColor("#234A3B");
+            danger = Color.parseColor("#B64036");
+            amber = Color.parseColor("#915C08");
+            violet = Color.parseColor("#665189");
+        }
+    }
+
+    /** 状态栏/导航栏跟随纸面；浅色配深色图标。 */
+    private void applyWindowChrome() {
+        try {
+            getWindow().setStatusBarColor(paper);
+            getWindow().setNavigationBarColor(paper);
+            View dv = getWindow().getDecorView();
+            int flags = dv.getSystemUiVisibility();
+            if (isNight()) {
+                flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            } else {
+                flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            }
+            if (Build.VERSION.SDK_INT >= 26) {
+                if (isNight()) {
+                    flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                } else {
+                    flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                }
+            }
+            dv.setSystemUiVisibility(flags);
+        } catch (Exception e) {
+            Log.w(TAG, "window chrome", e);
+        }
+    }
+
+    private GradientDrawable box(int fill, int stroke, float radiusDp) {
+        GradientDrawable d = new GradientDrawable();
+        d.setShape(GradientDrawable.RECTANGLE);
+        d.setColor(fill);
+        d.setCornerRadius(dp(radiusDp));
+        if (stroke != 0) {
+            d.setStroke(dp(1), stroke);
+        }
+        return d;
+    }
+
+    private GradientDrawable dotDrawable(int color) {
+        GradientDrawable d = new GradientDrawable();
+        d.setShape(GradientDrawable.OVAL);
+        d.setColor(color);
+        return d;
+    }
+
+    private TextView text(String s, float sizeSp, int color, Typeface tf) {
+        TextView t = new TextView(this);
+        t.setText(s);
+        t.setTextSize(sizeSp);
+        t.setTextColor(color);
+        t.setTypeface(tf);
+        t.setIncludeFontPadding(false);
+        return t;
+    }
+
+    private TextView labelView(String s) {
+        TextView t = text(s, 11, ink3, Typeface.MONOSPACE);
+        t.setLetterSpacing(0.06f);
+        return t;
+    }
+
+    /** 路径印章：1dp 描边 + 11sp 等宽，颜色 + 边框 + 文字三重编码。 */
+    private TextView stamp(String s, int color) {
+        TextView t = text(s, 11, color, Typeface.MONOSPACE);
+        t.setLetterSpacing(0.06f);
+        t.setGravity(Gravity.CENTER);
+        t.setBackground(box(Color.TRANSPARENT, color, 3));
+        t.setPadding(dp(6), 0, dp(6), 0);
+        return t;
+    }
+
+    private Button baseButton(String s) {
+        Button b = new Button(this);
+        b.setText(s);
+        b.setTextSize(13);
+        b.setAllCaps(false);
+        b.setTypeface(Typeface.DEFAULT);
+        b.setIncludeFontPadding(false);
+        b.setGravity(Gravity.CENTER);
+        b.setPadding(dp(12), 0, dp(12), 0);
+        b.setMinHeight(0);
+        b.setMinimumHeight(0);
+        b.setMinWidth(0);
+        b.setMinimumWidth(0);
+        b.setElevation(0);
+        b.setStateListAnimator(null);
+        return b;
+    }
+
+    /** 主操作：accent 实底 + 圆角 8，按下加深，禁用转纸灰。 */
+    private Button filledBtn(String s) {
+        Button b = baseButton(s);
+        StateListDrawable sl = new StateListDrawable();
+        sl.addState(new int[]{-android.R.attr.state_enabled}, box(paper3, lineSoft, 8));
+        sl.addState(new int[]{android.R.attr.state_pressed}, box(accentPressed, 0, 8));
+        sl.addState(new int[]{}, box(accent, 0, 8));
+        b.setBackground(sl);
+        b.setTextColor(new ColorStateList(
+                new int[][]{{-android.R.attr.state_enabled}, {}},
+                new int[]{ink3, accentInk}));
+        return b;
+    }
+
+    /** 次操作：纸面底 + 1dp line 描边。 */
+    private Button outlineBtn(String s) {
+        Button b = baseButton(s);
+        StateListDrawable sl = new StateListDrawable();
+        sl.addState(new int[]{-android.R.attr.state_enabled}, box(paper2, lineSoft, 8));
+        sl.addState(new int[]{android.R.attr.state_pressed}, box(paper3, line, 8));
+        sl.addState(new int[]{}, box(paper, line, 8));
+        b.setBackground(sl);
+        b.setTextColor(new ColorStateList(
+                new int[][]{{-android.R.attr.state_enabled}, {}},
+                new int[]{ink3, ink}));
+        return b;
+    }
+
+    private EditText input(EditText e, String hint) {
+        e.setHint(hint);
+        e.setHintTextColor(ink3);
+        e.setTextColor(ink);
+        e.setTextSize(13);
+        e.setSingleLine(true);
+        e.setIncludeFontPadding(false);
+        e.setBackground(box(paper, line, 8));
+        e.setPadding(dp(12), 0, dp(12), 0);
+        return e;
+    }
+
+    private LinearLayout card(String titleText) {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setPadding(dp(14), dp(14), dp(14), dp(16));
+        c.setBackground(box(paper2, line, 8));
+        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        titleLp.bottomMargin = dp(10);
+        c.addView(labelView(titleText), titleLp);
+        return c;
+    }
+
+    private void addCard(LinearLayout root, LinearLayout card) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(MATCH, WRAP);
+        p.topMargin = dp(18);
+        root.addView(card, p);
+    }
+
+    private LinearLayout.LayoutParams fullRow() {
+        return fullRow(0);
+    }
+
+    private LinearLayout.LayoutParams fullRow(int topMarginDp) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(MATCH, WRAP);
+        p.topMargin = dp(topMarginDp);
+        return p;
+    }
+
+    /** 两枚等宽按钮并排，高 44dp。 */
+    private LinearLayout row2(View a, View b) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.addView(a, new LinearLayout.LayoutParams(0, dp(44), 1f));
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(44), 1f);
+        p.leftMargin = dp(8);
+        row.addView(b, p);
+        return row;
+    }
+
+    /** 台账/状态行：12sp、数字等宽；含失败/错误/拒绝的句子整行转 danger。 */
+    private class Ledger extends TextView {
+        private final int normal;
+        private TextView badge;
+
+        Ledger(float sizeSp, int normalColor) {
+            super(MainActivity.this);
+            normal = normalColor;
+            setTextSize(sizeSp);
+            setTextColor(normalColor);
+            setIncludeFontPadding(false);
+            setLineSpacing(dp(4), 1f);
+        }
+
+        void bindBadge(TextView b) {
+            badge = b;
+        }
+
+        @Override
+        public void setText(CharSequence cs, BufferType type) {
+            String s = cs == null ? "" : cs.toString();
+            boolean bad = s.contains("失败") || s.contains("错误") || s.contains("拒绝");
+            setTextColor(bad ? danger : normal);
+            if (badge != null) {
+                badge.setVisibility(bad ? VISIBLE : GONE);
+            }
+            super.setText(monoDigits(s), BufferType.NORMAL);
+        }
+    }
+
+    private static final Pattern NUMBERS =
+            Pattern.compile("[0-9][0-9A-Fa-f.:x]*[0-9A-Fa-f]|[0-9]");
+
+    /** 把数字/十六进制/地址片段套上等宽字形（对齐用）。 */
+    private static CharSequence monoDigits(String s) {
+        SpannableString out = new SpannableString(s);
+        Matcher m = NUMBERS.matcher(s);
+        while (m.find()) {
+            out.setSpan(new TypefaceSpan("monospace"), m.start(), m.end(),
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        return out;
+    }
+
+    /** 接收中 / 已暂停：圆点颜色 + 呼吸（1.6s 周期，仅此一处动效）。 */
+    private void setRunning(boolean running) {
+        receiverRunning = running;
+        if (recvStateText != null) {
+            recvStateText.setText(running ? "接收中" : "已暂停");
+            recvStateText.setTextColor(running ? accent : ink2);
+        }
+        if (recvDot != null) {
+            recvDot.setBackground(dotDrawable(running ? accent : ink3));
+            recvDot.setAlpha(1f);
+        }
+        if (recvChip != null) {
+            recvChip.setBackground(box(running ? accentSoft : Color.TRANSPARENT, 0, 99));
+        }
+        if (running) {
+            startDotPulse();
+        } else {
+            stopDotPulse();
+        }
+    }
+
+    private void startDotPulse() {
+        if (dotAnimator != null) {
+            dotAnimator.cancel();
+        }
+        dotAnimator = ValueAnimator.ofFloat(1f, 0.55f);
+        dotAnimator.setDuration(800);
+        dotAnimator.setRepeatMode(ValueAnimator.REVERSE);
+        dotAnimator.setRepeatCount(ValueAnimator.INFINITE);
+        dotAnimator.setInterpolator(new AccelerateDecelerateInterpolator());
+        dotAnimator.addUpdateListener(a -> {
+            if (recvDot != null) {
+                recvDot.setAlpha((Float) a.getAnimatedValue());
+            }
+        });
+        dotAnimator.start();
+    }
+
+    private void stopDotPulse() {
+        if (dotAnimator != null) {
+            dotAnimator.cancel();
+            dotAnimator = null;
+        }
+        if (recvDot != null) {
+            recvDot.setAlpha(1f);
+        }
+    }
+
+    /** startReceiver 返回 host:port，只取端口显示。 */
+    private void showPort(String addr) {
+        String port = "";
+        if (addr != null) {
+            int i = addr.lastIndexOf(':');
+            if (i >= 0) {
+                port = addr.substring(i + 1).trim();
+            }
+        }
+        if (portText != null) {
+            portText.setText(port.isEmpty() ? "端口 —" : "端口 " + port);
+        }
+    }
+
+    /** 顶部展示本机设备 ID 前 12 位（与配对 URI 里的一致）。 */
+    private void loadDeviceId() {
+        new Thread(() -> {
+            try {
+                File dir = new File(getExternalFilesDir(null), "received");
+                String id = Mobile.deviceIDFor(new File(dir, "device.key").getAbsolutePath());
+                final String shown = id == null ? "" : (id.length() > 12 ? id.substring(0, 12) : id);
+                ui.post(() -> {
+                    if (idText != null && !shown.isEmpty()) {
+                        idText.setText("ID " + shown);
+                    }
+                });
+            } catch (Exception e) {
+                Log.w(TAG, "deviceIDFor", e);
+            }
+        }).start();
     }
 
     private String defaultName() {
@@ -396,9 +822,10 @@ public class MainActivity extends Activity {
                 File dir = new File(getExternalFilesDir(null), "received");
                 String addr = Mobile.startReceiver(name, dir.getAbsolutePath(), lanHint());
                 ui.post(() -> {
-                    receiverRunning = true;
+                    setRunning(true);
                     stopBtn.setEnabled(true);
                     startBtn.setEnabled(true);
+                    showPort(addr);
                     status.setText("正在接收：" + addr + "\n收到：" + dir.getAbsolutePath());
                     acquireMulticastLock();
                     startKeepAlive("正在接收，端口 " + addr);
@@ -508,7 +935,7 @@ public class MainActivity extends Activity {
                 ui.post(() -> {
                     relayBtn.setEnabled(true);
                     stopBtn.setEnabled(true);
-                    receiverRunning = true;
+                    setRunning(true);
                     relayInfo.setText("中继接收中\n设备 ID：" + id
                             + "\n配对文件：" + key.getAbsolutePath() + ".uri"
                             + "\n（把该文件拷到电脑，用 ft pair --add 导入）");
@@ -549,7 +976,7 @@ public class MainActivity extends Activity {
                 ui.post(() -> {
                     relayBtn.setEnabled(true);
                     stopBtn.setEnabled(true);
-                    receiverRunning = true;
+                    setRunning(true);
                     relayInfo.setText("接收中（自动选路）\n设备 ID：" + id
                             + "\n配对 URI 文件：" + key.getAbsolutePath() + ".uri");
                     status.setText("等待发送方（局域网 / 打洞 / 中继自动）…");
@@ -605,7 +1032,7 @@ public class MainActivity extends Activity {
                 Log.e(TAG, "stopReceiver", e);
             }
             ui.post(() -> {
-                receiverRunning = false;
+                setRunning(false);
                 status.setText("已停止");
                 releaseMulticastLock();
                 stopKeepAlive();
@@ -863,7 +1290,7 @@ public class MainActivity extends Activity {
                 ui.post(() -> {
                     punchBtn.setEnabled(true);
                     stopBtn.setEnabled(true);
-                    receiverRunning = true;
+                    setRunning(true);
                     punchInfo.setText("打洞接收中 设备 ID：" + id);
                     status.setText("等待对方打洞…");
                     startKeepAlive("打洞接收中");
@@ -958,6 +1385,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        stopDotPulse();
         releaseMulticastLock();
         super.onDestroy();
     }
