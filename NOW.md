@@ -1,6 +1,6 @@
 # NOW.md — 当前状态
 
-> 更新于 2026-11-08。接续任务先读这里，再按 `PROJECT_INDEX.md` 取需要的资料。
+> 更新于 2026-11-11。接续任务先读这里，再按 `PROJECT_INDEX.md` 取需要的资料。
 
 ## 当前目标
 
@@ -225,3 +225,13 @@ M5 剩余：无（G5 已出，2026-11-08 收尾记录见文末）。
 
 - [x] 自动部分：build/vet/test 全通过；CLI 局域网 15 ms、中继 3367 ms、Web 伪装页 200/未解锁 404、`/metrics` 正常；报告 `evidence/stage3/20261109-2035-g9-report.md`
 - [ ] 需人工：手机热点下 App 一键收发（自动竞速）、Windows 安装包双击安装/卸载（M10 重打包后做）
+
+## M10 界面重做（2026-11-11）
+
+- [x] 设计令牌 `design/tokens.md`（三端单一来源）+ `docs/context/design.md` §15；拖动小窗按用户指示暂停（`git stash` 保留，未恢复）。
+- [x] 桌面 `cmd/ft-desktop/mainwin.go` 重做（+1147/−169）：纸墨配色（读 `AppsUseLightTheme` 取深/浅）、衬线标题、等宽数字、路径印章（LAN/打洞/中继/失败，颜色+边框+文字三重编码）、台账列（时间/方向/对端/文件/大小/用时/路径）、接收呼吸点（`WM_TIMER` 1600 ms 混色，仅重画胶囊）、暂停态；窗口 880×520、最小 720×420、DPI 自适应；拖放/选择文件/暂停/打开目录/设备选中全部保留。`go vet ./...` 静默。截图 `evidence/stage3/20261111-1350-m10-mainwin.png`、`-mainwin-paused.png`、`-ledger-demo.png`。
+- [x] 安卓 `MainActivity.java` 重做（+553/−125，1392 行）：同套令牌、路径印章、Ledger 台账行（数字等宽）、接收呼吸点、空状态、深浅色；APK 20,312,538 B（`android/build/ft-debug.apk`，dex 已核对新文案）。真机截图待补（adb 在当前沙箱无法启动 daemon）。
+- [x] 浏览器三页：`server/assets/app.html`、`server/assets/index.html`（伪装页仍无「传文件」字样）、`core/lanweb/page.go`；深色模式、无 CDN/外链、JS 逐字节不变（仅「局域网直连→LAN」「服务器中继→中继」两处标签缩写）。截图 `evidence/stage3/20261111-1335-m10-web-decoy.jpg`、`-1336-m10-web-app.jpg`、`-1338-m10-lanweb.jpg`。
+- [x] 校验：`go build ./...`、`go vet ./...`、`go test -count=1 ./...` 全过（server 17.9 s）；日志 `evidence/stage3/20261111-1355-m10.log`。
+- [x] 报告：`evidence/stage3/20261111-1400-g10-report.md`（G10 判据对照与偏离说明）。
+- [ ] 待真机：安卓截图（需插手机；沙箱内 adb 起不来）。
