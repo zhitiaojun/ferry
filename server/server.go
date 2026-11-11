@@ -3,7 +3,6 @@
 // holds no pairing data.
 package server
 
-
 import (
 	"context"
 	"crypto/rand"
@@ -198,16 +197,16 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	runtime.ReadMemStats(&ms)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"ok":           true,
-		"version":      buildVersion,
-		"uptime_s":     int64(time.Since(s.start).Seconds()),
-		"peers":        peers,
-		"relay_rooms":  rooms,
-		"relay_bytes":  s.relayBytes.Load(),
-		"goroutines":   runtime.NumGoroutine(),
-		"heap_mb":      float64(ms.HeapAlloc) / (1 << 20),
-		"sys_mb":       float64(ms.Sys) / (1 << 20),
-		"num_gc":       ms.NumGC,
+		"ok":          true,
+		"version":     buildVersion,
+		"uptime_s":    int64(time.Since(s.start).Seconds()),
+		"peers":       peers,
+		"relay_rooms": rooms,
+		"relay_bytes": s.relayBytes.Load(),
+		"goroutines":  runtime.NumGoroutine(),
+		"heap_mb":     float64(ms.HeapAlloc) / (1 << 20),
+		"sys_mb":      float64(ms.Sys) / (1 << 20),
+		"num_gc":      ms.NumGC,
 	})
 }
 

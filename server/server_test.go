@@ -2,9 +2,9 @@ package server
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
-	"encoding/hex"
 	"net/http/httptest"
 	"strings"
 	"testing"

@@ -18,20 +18,20 @@ import (
 // focus (WS_EX_NOACTIVATE) so the drag itself is not disturbed.
 
 var (
-	procSetTimer        = user32.NewProc("SetTimer")
-	procKillTimer       = user32.NewProc("KillTimer")
-	procScreenToClient  = user32.NewProc("ScreenToClient")
-	procRoundRect       = gdi32.NewProc("RoundRect")
-	procCreatePen       = gdi32.NewProc("CreatePen")
-	procRectangle       = gdi32.NewProc("Rectangle")
-	procCreateRoundRgn  = gdi32.NewProc("CreateRoundRectRgn")
-	procSetWindowRgn    = user32.NewProc("SetWindowRgn")
-	procSetWinEventHook = user32.NewProc("SetWinEventHook")
-	procUnhookWinEvent  = user32.NewProc("UnhookWinEvent")
-	procGetClassNameW   = user32.NewProc("GetClassNameW")
-	procIsWindow        = user32.NewProc("IsWindow")
+	procSetTimer         = user32.NewProc("SetTimer")
+	procKillTimer        = user32.NewProc("KillTimer")
+	procScreenToClient   = user32.NewProc("ScreenToClient")
+	procRoundRect        = gdi32.NewProc("RoundRect")
+	procCreatePen        = gdi32.NewProc("CreatePen")
+	procRectangle        = gdi32.NewProc("Rectangle")
+	procCreateRoundRgn   = gdi32.NewProc("CreateRoundRectRgn")
+	procSetWindowRgn     = user32.NewProc("SetWindowRgn")
+	procSetWinEventHook  = user32.NewProc("SetWinEventHook")
+	procUnhookWinEvent   = user32.NewProc("UnhookWinEvent")
+	procGetClassNameW    = user32.NewProc("GetClassNameW")
+	procIsWindow         = user32.NewProc("IsWindow")
 	procGetAsyncKeyState = user32.NewProc("GetAsyncKeyState")
-	procDragQueryPoint  = shell32.NewProc("DragQueryPoint")
+	procDragQueryPoint   = shell32.NewProc("DragQueryPoint")
 )
 
 const (
@@ -40,20 +40,20 @@ const (
 	wmPanelShow = wmApp + 20
 	wmPanelHide = wmApp + 21
 
-	wsExNoActivate  = 0x08000000
+	wsExNoActivate   = 0x08000000
 	swShowNoActivate = 4
-	swpNoActivate   = 0x0010
-	swpShowWindow   = 0x0040
-	hwndTopmost     = ^uintptr(0)
+	swpNoActivate    = 0x0010
+	swpShowWindow    = 0x0040
+	hwndTopmost      = ^uintptr(0)
 
 	// Design pixels at 96 dpi; scaled by the monitor DPI at creation time.
 	// The panel has two shapes: a small "drop here" window that appears when a
 	// drag starts, and the three-device picker it grows into once the pointer
 	// reaches it. Both are pinned to the bottom-right corner of the work area.
-	panelW   = 300
-	panelH   = 180
-	compactW = 196
-	compactH = 60
+	panelW    = 300
+	panelH    = 180
+	compactW  = 196
+	compactH  = 60
 	anchorGap = 24
 
 	panelTimerID = 7
@@ -68,22 +68,22 @@ const (
 )
 
 type dropPanel struct {
-	hwnd   syscall.Handle
-	app    *app
-	peers  []client.Peer
-	active int
-	hover  int
+	hwnd     syscall.Handle
+	app      *app
+	peers    []client.Peer
+	active   int
+	hover    int
 	shown    bool
 	expanded bool
 	outside  int
 	dragGone int
 	buttonUp int
 	pw, ph   int32
-	dpi    int32
-	timer  uintptr
-	fontLg syscall.Handle
-	fontSm syscall.Handle
-	fontNm syscall.Handle
+	dpi      int32
+	timer    uintptr
+	fontLg   syscall.Handle
+	fontSm   syscall.Handle
+	fontNm   syscall.Handle
 }
 
 var thePanel *dropPanel
