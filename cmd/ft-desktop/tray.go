@@ -135,13 +135,14 @@ func findTrayWindow() syscall.Handle {
 func (t *tray) createWindow() bool {
 	hInst := getModuleHandle()
 	cls := utf16Ptr("ftTrayWnd")
-	icon, _, _ := procLoadIconW.Call(0, idiApplication)
+	icon := loadAppIcon(0)
 	cursor, _, _ := procLoadCursorW.Call(0, idcArrow)
 	wc := wndClassExW{
 		cbSize:        uint32(unsafe.Sizeof(wndClassExW{})),
 		lpfnWndProc:   syscall.NewCallback(trayWndProc),
 		hInstance:     hInst,
-		hIcon:         syscall.Handle(icon),
+		hIcon:         icon,
+		hIconSm:       icon,
 		hCursor:       syscall.Handle(cursor),
 		lpszClassName: cls,
 	}
@@ -164,13 +165,12 @@ func (t *tray) createWindow() bool {
 var trayHandle *tray
 
 func (t *tray) addIcon() {
-	icon, _, _ := procLoadIconW.Call(0, idiApplication)
 	nid := notifyIconData{
 		hWnd:             t.hwnd,
 		uID:              1,
 		uFlags:           nifMessage | nifIcon | nifTip,
 		uCallbackMessage: wmTray,
-		hIcon:            syscall.Handle(icon),
+		hIcon:            loadAppIcon(32),
 	}
 	utf16Into(nid.szTip[:], "轻渡 Ferry：局域网接收中，右键菜单")
 	nid.cbSize = uint32(unsafe.Sizeof(nid))

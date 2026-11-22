@@ -3,6 +3,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"syscall"
 	"unsafe"
 )
@@ -28,6 +30,7 @@ var (
 	procGetModuleHandleW         = kernel32.NewProc("GetModuleHandleW")
 	procLoadCursorW              = user32.NewProc("LoadCursorW")
 	procLoadIconW                = user32.NewProc("LoadIconW")
+	procLoadImageW               = user32.NewProc("LoadImageW")
 	procSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
 	procGetCursorPos             = user32.NewProc("GetCursorPos")
 	procCreatePopupMenu          = user32.NewProc("CreatePopupMenu")
@@ -224,6 +227,43 @@ func messageBox(title, text string) {
 func shellOpen(path string) {
 	op := utf16Ptr("open")
 	procShellExecuteW.Call(0, uintptr(unsafe.Pointer(op)), uintptr(unsafe.Pointer(utf16Ptr(path))), 0, 0, swShow)
+}
+
+// loadAppIcon loads the bundled ft.ico from ..\menu\ft.ico or beside the
+// executable, falling back to the system default application icon.
+func loadAppIcon(size int32) syscall.Handle {
+	const (
+		imageIcon      = 1
+		lrLoadFromFile = 0x0010
+		lrDefaultSize  = 0x0040
+	)
+	flags := uintptr(lrLoadFromFile)
+	if size == 0 {
+		flags |= lrDefaultSize
+	}
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		for _, p := range []string{
+			filepath.Join(dir, "..", "menu", "ft.ico"),
+			filepath.Join(dir, "ft.ico"),
+		} {
+			if _, serr := os.Stat(p); serr == nil {
+				h, _, _ := procLoadImageW.Call(
+					0,
+					uintptr(unsafe.Pointer(utf16Ptr(p))),
+					imageIcon,
+					uintptr(size),
+					uintptr(size),
+					flags,
+				)
+				if h != 0 {
+					return syscall.Handle(h)
+				}
+			}
+		}
+	}
+	h, _, _ := procLoadIconW.Call(0, idiApplication)
+	return syscall.Handle(h)
 }
 
 // setDPIAware makes the process per-monitor DPI aware. Without it Windows

@@ -325,7 +325,8 @@ func openMainWindow(a *app) {
 	hInst := getModuleHandle()
 	cls := utf16Ptr(mainClass)
 	cursor, _, _ := procLoadCursorW.Call(0, idcArrow)
-	icon, _, _ := procLoadIconW.Call(0, idiApplication)
+	icon := loadAppIcon(0)
+	smallIcon := loadAppIcon(16)
 	// The class background is the paper colour so the first frame does not
 	// flash the system window colour; every pixel is drawn again in WM_PAINT.
 	bg, _, _ := procCreateBrush.Call(uintptr(pal.paper))
@@ -333,7 +334,8 @@ func openMainWindow(a *app) {
 		cbSize:        uint32(unsafe.Sizeof(wndClassExW{})),
 		lpfnWndProc:   syscall.NewCallback(mainWndProc),
 		hInstance:     hInst,
-		hIcon:         syscall.Handle(icon),
+		hIcon:         icon,
+		hIconSm:       smallIcon,
 		hCursor:       syscall.Handle(cursor),
 		lpszClassName: cls,
 		hbrBackground: syscall.Handle(bg),
