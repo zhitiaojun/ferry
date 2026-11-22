@@ -453,7 +453,7 @@ func describeFiles(paths []string) ([]signaling.FileInfo, int64, error) {
 }
 
 func openLogger(dir string) *logging.Logger {
-	f, err := os.OpenFile(filepath.Join(dir, "events.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(stateLogPath(dir, "events.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return nil
 	}

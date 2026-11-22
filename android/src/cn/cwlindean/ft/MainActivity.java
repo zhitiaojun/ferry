@@ -1,45 +1,60 @@
 package cn.cwlindean.ft;
 
+import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.ContentValues;
 import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
+import android.content.res.Configuration;
 import android.database.Cursor;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.ColorFilter;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.PixelFormat;
+import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.net.Uri;
 import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
-import android.text.InputType;
 import android.os.Looper;
+import android.provider.MediaStore;
 import android.provider.OpenableColumns;
+import android.provider.Settings;
+import android.text.Editable;
+import android.text.InputType;
+import android.text.TextUtils;
+import android.text.TextWatcher;
 import android.util.Log;
+import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
+import android.view.animation.AccelerateDecelerateInterpolator;
+import android.webkit.MimeTypeMap;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
-import android.animation.ValueAnimator;
-import android.content.res.ColorStateList;
-import android.content.res.Configuration;
-import android.graphics.Color;
-import android.graphics.Typeface;
-import android.graphics.drawable.GradientDrawable;
-import android.graphics.drawable.StateListDrawable;
-import android.text.SpannableString;
-import android.text.Spanned;
-import android.text.style.TypefaceSpan;
-import android.view.Gravity;
-import android.view.ViewGroup;
-import android.view.animation.AccelerateDecelerateInterpolator;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -47,80 +62,119 @@ import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.InterfaceAddress;
 import java.net.NetworkInterface;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.regex.Pattern;
 
 import mobile.Mobile;
 
 /**
- * Minimal M2 shell: start a LAN receiver, discover the PC, send files picked
- * from the system file picker. The transport itself lives in the Go AAR.
+ * Material Design 3 UI shell for ft. Transport, discovery, relay signaling and
+ * crypto identity live in the Go AAR (core/mobile).
  */
 public class MainActivity extends Activity {
     private static final String TAG = "ft";
+    private static final String SIGNAL_URL = "wss://ft.cwlindean.cn/signal";
     private static final int PICK_FILES = 42;
     private static final int PICK_PAIR_FILE = 43;
+    private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
+    private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
+    private static final Pattern HEX64 = Pattern.compile("^[0-9a-fA-F]{64}$");
 
-    private TextView status;
-    private DeviceList deviceList;
-    private EditText nameField;
-    private EditText peerField;
-    private Button startBtn;
-    private Button stopBtn;
-    private Button discoverBtn;
-    private Button sendBtn;
-    private Button relayBtn;
-    private Button webBtn;
-    private TextView webInfo;
-    private TextView relayInfo;
-    private EditText pairField;
-    private EditText pakeCodeField;
-    private EditText pakePeerField;
-    private TextView pakeInfo;
-    private Button punchBtn;
-    private Button punchSendBtn;
-    private TextView punchInfo;
-    private boolean pickPunch;
-    // sharedUris holds files handed over by another app through ACTION_SEND,
-    // so "分享到 ft" lands in the same send buttons as an in-app pick.
-    private List<Uri> sharedUris;
+    // MD3 tonal roles (Dynamic on Android 12+, refined sage palette fallback).
+    private int cPrimary, cOnPrimary, cPrimaryContainer, cOnPrimaryContainer;
+    private int cSecondaryContainer, cOnSecondaryContainer;
+    private int cTertiaryContainer, cOnTertiaryContainer;
+    private int cSurface, cSurfaceContainerLow, cSurfaceContainer, cSurfaceContainerHigh;
+    private int cOnSurface, cOnSurfaceVariant, cOutline, cOutlineVariant;
+    private int cError, cOnError, cErrorContainer, cOnErrorContainer;
+    private int cWarn, cWarnContainer, cRipple;
 
+    // App state
     private final Handler ui = new Handler(Looper.getMainLooper());
+    private final ExecutorService ioPool = Executors.newSingleThreadExecutor();
     private WifiManager.MulticastLock multicastLock;
     private String deviceName;
-    private boolean receiverRunning;
-
-    // ---- 设计令牌（design/tokens.md）：浅色一列 / 深色一列，按系统 uiMode 取一组 ----
-    private int paper, paper2, paper3, ink, ink2, ink3, line, lineSoft;
-    private int accent, accentInk, accentSoft, accentPressed, danger, amber, violet;
-
-    private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
-    /** 曾经开过接收：状态胶囊据此区分“未启动”与“已暂停”。 */
+    private String fullDeviceId = "";
+    private String webShareUrl = "";
+    private boolean recvRunning;
+    private boolean webRunning;
     private boolean recvEverStarted;
-    private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
+    private int activeTab;
+    private String lanPort = "";
+    private List<Uri> sharedUris;
+    private final List<PeerEntry> pairedEntries = new ArrayList<>();
+    private final List<PeerEntry> lanEntries = new ArrayList<>();
+    private final List<ReceivedEntry> recentEntries = new ArrayList<>();
+    private String lanNote = "";
 
-    // ---- 顶部状态：接收中呼吸点 / 端口 / 设备 ID 前 12 位 ----
-    private LinearLayout recvChip;
-    private View recvDot;
-    private TextView recvStateText;
-    private TextView portText;
-    private TextView idText;
-    private TextView failStamp;
+    // Top bar & bottom nav
+    private LinearLayout topChip;
+    private View topDot;
+    private TextView topStateText;
+    private TextView topIdChip;
+    private final LinearLayout[] navItems = new LinearLayout[3];
+    private final View[] navPills = new View[3];
+    private final ImageView[] navIcons = new ImageView[3];
+    private final TextView[] navLabels = new TextView[3];
+    private View panelSend, panelRecv, panelPair;
     private ValueAnimator dotAnimator;
 
-    // ---- 三段式页签：发送 / 接收 / 配对（切换只改 visibility） ----
-    private final TextView[] tabs = new TextView[3];
-    private LinearLayout panelSend, panelRecv, panelPair;
-    private int activeTab;
+    // Send tab views
+    private TextView targetTitleView;
+    private TextView targetSubView;
+    private TextView shareBannerView;
+    private Button sendPickBtn;
+    private Button sendClipBtn;
+    private LinearLayout sendResultCard;
+    private TextView sendResultBadge;
+    private TextView sendResultText;
+    private Button discoverBtn;
+    private DeviceList deviceList;
+    private EditText peerField;
+
+    // Receive tab views
+    private LinearLayout recvHeroCard;
+    private TextView recvHeroTitle;
+    private TextView recvHeroSub;
+    private Button recvToggleBtn;
+    private Button webToggleBtn;
+    private TextView webUrlView;
+    private LinearLayout recentListView;
+
+    // Pair tab views
+    private EditText nameField;
+    private TextView pairFullIdView;
+    private EditText pakeCodeField;
+    private EditText pakePeerField;
+    private TextView pakeInfoView;
+    private EditText pairUriField;
+
+    private final Runnable pollTask = new Runnable() {
+        @Override
+        public void run() {
+            pollReceivedOnce();
+            if (recvRunning) {
+                ui.postDelayed(this, 1500);
+            }
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        loadTokens();
+        loadMd3Tokens();
         applyWindowChrome();
-        deviceName = defaultName();
+        migrateLegacyState();
+        deviceName = loadSavedName();
         setContentView(buildUi());
+
         if (Build.VERSION.SDK_INT >= 33) {
             requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 7);
         }
@@ -128,7 +182,16 @@ public class MainActivity extends Activity {
         applyDebugPeerId();
         prefillLastPeer();
         loadDeviceId();
+        loadPairedPeers();
+        loadRecentState();
+        sweepLeftoverInbox();
         handleShareIntent(getIntent());
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        pollReceivedOnce();
     }
 
     @Override
@@ -138,7 +201,1132 @@ public class MainActivity extends Activity {
         handleShareIntent(intent);
     }
 
-    // handleShareIntent accepts files from other apps' share sheets.
+    @Override
+    protected void onDestroy() {
+        ui.removeCallbacks(pollTask);
+        stopDotPulse();
+        releaseMulticastLock();
+        ioPool.shutdownNow();
+        super.onDestroy();
+    }
+
+    // ================= App Directories (Key Isolation) =================
+
+    /** Internal private dir holding device.key, paired.json, logs, and recent index. */
+    private File stateDir() {
+        File d = new File(getFilesDir(), "state");
+        if (!d.exists()) {
+            d.mkdirs();
+        }
+        return d;
+    }
+
+    /** Internal staging dir for incoming Go transfers before moving to Download/ft. */
+    private File inboxDir() {
+        File d = new File(getFilesDir(), "inbox");
+        if (!d.exists()) {
+            d.mkdirs();
+        }
+        return d;
+    }
+
+    /** Separate directory for LAN Web Share so private keys are never exposed. */
+    private File webShareDir() {
+        File d = new File(getFilesDir(), "webshare");
+        if (!d.exists()) {
+            d.mkdirs();
+        }
+        return d;
+    }
+
+    private File keyFile() {
+        return new File(stateDir(), "device.key");
+    }
+
+    private File pairedFile() {
+        return new File(stateDir(), "paired.json");
+    }
+
+    private File recentFile() {
+        return new File(stateDir(), "recent.json");
+    }
+
+    /** Preserves existing identity/pairings from older v0.8 external received/ layout. */
+    private void migrateLegacyState() {
+        File ext = getExternalFilesDir(null);
+        if (ext == null) {
+            return;
+        }
+        File legacyDir = new File(ext, "received");
+        copyIfMissing(new File(legacyDir, "device.key"), keyFile());
+        copyIfMissing(new File(legacyDir, "paired.json"), pairedFile());
+    }
+
+    private static void copyIfMissing(File src, File dst) {
+        if (!src.isFile() || dst.isFile()) {
+            return;
+        }
+        try (InputStream in = new FileInputStream(src);
+             OutputStream out = new FileOutputStream(dst)) {
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                out.write(buf, 0, n);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "migrate " + src.getName(), e);
+        }
+    }
+
+    // ================= MD3 Tokens & Chrome =================
+
+    private boolean isNight() {
+        return (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
+                == Configuration.UI_MODE_NIGHT_YES;
+    }
+
+    private int sysColor(int resId, int fallback) {
+        if (Build.VERSION.SDK_INT >= 31) {
+            try {
+                return getColor(resId);
+            } catch (Exception ignored) {
+            }
+        }
+        return fallback;
+    }
+
+    private void loadMd3Tokens() {
+        boolean night = isNight();
+        if (Build.VERSION.SDK_INT >= 31) {
+            if (night) {
+                cPrimary = sysColor(android.R.color.system_accent1_200, 0xFF8CD6B1);
+                cOnPrimary = sysColor(android.R.color.system_accent1_800, 0xFF003824);
+                cPrimaryContainer = sysColor(android.R.color.system_accent1_700, 0xFF0A5138);
+                cOnPrimaryContainer = sysColor(android.R.color.system_accent1_100, 0xFFA8F2CC);
+                cSecondaryContainer = sysColor(android.R.color.system_accent2_700, 0xFF354B40);
+                cOnSecondaryContainer = sysColor(android.R.color.system_accent2_100, 0xFFCFE9DA);
+                cTertiaryContainer = sysColor(android.R.color.system_accent3_700, 0xFF2B4A58);
+                cOnTertiaryContainer = sysColor(android.R.color.system_accent3_100, 0xFFC4E7F8);
+                cSurface = sysColor(android.R.color.system_neutral1_900, 0xFF101512);
+                cSurfaceContainerLow = Color.parseColor("#181D1A");
+                cSurfaceContainer = Color.parseColor("#1C221E");
+                cSurfaceContainerHigh = Color.parseColor("#262D28");
+                cOnSurface = sysColor(android.R.color.system_neutral1_100, 0xFFE0E4E0);
+                cOnSurfaceVariant = sysColor(android.R.color.system_neutral2_200, 0xFFBFC9C2);
+                cOutline = sysColor(android.R.color.system_neutral2_400, 0xFF89938C);
+                cOutlineVariant = sysColor(android.R.color.system_neutral2_700, 0xFF404943);
+            } else {
+                cPrimary = sysColor(android.R.color.system_accent1_600, 0xFF1D6B4E);
+                cOnPrimary = Color.WHITE;
+                cPrimaryContainer = sysColor(android.R.color.system_accent1_100, 0xFFA8F2CC);
+                cOnPrimaryContainer = sysColor(android.R.color.system_accent1_900, 0xFF002114);
+                cSecondaryContainer = sysColor(android.R.color.system_accent2_100, 0xFFCFE9DA);
+                cOnSecondaryContainer = sysColor(android.R.color.system_accent2_900, 0xFF0B1F16);
+                cTertiaryContainer = sysColor(android.R.color.system_accent3_100, 0xFFC4E7F8);
+                cOnTertiaryContainer = sysColor(android.R.color.system_accent3_900, 0xFF001F29);
+                cSurface = sysColor(android.R.color.system_neutral1_10, 0xFFF7FAF7);
+                cSurfaceContainerLow = sysColor(android.R.color.system_neutral1_50, 0xFFF0F5F0);
+                cSurfaceContainer = Color.parseColor("#E9EFEA");
+                cSurfaceContainerHigh = sysColor(android.R.color.system_neutral1_100, 0xFFE2E9E3);
+                cOnSurface = sysColor(android.R.color.system_neutral1_900, 0xFF181D1A);
+                cOnSurfaceVariant = sysColor(android.R.color.system_neutral2_700, 0xFF404943);
+                cOutline = sysColor(android.R.color.system_neutral2_500, 0xFF707973);
+                cOutlineVariant = sysColor(android.R.color.system_neutral2_200, 0xFFBFC9C2);
+            }
+        } else if (night) {
+            cPrimary = Color.parseColor("#8CD6B1");
+            cOnPrimary = Color.parseColor("#003824");
+            cPrimaryContainer = Color.parseColor("#0A5138");
+            cOnPrimaryContainer = Color.parseColor("#A8F2CC");
+            cSecondaryContainer = Color.parseColor("#354B40");
+            cOnSecondaryContainer = Color.parseColor("#CFE9DA");
+            cTertiaryContainer = Color.parseColor("#2B4A58");
+            cOnTertiaryContainer = Color.parseColor("#C4E7F8");
+            cSurface = Color.parseColor("#101512");
+            cSurfaceContainerLow = Color.parseColor("#181D1A");
+            cSurfaceContainer = Color.parseColor("#1C221E");
+            cSurfaceContainerHigh = Color.parseColor("#262D28");
+            cOnSurface = Color.parseColor("#E0E4E0");
+            cOnSurfaceVariant = Color.parseColor("#BFC9C2");
+            cOutline = Color.parseColor("#89938C");
+            cOutlineVariant = Color.parseColor("#404943");
+        } else {
+            cPrimary = Color.parseColor("#1D6B4E");
+            cOnPrimary = Color.WHITE;
+            cPrimaryContainer = Color.parseColor("#A8F2CC");
+            cOnPrimaryContainer = Color.parseColor("#002114");
+            cSecondaryContainer = Color.parseColor("#CFE9DA");
+            cOnSecondaryContainer = Color.parseColor("#0B1F16");
+            cTertiaryContainer = Color.parseColor("#C4E7F8");
+            cOnTertiaryContainer = Color.parseColor("#001F29");
+            cSurface = Color.parseColor("#F7FAF7");
+            cSurfaceContainerLow = Color.parseColor("#EFF5F0");
+            cSurfaceContainer = Color.parseColor("#E8EFEA");
+            cSurfaceContainerHigh = Color.parseColor("#DFE8E2");
+            cOnSurface = Color.parseColor("#181D1A");
+            cOnSurfaceVariant = Color.parseColor("#404943");
+            cOutline = Color.parseColor("#707973");
+            cOutlineVariant = Color.parseColor("#BFC9C2");
+        }
+
+        if (night) {
+            cError = Color.parseColor("#FFB4AB");
+            cOnError = Color.parseColor("#690005");
+            cErrorContainer = Color.parseColor("#93000A");
+            cOnErrorContainer = Color.parseColor("#FFDAD6");
+            cWarn = Color.parseColor("#F4BF6A");
+            cWarnContainer = Color.parseColor("#4C3304");
+            cRipple = Color.parseColor("#28FFFFFF");
+        } else {
+            cError = Color.parseColor("#BA1A1A");
+            cOnError = Color.WHITE;
+            cErrorContainer = Color.parseColor("#FFDAD6");
+            cOnErrorContainer = Color.parseColor("#410002");
+            cWarn = Color.parseColor("#8A5600");
+            cWarnContainer = Color.parseColor("#FFE2B7");
+            cRipple = Color.parseColor("#1A000000");
+        }
+    }
+
+    private void applyWindowChrome() {
+        try {
+            getWindow().setStatusBarColor(cSurface);
+            getWindow().setNavigationBarColor(cSurfaceContainer);
+            View dv = getWindow().getDecorView();
+            int flags = dv.getSystemUiVisibility();
+            if (isNight()) {
+                flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            } else {
+                flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            }
+            if (Build.VERSION.SDK_INT >= 26) {
+                if (isNight()) {
+                    flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                } else {
+                    flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                }
+            }
+            dv.setSystemUiVisibility(flags);
+        } catch (Exception e) {
+            Log.w(TAG, "chrome", e);
+        }
+    }
+
+    // ================= Build MD3 Scaffold =================
+
+    private View buildUi() {
+        LinearLayout scaffold = new LinearLayout(this);
+        scaffold.setOrientation(LinearLayout.VERTICAL);
+        scaffold.setBackgroundColor(cSurface);
+
+        scaffold.addView(buildTopBar(), new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        ScrollView scroller = new ScrollView(this);
+        scroller.setFillViewport(true);
+        scroller.setVerticalScrollBarEnabled(false);
+
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(16), dp(4), dp(16), dp(20));
+
+        LinearLayout send = new LinearLayout(this);
+        send.setOrientation(LinearLayout.VERTICAL);
+        buildSendPanel(send);
+        panelSend = send;
+        content.addView(send, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        LinearLayout recv = new LinearLayout(this);
+        recv.setOrientation(LinearLayout.VERTICAL);
+        buildReceivePanel(recv);
+        panelRecv = recv;
+        content.addView(recv, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        LinearLayout pair = new LinearLayout(this);
+        pair.setOrientation(LinearLayout.VERTICAL);
+        buildPairPanel(pair);
+        panelPair = pair;
+        content.addView(pair, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        scroller.addView(content, new ScrollView.LayoutParams(MATCH, WRAP));
+        scaffold.addView(scroller, new LinearLayout.LayoutParams(MATCH, 0, 1f));
+
+        View divider = new View(this);
+        divider.setBackgroundColor(cOutlineVariant);
+        scaffold.addView(divider, new LinearLayout.LayoutParams(MATCH, Math.max(1, dp(0.5f))));
+
+        scaffold.addView(buildBottomNav(), new LinearLayout.LayoutParams(MATCH, dp(72)));
+
+        selectTab(0);
+        return scaffold;
+    }
+
+    private LinearLayout buildTopBar() {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(dp(20), dp(14), dp(16), dp(12));
+
+        TextView title = label("轻渡", 22, cOnSurface, true);
+        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        bar.addView(title, new LinearLayout.LayoutParams(WRAP, WRAP));
+
+        topIdChip = label("ID —", 11, cOnSurfaceVariant, false);
+        topIdChip.setTypeface(Typeface.MONOSPACE);
+        topIdChip.setPadding(dp(10), dp(5), dp(10), dp(5));
+        topIdChip.setBackground(ripple(roundBox(cSurfaceContainerHigh, 0, 99), 99));
+        topIdChip.setOnClickListener(v -> copyText("设备 ID", fullDeviceId, "已复制完整设备 ID"));
+        LinearLayout.LayoutParams idLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        idLp.leftMargin = dp(10);
+        bar.addView(topIdChip, idLp);
+
+        bar.addView(new View(this), new LinearLayout.LayoutParams(0, dp(1), 1f));
+
+        topChip = new LinearLayout(this);
+        topChip.setOrientation(LinearLayout.HORIZONTAL);
+        topChip.setGravity(Gravity.CENTER_VERTICAL);
+        topChip.setPadding(dp(10), dp(6), dp(12), dp(6));
+        topChip.setBackground(ripple(roundBox(cSurfaceContainerHigh, 0, 99), 99));
+        topChip.setOnClickListener(v -> selectTab(1));
+
+        topDot = new View(this);
+        topDot.setBackground(oval(cOnSurfaceVariant));
+        topChip.addView(topDot, new LinearLayout.LayoutParams(dp(8), dp(8)));
+
+        topStateText = label("未开启", 12, cOnSurfaceVariant, true);
+        LinearLayout.LayoutParams stLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        stLp.leftMargin = dp(6);
+        topChip.addView(topStateText, stLp);
+
+        bar.addView(topChip, new LinearLayout.LayoutParams(WRAP, WRAP));
+        return bar;
+    }
+
+    private LinearLayout buildBottomNav() {
+        LinearLayout nav = new LinearLayout(this);
+        nav.setOrientation(LinearLayout.HORIZONTAL);
+        nav.setBackgroundColor(cSurfaceContainer);
+        nav.setGravity(Gravity.CENTER_VERTICAL);
+
+        final String[] labels = {"发送", "接收", "设备"};
+        for (int i = 0; i < 3; i++) {
+            final int idx = i;
+            LinearLayout item = new LinearLayout(this);
+            item.setOrientation(LinearLayout.VERTICAL);
+            item.setGravity(Gravity.CENTER);
+            item.setClickable(true);
+            item.setFocusable(true);
+            item.setOnClickListener(v -> selectTab(idx));
+
+            LinearLayout pill = new LinearLayout(this);
+            pill.setGravity(Gravity.CENTER);
+            ImageView icon = new ImageView(this);
+            pill.addView(icon, new LinearLayout.LayoutParams(dp(20), dp(20)));
+            item.addView(pill, new LinearLayout.LayoutParams(dp(64), dp(32)));
+
+            TextView lbl = label(labels[i], 12, cOnSurfaceVariant, false);
+            LinearLayout.LayoutParams lLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+            lLp.topMargin = dp(4);
+            item.addView(lbl, lLp);
+
+            navItems[i] = item;
+            navPills[i] = pill;
+            navIcons[i] = icon;
+            navLabels[i] = lbl;
+            nav.addView(item, new LinearLayout.LayoutParams(0, MATCH, 1f));
+        }
+        return nav;
+    }
+
+    private void selectTab(int index) {
+        activeTab = index;
+        View[] panels = {panelSend, panelRecv, panelPair};
+        for (int i = 0; i < 3; i++) {
+            boolean on = i == index;
+            if (panels[i] != null) {
+                panels[i].setVisibility(on ? View.VISIBLE : View.GONE);
+            }
+            if (navPills[i] != null) {
+                navPills[i].setBackground(roundBox(on ? cSecondaryContainer : Color.TRANSPARENT, 0, 16));
+            }
+            if (navIcons[i] != null) {
+                navIcons[i].setImageDrawable(new NavIcon(i, on ? cOnSecondaryContainer : cOnSurfaceVariant));
+            }
+            if (navLabels[i] != null) {
+                navLabels[i].setTextColor(on ? cOnSurface : cOnSurfaceVariant);
+                navLabels[i].setTypeface(on
+                        ? Typeface.create("sans-serif-medium", Typeface.BOLD)
+                        : Typeface.DEFAULT);
+            }
+        }
+    }
+
+    // ================= Tab 0: Send =================
+
+    private void buildSendPanel(LinearLayout root) {
+        LinearLayout hero = md3Card(cSurfaceContainerLow, 24, 20, 20, 20, 20);
+        root.addView(hero, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        hero.addView(label("发往目标", 12, cOnSurfaceVariant, true),
+                new LinearLayout.LayoutParams(WRAP, WRAP));
+
+        targetTitleView = label("尚未选择接收设备", 18, cOnSurface, true);
+        LinearLayout.LayoutParams ttLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        ttLp.topMargin = dp(4);
+        hero.addView(targetTitleView, ttLp);
+
+        targetSubView = label("可在下方列表点击已配对或局域网设备", 12, cOnSurfaceVariant, false);
+        LinearLayout.LayoutParams tsLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        tsLp.topMargin = dp(3);
+        hero.addView(targetSubView, tsLp);
+
+        shareBannerView = label("", 12, cOnSecondaryContainer, true);
+        shareBannerView.setBackground(roundBox(cSecondaryContainer, 0, 12));
+        shareBannerView.setPadding(dp(12), dp(10), dp(12), dp(10));
+        shareBannerView.setVisibility(View.GONE);
+        LinearLayout.LayoutParams sbLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        sbLp.topMargin = dp(12);
+        hero.addView(shareBannerView, sbLp);
+
+        sendPickBtn = pillFilledBtn("选择文件发送", cPrimary, cOnPrimary);
+        sendPickBtn.setOnClickListener(v -> pickFiles());
+        LinearLayout.LayoutParams spLp = new LinearLayout.LayoutParams(MATCH, dp(52));
+        spLp.topMargin = dp(16);
+        hero.addView(sendPickBtn, spLp);
+
+        sendClipBtn = pillFilledBtn("发送剪贴板文本", cSecondaryContainer, cOnSecondaryContainer);
+        sendClipBtn.setOnClickListener(v -> sendClipboard());
+        LinearLayout.LayoutParams scLp = new LinearLayout.LayoutParams(MATCH, dp(44));
+        scLp.topMargin = dp(10);
+        hero.addView(sendClipBtn, scLp);
+
+        sendResultCard = new LinearLayout(this);
+        sendResultCard.setOrientation(LinearLayout.HORIZONTAL);
+        sendResultCard.setGravity(Gravity.CENTER_VERTICAL);
+        sendResultCard.setPadding(dp(12), dp(10), dp(12), dp(10));
+        sendResultCard.setBackground(roundBox(cSurfaceContainerHigh, 0, 14));
+        sendResultCard.setVisibility(View.GONE);
+
+        sendResultBadge = label("", 11, cOnPrimaryContainer, true);
+        sendResultBadge.setPadding(dp(8), dp(3), dp(8), dp(3));
+        sendResultBadge.setBackground(roundBox(cPrimaryContainer, 0, 99));
+        sendResultBadge.setVisibility(View.GONE);
+        sendResultCard.addView(sendResultBadge, new LinearLayout.LayoutParams(WRAP, WRAP));
+
+        sendResultText = label("", 12, cOnSurface, false);
+        LinearLayout.LayoutParams rtLp = new LinearLayout.LayoutParams(0, WRAP, 1f);
+        rtLp.leftMargin = dp(8);
+        sendResultCard.addView(sendResultText, rtLp);
+
+        LinearLayout.LayoutParams srLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        srLp.topMargin = dp(12);
+        hero.addView(sendResultCard, srLp);
+
+        // Available devices card
+        LinearLayout devCard = md3Card(cSurfaceContainerLow, 20, 16, 16, 16, 16);
+        LinearLayout.LayoutParams dcLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        dcLp.topMargin = dp(14);
+        root.addView(devCard, dcLp);
+
+        LinearLayout devHead = new LinearLayout(this);
+        devHead.setOrientation(LinearLayout.HORIZONTAL);
+        devHead.setGravity(Gravity.CENTER_VERTICAL);
+        devHead.addView(label("可用设备", 15, cOnSurface, true),
+                new LinearLayout.LayoutParams(0, WRAP, 1f));
+
+        discoverBtn = pillSmallBtn("搜索局域网", cSecondaryContainer, cOnSecondaryContainer);
+        discoverBtn.setOnClickListener(v -> discover());
+        devHead.addView(discoverBtn, new LinearLayout.LayoutParams(WRAP, dp(34)));
+        devCard.addView(devHead, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        deviceList = new DeviceList();
+        LinearLayout.LayoutParams dlLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        dlLp.topMargin = dp(10);
+        devCard.addView(deviceList, dlLp);
+
+        // Manual input card
+        LinearLayout manCard = md3Card(cSurfaceContainerLow, 20, 16, 14, 16, 16);
+        LinearLayout.LayoutParams mcLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        mcLp.topMargin = dp(14);
+        root.addView(manCard, mcLp);
+
+        manCard.addView(label("手动填写目标（设备 ID 或 IP:端口）", 12, cOnSurfaceVariant, true),
+                new LinearLayout.LayoutParams(WRAP, WRAP));
+
+        peerField = md3Input("粘贴 64 位设备 ID，或输入 IP:端口");
+        peerField.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int st, int c, int a) {}
+            @Override public void onTextChanged(CharSequence s, int st, int b, int c) {}
+            @Override public void afterTextChanged(Editable s) {
+                updateTargetSummary();
+                if (deviceList != null) {
+                    deviceList.syncSelection();
+                }
+            }
+        });
+        LinearLayout.LayoutParams pfLp = new LinearLayout.LayoutParams(MATCH, dp(48));
+        pfLp.topMargin = dp(8);
+        manCard.addView(peerField, pfLp);
+        deviceList.render(pairedEntries, lanEntries, lanNote);
+    }
+
+    // ================= Tab 1: Receive & Files =================
+
+    private void buildReceivePanel(LinearLayout root) {
+        recvHeroCard = md3Card(cSurfaceContainerLow, 24, 20, 20, 20, 20);
+        root.addView(recvHeroCard, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        recvHeroTitle = label("准备接收文件", 20, cOnSurface, true);
+        recvHeroCard.addView(recvHeroTitle, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        recvHeroSub = label("点击下方按钮后同时开启局域网与远程自动选路，收到文件自动保存到系统「下载 / Ferry」",
+                13, cOnSurfaceVariant, false);
+        recvHeroSub.setLineSpacing(dp(4), 1f);
+        LinearLayout.LayoutParams hsLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        hsLp.topMargin = dp(6);
+        recvHeroCard.addView(recvHeroSub, hsLp);
+
+        recvToggleBtn = pillFilledBtn("开启接收", cPrimary, cOnPrimary);
+        recvToggleBtn.setOnClickListener(v -> toggleReceive());
+        LinearLayout.LayoutParams rtLp = new LinearLayout.LayoutParams(MATCH, dp(52));
+        rtLp.topMargin = dp(18);
+        recvHeroCard.addView(recvToggleBtn, rtLp);
+
+        // Tools: Web share & background optimization
+        LinearLayout toolsCard = md3Card(cSurfaceContainerLow, 20, 16, 16, 16, 16);
+        LinearLayout.LayoutParams tcLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        tcLp.topMargin = dp(14);
+        root.addView(toolsCard, tcLp);
+
+        toolsCard.addView(label("网页快传与保活", 15, cOnSurface, true),
+                new LinearLayout.LayoutParams(WRAP, WRAP));
+        LinearLayout.LayoutParams wSubLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        wSubLp.topMargin = dp(3);
+        toolsCard.addView(label("网页分享仅共享独立临时目录，不包含设备密钥与配对表", 12, cOnSurfaceVariant, false), wSubLp);
+
+        LinearLayout btnRow = new LinearLayout(this);
+        btnRow.setOrientation(LinearLayout.HORIZONTAL);
+        webToggleBtn = pillFilledBtn("开启网页分享", cSecondaryContainer, cOnSecondaryContainer);
+        webToggleBtn.setOnClickListener(v -> toggleWebShare());
+        Button battBtn = pillOutlineBtn("允许后台保活");
+        battBtn.setOnClickListener(v -> requestBatteryExemption());
+        btnRow.addView(webToggleBtn, new LinearLayout.LayoutParams(0, dp(44), 1f));
+        LinearLayout.LayoutParams b2Lp = new LinearLayout.LayoutParams(0, dp(44), 1f);
+        b2Lp.leftMargin = dp(10);
+        btnRow.addView(battBtn, b2Lp);
+        LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        rowLp.topMargin = dp(12);
+        toolsCard.addView(btnRow, rowLp);
+
+        webUrlView = label("", 12, cOnPrimaryContainer, true);
+        webUrlView.setTypeface(Typeface.MONOSPACE);
+        webUrlView.setPadding(dp(12), dp(10), dp(12), dp(10));
+        webUrlView.setBackground(ripple(roundBox(cPrimaryContainer, 0, 12), 12));
+        webUrlView.setVisibility(View.GONE);
+        webUrlView.setOnClickListener(v -> copyText("网页分享地址", webShareUrl, "已复制网页分享链接"));
+        LinearLayout.LayoutParams wuLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        wuLp.topMargin = dp(10);
+        toolsCard.addView(webUrlView, wuLp);
+
+        // Recent received files card
+        LinearLayout recentCard = md3Card(cSurfaceContainerLow, 20, 16, 16, 16, 16);
+        LinearLayout.LayoutParams rcLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        rcLp.topMargin = dp(14);
+        root.addView(recentCard, rcLp);
+
+        LinearLayout recHead = new LinearLayout(this);
+        recHead.setOrientation(LinearLayout.HORIZONTAL);
+        recHead.setGravity(Gravity.CENTER_VERTICAL);
+        recHead.addView(label("最近收到", 15, cOnSurface, true),
+                new LinearLayout.LayoutParams(0, WRAP, 1f));
+        recHead.addView(label("Download/Ferry", 11, cOnSurfaceVariant, true),
+                new LinearLayout.LayoutParams(WRAP, WRAP));
+        recentCard.addView(recHead, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        recentListView = new LinearLayout(this);
+        recentListView.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams rlLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        rlLp.topMargin = dp(10);
+        recentCard.addView(recentListView, rlLp);
+        renderRecentList();
+    }
+
+    // ================= Tab 2: Devices & Pairing =================
+
+    private void buildPairPanel(LinearLayout root) {
+        LinearLayout idCard = md3Card(cSurfaceContainerLow, 20, 16, 16, 16, 16);
+        root.addView(idCard, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        idCard.addView(label("本机身份", 15, cOnSurface, true),
+                new LinearLayout.LayoutParams(WRAP, WRAP));
+
+        LinearLayout.LayoutParams nlLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        nlLp.topMargin = dp(10);
+        idCard.addView(label("显示名称", 12, cOnSurfaceVariant, false), nlLp);
+
+        nameField = md3Input("对端看到的设备名称");
+        nameField.setText(deviceName);
+        nameField.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int st, int c, int a) {}
+            @Override public void onTextChanged(CharSequence s, int st, int b, int c) {}
+            @Override public void afterTextChanged(Editable s) {
+                String n = s.toString().trim();
+                if (!n.isEmpty()) {
+                    getPreferences(MODE_PRIVATE).edit().putString("deviceName", n).apply();
+                }
+            }
+        });
+        LinearLayout.LayoutParams nfLp = new LinearLayout.LayoutParams(MATCH, dp(48));
+        nfLp.topMargin = dp(6);
+        idCard.addView(nameField, nfLp);
+
+        LinearLayout.LayoutParams flLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        flLp.topMargin = dp(12);
+        idCard.addView(label("设备 ID（点击复制）", 12, cOnSurfaceVariant, false), flLp);
+
+        pairFullIdView = label("加载中…", 11, cOnSurface, false);
+        pairFullIdView.setTypeface(Typeface.MONOSPACE);
+        pairFullIdView.setPadding(dp(12), dp(10), dp(12), dp(10));
+        pairFullIdView.setBackground(ripple(roundBox(cSurfaceContainerHigh, 0, 12), 12));
+        pairFullIdView.setOnClickListener(v -> copyText("设备 ID", fullDeviceId, "已复制完整设备 ID"));
+        LinearLayout.LayoutParams fidLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        fidLp.topMargin = dp(6);
+        idCard.addView(pairFullIdView, fidLp);
+
+        Button copyUriBtn = pillFilledBtn("复制本机配对 URI", cSecondaryContainer, cOnSecondaryContainer);
+        copyUriBtn.setOnClickListener(v -> showAndCopyPairUri());
+        LinearLayout.LayoutParams cuLp = new LinearLayout.LayoutParams(MATCH, dp(44));
+        cuLp.topMargin = dp(12);
+        idCard.addView(copyUriBtn, cuLp);
+
+        // 6-digit PAKE card
+        LinearLayout pakeCard = md3Card(cSurfaceContainerLow, 20, 16, 16, 16, 16);
+        LinearLayout.LayoutParams pcLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        pcLp.topMargin = dp(14);
+        root.addView(pakeCard, pcLp);
+
+        pakeCard.addView(label("6 位一次性配对码", 15, cOnSurface, true),
+                new LinearLayout.LayoutParams(WRAP, WRAP));
+        pakeCodeField = md3Input("输入 6 位数字配对码");
+        pakeCodeField.setInputType(InputType.TYPE_CLASS_NUMBER);
+        LinearLayout.LayoutParams pcfLp = new LinearLayout.LayoutParams(MATCH, dp(48));
+        pcfLp.topMargin = dp(10);
+        pakeCard.addView(pakeCodeField, pcfLp);
+
+        pakePeerField = md3Input("对方设备 ID（点“等待配对”时留空）");
+        LinearLayout.LayoutParams ppfLp = new LinearLayout.LayoutParams(MATCH, dp(48));
+        ppfLp.topMargin = dp(8);
+        pakeCard.addView(pakePeerField, ppfLp);
+
+        LinearLayout pakeBtns = new LinearLayout(this);
+        pakeBtns.setOrientation(LinearLayout.HORIZONTAL);
+        Button waitBtn = pillOutlineBtn("等待配对");
+        waitBtn.setOnClickListener(v -> startPake(true));
+        Button doBtn = pillFilledBtn("开始配对", cPrimary, cOnPrimary);
+        doBtn.setOnClickListener(v -> startPake(false));
+        pakeBtns.addView(waitBtn, new LinearLayout.LayoutParams(0, dp(44), 1f));
+        LinearLayout.LayoutParams dbLp = new LinearLayout.LayoutParams(0, dp(44), 1f);
+        dbLp.leftMargin = dp(10);
+        pakeBtns.addView(doBtn, dbLp);
+        LinearLayout.LayoutParams pbLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        pbLp.topMargin = dp(12);
+        pakeCard.addView(pakeBtns, pbLp);
+
+        pakeInfoView = label("配对完成后，对方设备会自动出现在「发送」页。", 12, cOnSurfaceVariant, false);
+        LinearLayout.LayoutParams piLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        piLp.topMargin = dp(8);
+        pakeCard.addView(pakeInfoView, piLp);
+
+        // URI / file import card
+        LinearLayout impCard = md3Card(cSurfaceContainerLow, 20, 16, 16, 16, 16);
+        LinearLayout.LayoutParams icLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        icLp.topMargin = dp(14);
+        root.addView(impCard, icLp);
+
+        impCard.addView(label("通过 URI 或文件导入", 15, cOnSurface, true),
+                new LinearLayout.LayoutParams(WRAP, WRAP));
+        pairUriField = md3Input("粘贴 ftpair://… 凭证");
+        LinearLayout.LayoutParams puLp = new LinearLayout.LayoutParams(MATCH, dp(48));
+        puLp.topMargin = dp(10);
+        impCard.addView(pairUriField, puLp);
+
+        LinearLayout impBtns = new LinearLayout(this);
+        impBtns.setOrientation(LinearLayout.HORIZONTAL);
+        Button impUriBtn = pillOutlineBtn("导入 URI");
+        impUriBtn.setOnClickListener(v -> importPairUri());
+        Button impFileBtn = pillOutlineBtn("选择配对文件");
+        impFileBtn.setOnClickListener(v -> pickPairFile());
+        impBtns.addView(impUriBtn, new LinearLayout.LayoutParams(0, dp(44), 1f));
+        LinearLayout.LayoutParams ifLp = new LinearLayout.LayoutParams(0, dp(44), 1f);
+        ifLp.leftMargin = dp(10);
+        impBtns.addView(impFileBtn, ifLp);
+        LinearLayout.LayoutParams ibLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        ibLp.topMargin = dp(10);
+        impCard.addView(impBtns, ibLp);
+    }
+
+    // ================= Receive Control (Unified) =================
+
+    private void toggleReceive() {
+        if (recvRunning) {
+            stopAllReceive();
+        } else {
+            startAllReceive();
+        }
+    }
+
+    private void startAllReceive() {
+        recvToggleBtn.setEnabled(false);
+        final String name = currentName();
+        new Thread(() -> {
+            String lanAddr = "";
+            String autoErr = "";
+            try {
+                File inbox = inboxDir();
+                lanAddr = Mobile.startReceiver(name, inbox.getAbsolutePath(), lanHint());
+            } catch (Exception e) {
+                Log.e(TAG, "startReceiver", e);
+            }
+            try {
+                File inbox = inboxDir();
+                Mobile.startAutoReceive(name, inbox.getAbsolutePath(), SIGNAL_URL,
+                        keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(), lanHint(), "");
+            } catch (Exception e) {
+                Log.e(TAG, "startAutoReceive", e);
+                autoErr = e.getMessage();
+            }
+            final String addr = lanAddr;
+            final String err = autoErr;
+            ui.post(() -> {
+                recvToggleBtn.setEnabled(true);
+                if (addr.isEmpty() && !err.isEmpty()) {
+                    toast("启动接收失败：" + err);
+                    return;
+                }
+                recvRunning = true;
+                recvEverStarted = true;
+                lanPort = extractPort(addr);
+                acquireMulticastLock();
+                startKeepAlive(lanPort.isEmpty() ? "正在等待接收文件" : "接收中 · 端口 " + lanPort);
+                refreshReceiveUi();
+                ui.removeCallbacks(pollTask);
+                ui.postDelayed(pollTask, 1000);
+            });
+        }).start();
+    }
+
+    private void stopAllReceive() {
+        recvToggleBtn.setEnabled(false);
+        ui.removeCallbacks(pollTask);
+        new Thread(() -> {
+            try {
+                Mobile.stopReceiver();
+                Mobile.stopAutoReceive();
+                Mobile.stopRelayReceiver();
+                Mobile.stopPunchReceiver();
+            } catch (Exception e) {
+                Log.e(TAG, "stopAllReceive", e);
+            }
+            pollReceivedOnce();
+            ui.post(() -> {
+                recvToggleBtn.setEnabled(true);
+                recvRunning = false;
+                lanPort = "";
+                releaseMulticastLock();
+                if (!webRunning) {
+                    stopKeepAlive();
+                }
+                refreshReceiveUi();
+                toast("已停止接收");
+            });
+        }).start();
+    }
+
+    private void toggleWebShare() {
+        if (webRunning) {
+            webToggleBtn.setEnabled(false);
+            new Thread(() -> {
+                try {
+                    Mobile.stopWebShare();
+                } catch (Exception e) {
+                    Log.w(TAG, "stopWebShare", e);
+                }
+                ui.post(() -> {
+                    webToggleBtn.setEnabled(true);
+                    webRunning = false;
+                    webShareUrl = "";
+                    if (!recvRunning) {
+                        stopKeepAlive();
+                    }
+                    refreshReceiveUi();
+                });
+            }).start();
+            return;
+        }
+        webToggleBtn.setEnabled(false);
+        new Thread(() -> {
+            try {
+                String info = Mobile.startWebShare(webShareDir().getAbsolutePath(), 0L, lanHint());
+                String url = info;
+                try {
+                    url = new JSONObject(info).optString("url", info);
+                } catch (Exception ignored) {
+                }
+                final String shown = url;
+                ui.post(() -> {
+                    webToggleBtn.setEnabled(true);
+                    webRunning = true;
+                    webShareUrl = shown;
+                    startKeepAlive("网页分享中");
+                    refreshReceiveUi();
+                });
+            } catch (Exception e) {
+                Log.e(TAG, "startWebShare", e);
+                ui.post(() -> {
+                    webToggleBtn.setEnabled(true);
+                    toast("网页分享启动失败：" + e.getMessage());
+                });
+            }
+        }).start();
+    }
+
+    private void refreshReceiveUi() {
+        boolean active = recvRunning || webRunning;
+        if (topStateText != null) {
+            topStateText.setText(recvRunning ? "接收中" : (webRunning ? "网页分享中" : (recvEverStarted ? "已暂停" : "未开启")));
+            topStateText.setTextColor(active ? cOnPrimaryContainer : cOnSurfaceVariant);
+        }
+        if (topDot != null) {
+            topDot.setBackground(oval(active ? cPrimary : cOnSurfaceVariant));
+        }
+        if (topChip != null) {
+            topChip.setBackground(ripple(roundBox(active ? cPrimaryContainer : cSurfaceContainerHigh, 0, 99), 99));
+        }
+        if (active) {
+            startDotPulse();
+        } else {
+            stopDotPulse();
+        }
+
+        if (recvHeroCard != null) {
+            recvHeroCard.setBackground(roundBox(recvRunning ? cPrimaryContainer : cSurfaceContainerLow, 0, 24));
+        }
+        if (recvHeroTitle != null) {
+            recvHeroTitle.setText(recvRunning ? "正在等待接收文件" : "准备接收文件");
+            recvHeroTitle.setTextColor(recvRunning ? cOnPrimaryContainer : cOnSurface);
+        }
+        if (recvHeroSub != null) {
+            if (recvRunning) {
+                String p = lanPort.isEmpty() ? "—" : lanPort;
+                recvHeroSub.setText("局域网端口 " + p + " · 远程自动选路已连接\n收到后自动存入系统「下载 / Ferry」");
+                recvHeroSub.setTextColor(cOnPrimaryContainer);
+            } else {
+                recvHeroSub.setText("点击下方按钮后同时开启局域网与远程自动选路，收到文件自动保存到系统「下载 / Ferry」");
+                recvHeroSub.setTextColor(cOnSurfaceVariant);
+            }
+        }
+        if (recvToggleBtn != null) {
+            recvToggleBtn.setText(recvRunning ? "停止接收" : "开启接收");
+            applyFilledStyle(recvToggleBtn, recvRunning ? cError : cPrimary, recvRunning ? cOnError : cOnPrimary);
+        }
+        if (webToggleBtn != null) {
+            webToggleBtn.setText(webRunning ? "关闭网页分享" : "开启网页分享");
+            applyFilledStyle(webToggleBtn,
+                    webRunning ? cErrorContainer : cSecondaryContainer,
+                    webRunning ? cOnErrorContainer : cOnSecondaryContainer);
+        }
+        if (webUrlView != null) {
+            if (webRunning && !webShareUrl.isEmpty()) {
+                webUrlView.setText("点击复制（同一 Wi-Fi 浏览器打开）：\n" + webShareUrl);
+                webUrlView.setVisibility(View.VISIBLE);
+            } else {
+                webUrlView.setVisibility(View.GONE);
+            }
+        }
+    }
+
+    private static String extractPort(String addr) {
+        if (addr == null) {
+            return "";
+        }
+        int i = addr.lastIndexOf(':');
+        return i >= 0 ? addr.substring(i + 1).trim() : "";
+    }
+
+    // ================= Receive Poll -> Public Download/ft =================
+
+    private void pollReceivedOnce() {
+        ioPool.execute(() -> {
+            try {
+                String raw = Mobile.pollReceived();
+                if (raw == null || raw.equals("[]") || raw.trim().isEmpty()) {
+                    return;
+                }
+                JSONArray arr = new JSONArray(raw);
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject o = arr.getJSONObject(i);
+                    String fileName = o.optString("file", "");
+                    String fullPath = o.optString("full_path", "");
+                    String via = o.optString("via", "");
+                    long bytes = o.optLong("bytes", 0);
+                    long ts = o.optLong("ts", System.currentTimeMillis());
+                    if (fileName.isEmpty() || fullPath.isEmpty()) {
+                        continue;
+                    }
+                    File src = new File(fullPath);
+                    if (!src.isFile()) {
+                        continue;
+                    }
+                    exportStagedFile(src, fileName, via, bytes, ts);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "pollReceivedOnce", e);
+            }
+        });
+    }
+
+    /** Moves any non-.ftpart files left in inboxDir after a process restart. */
+    private void sweepLeftoverInbox() {
+        ioPool.execute(() -> {
+            File[] files = inboxDir().listFiles();
+            if (files == null) {
+                return;
+            }
+            for (File f : files) {
+                if (f.isFile() && !f.getName().endsWith(".ftpart")) {
+                    exportStagedFile(f, f.getName(), "", f.length(), f.lastModified());
+                }
+            }
+        });
+    }
+
+    private void exportStagedFile(File src, String fileName, String via, long bytes, long ts) {
+        String mime = guessMime(fileName);
+        String savedUri = saveToPublicDownloads(src, fileName, mime);
+        if (savedUri == null) {
+            return;
+        }
+        if (!src.delete()) {
+            Log.w(TAG, "could not delete staged file: " + src);
+        }
+        final ReceivedEntry entry = new ReceivedEntry(fileName, savedUri, mime, via, bytes, ts);
+        ui.post(() -> {
+            recentEntries.add(0, entry);
+            while (recentEntries.size() > 20) {
+                recentEntries.remove(recentEntries.size() - 1);
+            }
+            persistRecentState();
+            renderRecentList();
+            String viaTag = pathLabel(via);
+            toast("已保存到「下载/Ferry」" + (viaTag.isEmpty() ? "" : "（" + viaTag + "）") + "：" + fileName);
+        });
+    }
+
+    private String saveToPublicDownloads(File src, String fileName, String mime) {
+        if (Build.VERSION.SDK_INT >= 29) {
+            ContentValues cv = new ContentValues();
+            cv.put(MediaStore.Downloads.DISPLAY_NAME, fileName);
+            cv.put(MediaStore.Downloads.MIME_TYPE, mime);
+            cv.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Ferry");
+            cv.put(MediaStore.Downloads.IS_PENDING, 1);
+            Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+            if (uri == null) {
+                Log.e(TAG, "MediaStore.Downloads insert returned null");
+                return null;
+            }
+            try (InputStream in = new FileInputStream(src);
+                 OutputStream out = getContentResolver().openOutputStream(uri)) {
+                if (out == null) {
+                    throw new Exception("openOutputStream null");
+                }
+                copyStream(in, out);
+                ContentValues done = new ContentValues();
+                done.put(MediaStore.Downloads.IS_PENDING, 0);
+                getContentResolver().update(uri, done, null, null);
+                return uri.toString();
+            } catch (Exception e) {
+                Log.e(TAG, "saveToPublicDownloads API29+", e);
+                try {
+                    getContentResolver().delete(uri, null, null);
+                } catch (Exception ignored) {
+                }
+                return null;
+            }
+        }
+        try {
+            File dl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+            File dir = new File(dl, "Ferry");
+            if (!dir.exists() && !dir.mkdirs()) {
+                return null;
+            }
+            File dst = uniqueDestFile(dir, fileName);
+            try (InputStream in = new FileInputStream(src);
+                 OutputStream out = new FileOutputStream(dst)) {
+                copyStream(in, out);
+            }
+            return Uri.fromFile(dst).toString();
+        } catch (Exception e) {
+            Log.e(TAG, "saveToPublicDownloads legacy", e);
+            return null;
+        }
+    }
+
+    private static File uniqueDestFile(File dir, String name) {
+        File f = new File(dir, name);
+        if (!f.exists()) {
+            return f;
+        }
+        int dot = name.lastIndexOf('.');
+        String base = dot > 0 ? name.substring(0, dot) : name;
+        String ext = dot > 0 ? name.substring(dot) : "";
+        for (int i = 1; i < 1000; i++) {
+            File cand = new File(dir, base + " (" + i + ")" + ext);
+            if (!cand.exists()) {
+                return cand;
+            }
+        }
+        return new File(dir, System.currentTimeMillis() + "-" + name);
+    }
+
+    private static String guessMime(String name) {
+        int dot = name.lastIndexOf('.');
+        if (dot >= 0 && dot < name.length() - 1) {
+            String ext = name.substring(dot + 1).toLowerCase(Locale.US);
+            String m = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext);
+            if (m != null && !m.isEmpty()) {
+                return m;
+            }
+        }
+        return "application/octet-stream";
+    }
+
+    private static void copyStream(InputStream in, OutputStream out) throws Exception {
+        byte[] buf = new byte[65536];
+        int n;
+        while ((n = in.read(buf)) > 0) {
+            out.write(buf, 0, n);
+        }
+    }
+
+    private void loadRecentState() {
+        ioPool.execute(() -> {
+            File rf = recentFile();
+            if (!rf.isFile()) {
+                return;
+            }
+            try (InputStream in = new FileInputStream(rf)) {
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                copyStream(in, bos);
+                JSONArray arr = new JSONArray(bos.toString("UTF-8"));
+                final List<ReceivedEntry> loaded = new ArrayList<>();
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject o = arr.getJSONObject(i);
+                    loaded.add(new ReceivedEntry(
+                            o.optString("name", ""),
+                            o.optString("uri", ""),
+                            o.optString("mime", "application/octet-stream"),
+                            o.optString("via", ""),
+                            o.optLong("bytes", 0),
+                            o.optLong("ts", 0)));
+                }
+                ui.post(() -> {
+                    recentEntries.clear();
+                    recentEntries.addAll(loaded);
+                    renderRecentList();
+                });
+            } catch (Exception e) {
+                Log.w(TAG, "loadRecentState", e);
+            }
+        });
+    }
+
+    private void persistRecentState() {
+        final List<ReceivedEntry> snap = new ArrayList<>(recentEntries);
+        ioPool.execute(() -> {
+            try {
+                JSONArray arr = new JSONArray();
+                for (ReceivedEntry r : snap) {
+                    JSONObject o = new JSONObject();
+                    o.put("name", r.name);
+                    o.put("uri", r.uri);
+                    o.put("mime", r.mime);
+                    o.put("via", r.via);
+                    o.put("bytes", r.bytes);
+                    o.put("ts", r.ts);
+                    arr.put(o);
+                }
+                try (OutputStream out = new FileOutputStream(recentFile())) {
+                    out.write(arr.toString().getBytes("UTF-8"));
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "persistRecentState", e);
+            }
+        });
+    }
+
+    private void renderRecentList() {
+        if (recentListView == null) {
+            return;
+        }
+        recentListView.removeAllViews();
+        if (recentEntries.isEmpty()) {
+            TextView empty = label("暂未收到文件。对方发送成功后，文件会自动保存在系统「下载 / Ferry」文件夹。",
+                    12, cOnSurfaceVariant, false);
+            recentListView.addView(empty, new LinearLayout.LayoutParams(MATCH, WRAP));
+            return;
+        }
+        SimpleDateFormat sdf = new SimpleDateFormat("HH:mm:ss", Locale.US);
+        for (int i = 0; i < recentEntries.size(); i++) {
+            final ReceivedEntry r = recentEntries.get(i);
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(12), dp(10), dp(12), dp(10));
+            row.setBackground(ripple(roundBox(cSurface, 0, 14), 14));
+            row.setOnClickListener(v -> openReceivedEntry(r));
+
+            LinearLayout col = new LinearLayout(this);
+            col.setOrientation(LinearLayout.VERTICAL);
+            TextView nm = label(r.name, 14, cOnSurface, true);
+            nm.setSingleLine(true);
+            nm.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+            col.addView(nm, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+            String meta = fmtBytes(r.bytes) + (r.ts > 0 ? " · " + sdf.format(new Date(r.ts)) : "");
+            TextView mt = label(meta, 11, cOnSurfaceVariant, false);
+            LinearLayout.LayoutParams mtLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+            mtLp.topMargin = dp(2);
+            col.addView(mt, mtLp);
+            row.addView(col, new LinearLayout.LayoutParams(0, WRAP, 1f));
+
+            String vLbl = pathLabel(r.via);
+            if (!vLbl.isEmpty()) {
+                TextView badge = pathBadgeView(r.via);
+                LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+                bLp.leftMargin = dp(8);
+                row.addView(badge, bLp);
+            }
+
+            LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+            if (i > 0) {
+                rowLp.topMargin = dp(6);
+            }
+            recentListView.addView(row, rowLp);
+        }
+    }
+
+    private void openReceivedEntry(ReceivedEntry r) {
+        try {
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            intent.setDataAndType(Uri.parse(r.uri), r.mime);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+        } catch (Exception e) {
+            toast("文件已保存在「下载 / Ferry / " + r.name + "」");
+        }
+    }
+
+    // ================= Send Flows (Files & Clipboard) =================
+
     private void handleShareIntent(Intent intent) {
         if (intent == null) {
             return;
@@ -159,835 +1347,540 @@ public class MainActivity extends Activity {
             return;
         }
         sharedUris = uris;
-        status.setText("已从其他应用收到 " + uris.size() + " 个文件；填好对方设备 ID 后点“打洞发送”或“发送”。");
-        if (peerField.getText().toString().trim().isEmpty()) {
-            toast("还没有对方设备 ID：先在电脑上配对并复制设备 ID");
+        selectTab(0);
+        if (shareBannerView != null) {
+            shareBannerView.setText("已从其他应用带入 " + uris.size() + " 个文件 · 点上方按钮直接发送");
+            shareBannerView.setVisibility(View.VISIBLE);
         }
     }
 
-    private void prefillLastPeer() {
-        String last = getPreferences(MODE_PRIVATE).getString("lastPeer", "");
-        if (!last.isEmpty() && peerField.getText().toString().trim().isEmpty()) {
-            peerField.setText(last);
-        }
-    }
-
-    // applyDebugPeerId lets adb pre-fill the peer field for tests (typing a
-    // 64-hex id through the IME drops characters).
-    private void applyDebugPeerId() {
-        java.io.File f = new java.io.File(getFilesDir(), "peer.id");
-        if (!f.isFile()) {
+    private void pickFiles() {
+        final String target = currentTarget();
+        if (!isAutoTarget(target) && !isLanTarget(target)) {
+            toast("请先选择接收设备，或填写 64 位设备 ID / IP:端口");
             return;
         }
-        try {
-            String id = new String(java.nio.file.Files.readAllBytes(f.toPath()), "UTF-8").trim();
-            if (!id.isEmpty()) {
-                peerField.setText(id);
+        saveLastPeer(target);
+        if (sharedUris != null && !sharedUris.isEmpty()) {
+            List<Uri> uris = sharedUris;
+            sharedUris = null;
+            if (shareBannerView != null) {
+                shareBannerView.setVisibility(View.GONE);
             }
+            sendUriBatch(uris, currentName(), target);
+            return;
+        }
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        startActivityForResult(i, PICK_FILES);
+    }
+
+    private void sendClipboard() {
+        final String target = currentTarget();
+        if (!isAutoTarget(target) && !isLanTarget(target)) {
+            toast("请先选择接收设备，或填写 64 位设备 ID / IP:端口");
+            return;
+        }
+        ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (cm == null || !cm.hasPrimaryClip() || cm.getPrimaryClip() == null
+                || cm.getPrimaryClip().getItemCount() == 0) {
+            toast("剪贴板里没有文本");
+            return;
+        }
+        CharSequence cs = cm.getPrimaryClip().getItemAt(0).coerceToText(this);
+        String text = cs == null ? "" : cs.toString();
+        if (text.trim().isEmpty()) {
+            toast("剪贴板文本为空");
+            return;
+        }
+        saveLastPeer(target);
+        final String name = currentName();
+        final boolean auto = isAutoTarget(target);
+        setSendBusy(true, auto ? "正在发送剪贴板文本（自动选路）…" : "正在通过局域网发送剪贴板文本…");
+        new Thread(() -> {
+            File dir = new File(getCacheDir(), "clip-" + System.nanoTime());
+            dir.mkdirs();
+            String ts = new SimpleDateFormat("HHmmss", Locale.US).format(new Date());
+            File f = new File(dir, "clipboard-" + ts + ".txt");
+            try (OutputStream out = new FileOutputStream(f)) {
+                out.write(text.getBytes("UTF-8"));
+                List<File> list = new ArrayList<>();
+                list.add(f);
+                sendPreparedFiles(list, dir, name, target, auto);
+            } catch (Exception e) {
+                Log.e(TAG, "sendClipboard", e);
+                deleteTree(f, dir);
+                onSendFailed(e.getMessage());
+            }
+        }).start();
+    }
+
+    private void sendUriBatch(final List<Uri> uris, final String name, final String target) {
+        final boolean auto = isAutoTarget(target);
+        setSendBusy(true, auto
+                ? "正在发送 " + uris.size() + " 个文件（LAN / 打洞 / 中继自动竞速）…"
+                : "正在通过局域网发送 " + uris.size() + " 个文件…");
+        new Thread(() -> {
+            File batchDir = new File(new File(getCacheDir(), "outgoing"), String.valueOf(System.nanoTime()));
+            List<File> tempFiles = new ArrayList<>();
+            try {
+                for (int i = 0; i < uris.size(); i++) {
+                    tempFiles.add(copyToCache(uris.get(i), new File(batchDir, String.valueOf(i))));
+                }
+                sendPreparedFiles(tempFiles, batchDir, name, target, auto);
+            } catch (Exception e) {
+                Log.e(TAG, "sendUriBatch", e);
+                for (File tf : tempFiles) {
+                    if (tf != null) {
+                        deleteTree(tf, tf.getParentFile());
+                    }
+                }
+                batchDir.delete();
+                onSendFailed(e.getMessage());
+            }
+        }).start();
+    }
+
+    private void sendPreparedFiles(List<File> files, File rootTmp, String name, String target, boolean auto) {
+        try {
+            JSONArray paths = new JSONArray();
+            for (File f : files) {
+                paths.put(f.getAbsolutePath());
+            }
+            final String summary = auto
+                    ? Mobile.sendAuto(SIGNAL_URL, keyFile().getAbsolutePath(),
+                            pairedFile().getAbsolutePath(), target, name, paths.toString(), lanHint(), "")
+                    : Mobile.sendFiles(target, name, paths.toString());
+            onSendSucceeded(summary);
         } catch (Exception e) {
-            Log.w("ft", "applyDebugPeerId", e);
+            Log.e(TAG, auto ? "sendAuto" : "sendLan", e);
+            onSendFailed(e.getMessage());
+        } finally {
+            for (File f : files) {
+                if (f != null) {
+                    deleteTree(f, f.getParentFile());
+                }
+            }
+            if (rootTmp != null) {
+                rootTmp.delete();
+            }
         }
     }
 
-    // importBootstrapPairs exists for lab work: adb cannot write the app's
-    // external files dir on Android 11+, but run-as can drop a file into the
-    // internal one. Each line is an ftpair:// URI to trust.
+    private void setSendBusy(boolean busy, String msg) {
+        if (sendPickBtn != null) {
+            sendPickBtn.setEnabled(!busy);
+        }
+        if (sendClipBtn != null) {
+            sendClipBtn.setEnabled(!busy);
+        }
+        if (busy) {
+            startKeepAlive(msg);
+            showSendBanner("", msg, false);
+        }
+    }
+
+    private void onSendSucceeded(final String raw) {
+        ui.post(() -> {
+            setSendBusy(false, "");
+            if (recvRunning || webRunning) {
+                startKeepAlive(recvRunning ? "接收中" : "网页分享中");
+            } else {
+                stopKeepAlive();
+            }
+            try {
+                JSONObject o = new JSONObject(raw);
+                if (!o.optBoolean("ok", false)) {
+                    showSendBanner("fail", "发送失败：" + o.optString("error", raw), true);
+                    return;
+                }
+                String path = o.optString("path", "");
+                JSONArray files = o.optJSONArray("files");
+                int n = files != null ? files.length() : 0;
+                long bytes = o.optLong("bytes", 0);
+                long ms = o.optLong("duration_ms", 0);
+                String text = "发送完成 · " + n + " 个文件 · " + fmtBytes(bytes) + " · " + ms + " ms";
+                showSendBanner(path, text, false);
+            } catch (Exception e) {
+                showSendBanner("", raw, false);
+            }
+        });
+    }
+
+    private void onSendFailed(final String err) {
+        ui.post(() -> {
+            setSendBusy(false, "");
+            if (recvRunning || webRunning) {
+                startKeepAlive(recvRunning ? "接收中" : "网页分享中");
+            } else {
+                stopKeepAlive();
+            }
+            showSendBanner("fail", "发送失败：" + err, true);
+        });
+    }
+
+    private void showSendBanner(String path, String msg, boolean isError) {
+        if (sendResultCard == null || sendResultText == null || sendResultBadge == null) {
+            return;
+        }
+        sendResultCard.setVisibility(View.VISIBLE);
+        sendResultCard.setBackground(roundBox(isError ? cErrorContainer : cSurfaceContainerHigh, 0, 14));
+        sendResultText.setText(msg);
+        sendResultText.setTextColor(isError ? cOnErrorContainer : cOnSurface);
+
+        if (isError) {
+            sendResultBadge.setText("失败");
+            sendResultBadge.setTextColor(cOnError);
+            sendResultBadge.setBackground(roundBox(cError, 0, 99));
+            sendResultBadge.setVisibility(View.VISIBLE);
+        } else {
+            String lbl = pathLabel(path);
+            if (lbl.isEmpty()) {
+                sendResultBadge.setVisibility(View.GONE);
+            } else {
+                stylePathBadge(sendResultBadge, path);
+                sendResultBadge.setVisibility(View.VISIBLE);
+            }
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode != RESULT_OK || data == null) {
+            return;
+        }
+        if (requestCode == PICK_PAIR_FILE) {
+            if (data.getData() != null) {
+                importPairFile(data.getData());
+            }
+            return;
+        }
+        if (requestCode != PICK_FILES) {
+            return;
+        }
+        List<Uri> uris = new ArrayList<>();
+        if (data.getClipData() != null) {
+            for (int i = 0; i < data.getClipData().getItemCount(); i++) {
+                uris.add(data.getClipData().getItemAt(i).getUri());
+            }
+        } else if (data.getData() != null) {
+            uris.add(data.getData());
+        }
+        if (!uris.isEmpty()) {
+            sendUriBatch(uris, currentName(), currentTarget());
+        }
+    }
+
+    // ================= Devices, Discovery & Pairing =================
+
+    private void loadDeviceId() {
+        ioPool.execute(() -> {
+            try {
+                String id = Mobile.deviceIDFor(keyFile().getAbsolutePath());
+                final String full = id == null ? "" : id;
+                final String shown = full.length() > 12 ? full.substring(0, 12) : full;
+                ui.post(() -> {
+                    fullDeviceId = full;
+                    if (topIdChip != null && !shown.isEmpty()) {
+                        topIdChip.setText("ID " + shown);
+                    }
+                    if (pairFullIdView != null && !full.isEmpty()) {
+                        pairFullIdView.setText(full);
+                    }
+                });
+            } catch (Exception e) {
+                Log.w(TAG, "loadDeviceId", e);
+            }
+        });
+    }
+
+    private void loadPairedPeers() {
+        ioPool.execute(() -> {
+            try {
+                String json = Mobile.pairedPeers(pairedFile().getAbsolutePath());
+                JSONArray arr = new JSONArray(json);
+                final List<PeerEntry> entries = new ArrayList<>();
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject o = arr.getJSONObject(i);
+                    String id = o.optString("id", "").trim();
+                    if (id.isEmpty()) {
+                        continue;
+                    }
+                    String name = o.optString("name", "").trim();
+                    if (name.isEmpty()) {
+                        name = "已配对设备";
+                    }
+                    String shortId = id.length() > 12 ? id.substring(0, 12) + "…" : id;
+                    entries.add(new PeerEntry(name, "已配对 · 自动选路 · " + shortId, id));
+                }
+                ui.post(() -> {
+                    pairedEntries.clear();
+                    pairedEntries.addAll(entries);
+                    if (peerField != null && currentTarget().isEmpty() && !entries.isEmpty()) {
+                        peerField.setText(entries.get(0).value);
+                    }
+                    if (deviceList != null) {
+                        deviceList.render(pairedEntries, lanEntries, lanNote);
+                    }
+                    updateTargetSummary();
+                });
+            } catch (Exception e) {
+                Log.w(TAG, "loadPairedPeers", e);
+            }
+        });
+    }
+
+    private void discover() {
+        discoverBtn.setEnabled(false);
+        lanNote = "正在搜索同一局域网设备…";
+        deviceList.render(pairedEntries, lanEntries, lanNote);
+        final String name = currentName();
+        new Thread(() -> {
+            try {
+                String json = Mobile.discover(name, 3000, lanHint());
+                JSONArray arr = new JSONArray(json);
+                final List<PeerEntry> found = new ArrayList<>();
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject o = arr.getJSONObject(i);
+                    String addr = o.optString("Addr", "").trim();
+                    if (addr.isEmpty()) {
+                        continue;
+                    }
+                    String dn = o.optString("Name", "").trim();
+                    if (dn.isEmpty()) {
+                        dn = "局域网设备";
+                    }
+                    found.add(new PeerEntry(dn, "局域网直连 · " + addr, addr));
+                }
+                ui.post(() -> {
+                    lanEntries.clear();
+                    lanEntries.addAll(found);
+                    lanNote = found.isEmpty() ? "未发现局域网在线设备，可直接使用已配对设备。" : "";
+                    if (!found.isEmpty() && currentTarget().isEmpty()) {
+                        peerField.setText(found.get(0).value);
+                    }
+                    deviceList.render(pairedEntries, lanEntries, lanNote);
+                    updateTargetSummary();
+                    discoverBtn.setEnabled(true);
+                });
+            } catch (Exception e) {
+                ui.post(() -> {
+                    lanNote = "搜索失败：" + e.getMessage();
+                    deviceList.render(pairedEntries, lanEntries, lanNote);
+                    discoverBtn.setEnabled(true);
+                });
+            }
+        }).start();
+    }
+
+    private void showAndCopyPairUri() {
+        try {
+            String uri = Mobile.pairURIFor(currentName(), keyFile().getAbsolutePath());
+            if (pairUriField != null) {
+                pairUriField.setText(uri);
+            }
+            copyText("配对 URI", uri, "已复制本机配对 URI");
+        } catch (Exception e) {
+            toast("生成配对 URI 失败：" + e.getMessage());
+        }
+    }
+
+    private void importPairUri() {
+        String uri = pairUriField.getText().toString().trim();
+        if (uri.isEmpty()) {
+            toast("先粘贴对方 ftpair:// URI");
+            return;
+        }
+        confirmImportPairUri(uri);
+    }
+
+    private void pickPairFile() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("text/plain");
+        startActivityForResult(i, PICK_PAIR_FILE);
+    }
+
+    private void importPairFile(Uri uri) {
+        try {
+            ByteArrayOutputStream buf = new ByteArrayOutputStream();
+            try (InputStream in = getContentResolver().openInputStream(uri)) {
+                if (in == null) {
+                    toast("无法读取配对文件");
+                    return;
+                }
+                byte[] b = new byte[4096];
+                int n;
+                while ((n = in.read(b)) > 0) {
+                    buf.write(b, 0, n);
+                    if (buf.size() > 16384) {
+                        toast("配对文件过大");
+                        return;
+                    }
+                }
+            }
+            String text = buf.toString("UTF-8").trim();
+            if (text.isEmpty()) {
+                toast("配对文件为空");
+                return;
+            }
+            confirmImportPairUri(text);
+        } catch (Exception e) {
+            toast("读取配对文件失败：" + e.getMessage());
+        }
+    }
+
+    private void confirmImportPairUri(final String uri) {
+        new AlertDialog.Builder(this)
+                .setTitle("信任这台设备？")
+                .setMessage("设备 ID：" + shortPeerId(uri) + "\n\n导入后该设备可向你发送文件。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("导入并信任", (d, w) -> {
+                    try {
+                        Mobile.pairImport(uri, pairedFile().getAbsolutePath());
+                        toast("已导入配对设备");
+                        loadPairedPeers();
+                    } catch (Exception e) {
+                        toast("导入失败：" + e.getMessage());
+                    }
+                })
+                .show();
+    }
+
+    private void startPake(boolean wait) {
+        String code = pakeCodeField.getText().toString().trim();
+        if (code.length() != 6) {
+            toast("请输入 6 位数字配对码");
+            return;
+        }
+        String peer = pakePeerField.getText().toString().trim();
+        if (!wait && peer.isEmpty()) {
+            toast("请输入对方设备 ID，或点“等待配对”");
+            return;
+        }
+        pakeInfoView.setText(wait ? "正在等待对方输入相同配对码…" : "正在协商信任密钥…");
+        new Thread(() -> {
+            try {
+                String res = wait
+                        ? Mobile.waitPairCode("", keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(), code, 90000)
+                        : Mobile.pairWithCode("", keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(), code, peer);
+                ui.post(() -> {
+                    pakeInfoView.setText("配对成功：" + res);
+                    loadPairedPeers();
+                });
+            } catch (Exception e) {
+                ui.post(() -> pakeInfoView.setText("配对失败：" + e.getMessage()));
+            }
+        }).start();
+    }
+
+    private void updateTargetSummary() {
+        if (targetTitleView == null || targetSubView == null) {
+            return;
+        }
+        String t = currentTarget();
+        if (t.isEmpty()) {
+            targetTitleView.setText("尚未选择接收设备");
+            targetSubView.setText("在下方列表选一台设备，或手动填入 ID / IP:端口");
+            return;
+        }
+        for (PeerEntry e : pairedEntries) {
+            if (e.value.equals(t)) {
+                targetTitleView.setText(e.name);
+                targetSubView.setText(e.sub);
+                return;
+            }
+        }
+        for (PeerEntry e : lanEntries) {
+            if (e.value.equals(t)) {
+                targetTitleView.setText(e.name);
+                targetSubView.setText(e.sub);
+                return;
+            }
+        }
+        if (isAutoTarget(t)) {
+            targetTitleView.setText("设备 " + t.substring(0, 12) + "…");
+            targetSubView.setText("将尝试 局域网 / 打洞 / 中继 自动选路");
+        } else {
+            targetTitleView.setText(t);
+            targetSubView.setText(isLanTarget(t) ? "局域网直连地址" : "格式需为 64 位设备 ID 或 IP:端口");
+        }
+    }
+
     private void importBootstrapPairs() {
-        java.io.File dir = new java.io.File(getExternalFilesDir(null), "received");
-        String target = new java.io.File(dir, "paired.json").getAbsolutePath();
-        java.io.File boot = new java.io.File(getFilesDir(), "pair.import");
-        int n = 0;
+        File boot = new File(getFilesDir(), "pair.import");
         if (boot.isFile()) {
             try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(boot))) {
                 String line;
                 while ((line = r.readLine()) != null) {
                     line = line.trim();
                     if (line.startsWith("ftpair://")) {
-                        Mobile.pairImport(line, target);
-                        n++;
+                        Mobile.pairImport(line, pairedFile().getAbsolutePath());
                     }
                 }
                 boot.delete();
             } catch (Exception e) {
-                status.setText("导入配对失败：" + e.getMessage());
-                return;
+                Log.w(TAG, "importBootstrapPairs", e);
             }
         }
-        java.io.File tf = new java.io.File(target);
-        if (tf.isFile()) {
-            copyForDebug(tf);
-        }
-        if (n > 0) {
-            status.setText("已导入 " + n + " 个配对：" + target);
+        if (pairedFile().isFile()) {
+            copyForDebug(pairedFile());
         }
     }
 
-    // copyForDebug mirrors a file into internal storage so adb run-as can read
-    // it; the external files dir is not reachable from there on Android 11+.
-    private void copyForDebug(java.io.File src) {
-        try (java.io.FileInputStream in = new java.io.FileInputStream(src)) {
-            java.io.File dst = new java.io.File(getFilesDir(), src.getName() + ".debug");
-            try (java.io.FileOutputStream out = new java.io.FileOutputStream(dst)) {
-                byte[] buf = new byte[8192];
-                int n;
-                while ((n = in.read(buf)) > 0) {
-                    out.write(buf, 0, n);
-                }
+    private void copyForDebug(File src) {
+        try (InputStream in = new FileInputStream(src);
+             OutputStream out = new FileOutputStream(new File(getFilesDir(), src.getName() + ".debug"))) {
+            copyStream(in, out);
+        } catch (Exception e) {
+            Log.w(TAG, "copyForDebug", e);
+        }
+    }
+
+    private void applyDebugPeerId() {
+        File f = new File(getFilesDir(), "peer.id");
+        if (!f.isFile()) {
+            return;
+        }
+        try (InputStream in = new FileInputStream(f)) {
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            copyStream(in, bos);
+            String id = bos.toString("UTF-8").trim();
+            if (!id.isEmpty() && peerField != null) {
+                peerField.setText(id);
             }
         } catch (Exception e) {
-            Log.w("ft", "copyForDebug", e);
+            Log.w(TAG, "applyDebugPeerId", e);
         }
     }
 
-    private View buildUi() {
-        ScrollView page = new ScrollView(this);
-        page.setFillViewport(true);
-        page.setBackgroundColor(paper);
-
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16), dp(12), dp(16), dp(24));
-        page.addView(root, new ScrollView.LayoutParams(MATCH, WRAP));
-
-        // ---- 一行 App 头：ft + 接收状态胶囊；第二行小字：端口 / 设备 ID ----
-        LinearLayout headRow = new LinearLayout(this);
-        headRow.setOrientation(LinearLayout.HORIZONTAL);
-        headRow.setGravity(Gravity.CENTER_VERTICAL);
-        headRow.addView(text("ft", 21, ink, Typeface.SERIF),
-                new LinearLayout.LayoutParams(WRAP, WRAP));
-        headRow.addView(new View(this), new LinearLayout.LayoutParams(0, dp(1), 1f));
-
-        recvChip = new LinearLayout(this);
-        recvChip.setOrientation(LinearLayout.HORIZONTAL);
-        recvChip.setGravity(Gravity.CENTER_VERTICAL);
-        recvChip.setPadding(dp(8), dp(4), dp(10), dp(4));
-        recvChip.setBackground(box(Color.TRANSPARENT, 0, 99));
-        recvDot = new View(this);
-        recvDot.setBackground(dotDrawable(ink3));
-        recvChip.addView(recvDot, new LinearLayout.LayoutParams(dp(7), dp(7)));
-        recvStateText = text("未启动", 12, ink2, Typeface.DEFAULT);
-        LinearLayout.LayoutParams stateLp = new LinearLayout.LayoutParams(WRAP, WRAP);
-        stateLp.leftMargin = dp(6);
-        recvChip.addView(recvStateText, stateLp);
-        headRow.addView(recvChip, new LinearLayout.LayoutParams(WRAP, WRAP));
-        root.addView(headRow, new LinearLayout.LayoutParams(MATCH, WRAP));
-
-        LinearLayout metaRow = new LinearLayout(this);
-        metaRow.setOrientation(LinearLayout.HORIZONTAL);
-        metaRow.setGravity(Gravity.CENTER_VERTICAL);
-        portText = text("端口 —", 11, ink3, Typeface.MONOSPACE);
-        portText.setLetterSpacing(0.06f);
-        metaRow.addView(portText, new LinearLayout.LayoutParams(WRAP, WRAP));
-        TextView metaSep = text("·", 11, ink3, Typeface.DEFAULT);
-        LinearLayout.LayoutParams sepLp = new LinearLayout.LayoutParams(WRAP, WRAP);
-        sepLp.leftMargin = dp(6);
-        sepLp.rightMargin = dp(6);
-        metaRow.addView(metaSep, sepLp);
-        idText = text("ID —", 11, ink3, Typeface.MONOSPACE);
-        idText.setLetterSpacing(0.06f);
-        metaRow.addView(idText, new LinearLayout.LayoutParams(WRAP, WRAP));
-        LinearLayout.LayoutParams metaLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        metaLp.topMargin = dp(3);
-        root.addView(metaRow, metaLp);
-
-        // ---- 三段式页签：选中 accent 实底 + accent-ink，未选 paper-2 底 + ink-2 ----
-        LinearLayout tabBar = new LinearLayout(this);
-        tabBar.setOrientation(LinearLayout.HORIZONTAL);
-        for (int i = 0; i < 3; i++) {
-            LinearLayout.LayoutParams segLp = new LinearLayout.LayoutParams(0, dp(44), 1f);
-            if (i > 0) {
-                segLp.leftMargin = dp(6);
-            }
-            tabBar.addView(seg(i), segLp);
-        }
-        LinearLayout.LayoutParams tabLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        tabLp.topMargin = dp(14);
-        root.addView(tabBar, tabLp);
-
-        // ---- 台账/状态行：跨页签常驻；空文本时自动收起 ----
-        LinearLayout statusRow = new LinearLayout(this);
-        statusRow.setOrientation(LinearLayout.HORIZONTAL);
-        statusRow.setGravity(Gravity.CENTER_VERTICAL);
-        status = new Ledger(12, ink3);
-        statusRow.addView(status, new LinearLayout.LayoutParams(0, WRAP, 1f));
-        failStamp = stamp("失败", danger);
-        failStamp.setVisibility(View.GONE);
-        LinearLayout.LayoutParams failLp = new LinearLayout.LayoutParams(WRAP, dp(18));
-        failLp.leftMargin = dp(8);
-        statusRow.addView(failStamp, failLp);
-        ((Ledger) status).bindBadge(failStamp);
-        LinearLayout.LayoutParams statusLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        statusLp.topMargin = dp(10);
-        root.addView(statusRow, statusLp);
-
-        // ---- 三个页签面板：切换只改 visibility，视图不销毁 ----
-        panelSend = new LinearLayout(this);
-        panelSend.setOrientation(LinearLayout.VERTICAL);
-        buildSendPanel(panelSend);
-        panelRecv = new LinearLayout(this);
-        panelRecv.setOrientation(LinearLayout.VERTICAL);
-        buildReceivePanel(panelRecv);
-        panelPair = new LinearLayout(this);
-        panelPair.setOrientation(LinearLayout.VERTICAL);
-        buildPairPanel(panelPair);
-        LinearLayout.LayoutParams panelLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        panelLp.topMargin = dp(14);
-        root.addView(panelSend, panelLp);
-        LinearLayout.LayoutParams panelLp2 = new LinearLayout.LayoutParams(MATCH, WRAP);
-        panelLp2.topMargin = dp(14);
-        root.addView(panelRecv, panelLp2);
-        LinearLayout.LayoutParams panelLp3 = new LinearLayout.LayoutParams(MATCH, WRAP);
-        panelLp3.topMargin = dp(14);
-        root.addView(panelPair, panelLp3);
-
-        selectTab(0);
-        return page;
-    }
-
-    /** 页签按钮：44dp 高、圆角 8，由 selectTab 统一上色。 */
-    private TextView seg(int index) {
-        TextView t = new TextView(this);
-        t.setGravity(Gravity.CENTER);
-        t.setIncludeFontPadding(false);
-        t.setOnClickListener(v -> selectTab(index));
-        tabs[index] = t;
-        return t;
-    }
-
-    /** 切页签：只改 visibility 与选中底色，不重建视图，呼吸动画继续跑。 */
-    private void selectTab(int index) {
-        activeTab = index;
-        final String[] labels = {"发送", "接收", "配对"};
-        View[] panels = {panelSend, panelRecv, panelPair};
-        for (int k = 0; k < panels.length; k++) {
-            boolean on = k == index;
-            TextView t = tabs[k];
-            if (t != null) {
-                t.setText(labels[k]);
-                t.setTextSize(13);
-                t.setBackground(box(on ? accent : paper2, 0, 8));
-                t.setTextColor(on ? accentInk : ink2);
-                t.setTypeface(on ? Typeface.create("sans-serif-medium", Typeface.NORMAL)
-                        : Typeface.DEFAULT);
-            }
-            if (panels[k] != null) {
-                panels[k].setVisibility(on ? View.VISIBLE : View.GONE);
-            }
-        }
-        if (status != null && statusText()) {
-            status.setText(indexHint(index));
+    private void prefillLastPeer() {
+        String last = getPreferences(MODE_PRIVATE).getString("lastPeer", "");
+        if (!last.isEmpty() && peerField != null && currentTarget().isEmpty()) {
+            peerField.setText(last);
+            updateTargetSummary();
         }
     }
 
-    /** 空状态提示只在该页签没有其它状态文本时出现。 */
-    private boolean statusText() {
-        return status == null || ((Ledger) status).getText().length() == 0;
+    private void saveLastPeer(String peer) {
+        getPreferences(MODE_PRIVATE).edit().putString("lastPeer", peer).apply();
     }
 
-    private String indexHint(int index) {
-        if (index == 1) {
-            return "未启动。先在电脑上运行 ft recv --lan，再点“开始接收”。";
-        }
-        return "";
+    private String currentTarget() {
+        return peerField == null ? "" : peerField.getText().toString().trim();
     }
 
-    /** 发送：附近设备（可点选）+ 对方地址 + 主操作发送。 */
-    private void buildSendPanel(LinearLayout p) {
-        LinearLayout devCard = card("附近设备");
-        addCard(p, devCard, 0);
-
-        deviceList = new DeviceList();
-        deviceList.setText("");
-        devCard.addView(deviceList, new LinearLayout.LayoutParams(MATCH, WRAP));
-
-        discoverBtn = outlineBtn("搜索设备");
-        discoverBtn.setOnClickListener(v -> discover());
-        LinearLayout.LayoutParams devLp = new LinearLayout.LayoutParams(MATCH, dp(44));
-        devLp.topMargin = dp(10);
-        devCard.addView(discoverBtn, devLp);
-
-        LinearLayout sendCard = card("发送");
-        addCard(p, sendCard, 12);
-
-        sendCard.addView(labelView("对方地址"), new LinearLayout.LayoutParams(WRAP, WRAP));
-        peerField = new EditText(this);
-        input(peerField, "点上面的设备自动填入，也可手输 192.168.x.x:端口");
-        LinearLayout.LayoutParams peerLp = new LinearLayout.LayoutParams(MATCH, dp(44));
-        peerLp.topMargin = dp(6);
-        sendCard.addView(peerField, peerLp);
-
-        sendBtn = filledBtn("发送（自动选路）");
-        sendBtn.setOnClickListener(v -> pickFiles(true));
-        sendCard.addView(sendBtn, fullRow(10));
-    }
-
-    /** 接收：接收按钮组 + 自动选路图例；状态信息另起一块。 */
-    private void buildReceivePanel(LinearLayout p) {
-        LinearLayout ioCard = card("接收");
-        addCard(p, ioCard, 0);
-
-        startBtn = filledBtn("开始接收");
-        startBtn.setOnClickListener(v -> startReceiver());
-        stopBtn = outlineBtn("停止");
-        stopBtn.setOnClickListener(v -> stopReceiver());
-        LinearLayout recvRow = new LinearLayout(this);
-        recvRow.setOrientation(LinearLayout.HORIZONTAL);
-        recvRow.addView(startBtn, new LinearLayout.LayoutParams(0, dp(44), 2f));
-        LinearLayout.LayoutParams stopLp = new LinearLayout.LayoutParams(0, dp(44), 1f);
-        stopLp.leftMargin = dp(8);
-        recvRow.addView(stopBtn, stopLp);
-        ioCard.addView(recvRow, new LinearLayout.LayoutParams(MATCH, WRAP));
-
-        relayBtn = outlineBtn("远程接收");
-        relayBtn.setOnClickListener(v -> startAutoReceiver());
-        punchBtn = outlineBtn("打洞接收");
-        punchBtn.setOnClickListener(v -> startPunchReceiver());
-        ioCard.addView(row2(relayBtn, punchBtn), fullRow(10));
-
-        webBtn = outlineBtn("网页分享");
-        webBtn.setOnClickListener(v -> startWebShare());
-        Button battBtn = outlineBtn("后台保活");
-        battBtn.setOnClickListener(v -> requestBatteryExemption());
-        ioCard.addView(row2(webBtn, battBtn), fullRow(8));
-
-        LinearLayout legend = new LinearLayout(this);
-        legend.setOrientation(LinearLayout.HORIZONTAL);
-        legend.setGravity(Gravity.CENTER_VERTICAL);
-        legend.addView(labelView("自动选路"), new LinearLayout.LayoutParams(WRAP, WRAP));
-        String[] pathNames = {"LAN", "打洞", "中继"};
-        int[] pathColors = {accent, amber, violet};
-        for (int i = 0; i < pathNames.length; i++) {
-            LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(WRAP, dp(18));
-            pLp.leftMargin = dp(6);
-            legend.addView(stamp(pathNames[i], pathColors[i]), pLp);
-        }
-        ioCard.addView(legend, fullRow(12));
-
-        LinearLayout stateCard = card("状态");
-        addCard(p, stateCard, 12);
-        webInfo = new Ledger(12, ink2);
-        webInfo.setText("网页分享：未启动（同一 Wi-Fi 用浏览器打开）");
-        stateCard.addView(webInfo, new LinearLayout.LayoutParams(MATCH, WRAP));
-        relayInfo = new Ledger(12, ink2);
-        relayInfo.setText("中继：未连接（信令 wss://ft.cwlindean.cn/signal）");
-        stateCard.addView(relayInfo, fullRow(6));
-        punchInfo = new Ledger(12, ink2);
-        punchInfo.setText("打洞：未启动（STUN 123.57.253.208:40000/40001）");
-        stateCard.addView(punchInfo, fullRow(6));
-    }
-
-    /** 配对：URI 与 6 位码两条路，唯一主操作是用 6 位码配对。 */
-    private void buildPairPanel(LinearLayout p) {
-        LinearLayout pairCard = card("配对");
-        addCard(p, pairCard, 0);
-
-        pairCard.addView(labelView("本机名"), new LinearLayout.LayoutParams(WRAP, WRAP));
-        nameField = new EditText(this);
-        nameField.setText(deviceName);
-        input(nameField, "本机名（对端看到的名字）");
-        LinearLayout.LayoutParams nameLp = new LinearLayout.LayoutParams(MATCH, dp(44));
-        nameLp.topMargin = dp(6);
-        nameLp.bottomMargin = dp(12);
-        pairCard.addView(nameField, nameLp);
-
-        pairField = new EditText(this);
-        input(pairField, "配对 URI（ftpair://…）");
-        pairCard.addView(pairField, new LinearLayout.LayoutParams(MATCH, dp(44)));
-
-        Button showPairBtn = outlineBtn("显示本机配对 URI");
-        showPairBtn.setOnClickListener(v -> showPairUri());
-        Button importPairBtn = outlineBtn("导入对方配对 URI");
-        importPairBtn.setOnClickListener(v -> importPairUri());
-        Button pickPairBtn = outlineBtn("导入配对文件");
-        pickPairBtn.setOnClickListener(v -> pickPairFile());
-        pairCard.addView(row2(showPairBtn, importPairBtn), fullRow(8));
-        pairCard.addView(pickPairBtn, tallRow(8));
-
-        // One-time 6-digit code pairing (protocol 8.6): the code is never sent,
-        // both sides prove knowledge of it with SPAKE2.
-        pakeCodeField = new EditText(this);
-        pakeCodeField.setInputType(InputType.TYPE_CLASS_NUMBER);
-        input(pakeCodeField, "6 位一次性配对码");
-        pairCard.addView(pakeCodeField, tallRow(12));
-
-        pakePeerField = new EditText(this);
-        input(pakePeerField, "对方设备 ID（点“等待配对”时留空）");
-        pairCard.addView(pakePeerField, tallRow(8));
-
-        Button waitPairBtn = outlineBtn("等待配对");
-        waitPairBtn.setOnClickListener(v -> startPake(true));
-        Button doPairBtn = filledBtn("用 6 位码配对");
-        doPairBtn.setOnClickListener(v -> startPake(false));
-        pairCard.addView(row2(waitPairBtn, doPairBtn), fullRow(8));
-
-        pakeInfo = new Ledger(12, ink3);
-        pakeInfo.setText("还没配对：用 6 位码或配对 URI 建立信任，之后在「发送」页可直接看到对方。");
-        LinearLayout.LayoutParams pakeLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        pakeLp.topMargin = dp(10);
-        pairCard.addView(pakeInfo, pakeLp);
-    }
-
-    // ================= 设备列表：可点选行（选中 accent-soft 底 + 2dp accent 竖线） =================
-
-    private class DeviceList extends LinearLayout {
-        private final List<Row> rows = new ArrayList<Row>();
-        private String selected = "";
-
-        DeviceList() {
-            super(MainActivity.this);
-            setOrientation(LinearLayout.VERTICAL);
-        }
-
-        /** 复用 discover() 的既有文本格式：设备名一行，地址缩进一行。 */
-        void setText(CharSequence raw) {
-            String s = raw == null ? "" : raw.toString();
-            removeAllViews();
-            rows.clear();
-            String[] lines = s.split("\n");
-            boolean any = false;
-            for (int i = 0; i < lines.length; i++) {
-                String line = lines[i];
-                if (line.trim().isEmpty()) {
-                    continue;
-                }
-                String next = (i + 1 < lines.length) ? lines[i + 1] : "";
-                if (!line.startsWith("    ") && next.startsWith("    ")) {
-                    addRow(line.trim(), next.trim());
-                    i++;
-                } else {
-                    addNote(line.trim());
-                }
-                any = true;
-            }
-            if (!any) {
-                addNote("还没有配对设备 · 去「配对」页用 6 位码或 URI 添加");
-            }
-            if (selected.isEmpty() && peerField != null) {
-                selected = peerField.getText().toString().trim();
-            }
-            paint();
-        }
-
-        private void addRow(final String name, final String addr) {
-            LinearLayout row = new LinearLayout(MainActivity.this);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(dp(6), dp(8), dp(8), dp(8));
-
-            View bar = new View(MainActivity.this);
-            row.addView(bar, new LinearLayout.LayoutParams(dp(2), dp(36)));
-
-            LinearLayout col = new LinearLayout(MainActivity.this);
-            col.setOrientation(LinearLayout.VERTICAL);
-            col.addView(text(name, 13, ink, Typeface.DEFAULT),
-                    new LinearLayout.LayoutParams(WRAP, WRAP));
-            TextView ad = text(addr, 11, ink3, Typeface.MONOSPACE);
-            ad.setLetterSpacing(0.04f);
-            LinearLayout.LayoutParams adLp = new LinearLayout.LayoutParams(WRAP, WRAP);
-            adLp.topMargin = dp(3);
-            col.addView(ad, adLp);
-            LinearLayout.LayoutParams colLp = new LinearLayout.LayoutParams(0, WRAP, 1f);
-            colLp.leftMargin = dp(10);
-            row.addView(col, colLp);
-
-            row.setOnClickListener(v -> {
-                selected = addr;
-                if (peerField != null) {
-                    peerField.setText(addr);
-                }
-                paint();
-            });
-
-            LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-            if (!rows.isEmpty()) {
-                rowLp.topMargin = dp(2);
-            }
-            addView(row, rowLp);
-            rows.add(new Row(addr, row, bar));
-        }
-
-        private void addNote(String note) {
-            Ledger t = new Ledger(12, ink3);
-            t.setText(note);
-            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(MATCH, WRAP);
-            p.topMargin = dp(4);
-            addView(t, p);
-        }
-
-        private void paint() {
-            for (Row r : rows) {
-                boolean on = r.addr.equals(selected) && !selected.isEmpty();
-                r.row.setBackground(on ? box(accentSoft, 0, 6) : null);
-                r.bar.setBackgroundColor(on ? accent : Color.TRANSPARENT);
-            }
-        }
-    }
-
-    private class Row {
-        final String addr;
-        final LinearLayout row;
-        final View bar;
-
-        Row(String addr, LinearLayout row, View bar) {
-            this.addr = addr;
-            this.row = row;
-            this.bar = bar;
-        }
-    }
-
-    // ================= 外观层：令牌、圆角、字级、印章 =================
-
-    private int dp(float v) {
-        return Math.round(v * getResources().getDisplayMetrics().density);
-    }
-
-    private boolean isNight() {
-        return (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
-                == Configuration.UI_MODE_NIGHT_YES;
-    }
-
-    /** 按 tokens.md 的两列取色；深色不是反色，用对应深色值。 */
-    private void loadTokens() {
-        if (isNight()) {
-            paper = Color.parseColor("#0E1411");
-            paper2 = Color.parseColor("#161E1A");
-            paper3 = Color.parseColor("#1E2823");
-            ink = Color.parseColor("#E8E6DF");
-            ink2 = Color.parseColor("#ABA9A1");
-            ink3 = Color.parseColor("#7E7C74");
-            line = Color.parseColor("#2B3430");
-            lineSoft = Color.parseColor("#222A26");
-            accent = Color.parseColor("#89C7AB");
-            accentInk = Color.parseColor("#111916");
-            accentSoft = Color.parseColor("#1B2F26");
-            accentPressed = Color.parseColor("#6FAF95");
-            danger = Color.parseColor("#ED8174");
-            amber = Color.parseColor("#E3B667");
-            violet = Color.parseColor("#BEA3DF");
-        } else {
-            paper = Color.parseColor("#F7F6F0");
-            paper2 = Color.parseColor("#F0EEE7");
-            paper3 = Color.parseColor("#E6E4DB");
-            ink = Color.parseColor("#16211C");
-            ink2 = Color.parseColor("#505955");
-            ink3 = Color.parseColor("#7E8783");
-            line = Color.parseColor("#D6D4CC");
-            lineSoft = Color.parseColor("#E1E0D8");
-            accent = Color.parseColor("#2C5C49");
-            accentInk = Color.parseColor("#FBFAF7");
-            accentSoft = Color.parseColor("#D6EDE2");
-            accentPressed = Color.parseColor("#234A3B");
-            danger = Color.parseColor("#B64036");
-            amber = Color.parseColor("#915C08");
-            violet = Color.parseColor("#665189");
-        }
-    }
-
-    /** 状态栏/导航栏跟随纸面；浅色配深色图标。 */
-    private void applyWindowChrome() {
-        try {
-            getWindow().setStatusBarColor(paper);
-            getWindow().setNavigationBarColor(paper);
-            View dv = getWindow().getDecorView();
-            int flags = dv.getSystemUiVisibility();
-            if (isNight()) {
-                flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-            } else {
-                flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-            }
-            if (Build.VERSION.SDK_INT >= 26) {
-                if (isNight()) {
-                    flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
-                } else {
-                    flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
-                }
-            }
-            dv.setSystemUiVisibility(flags);
-        } catch (Exception e) {
-            Log.w(TAG, "window chrome", e);
-        }
-    }
-
-    private GradientDrawable box(int fill, int stroke, float radiusDp) {
-        GradientDrawable d = new GradientDrawable();
-        d.setShape(GradientDrawable.RECTANGLE);
-        d.setColor(fill);
-        d.setCornerRadius(dp(radiusDp));
-        if (stroke != 0) {
-            d.setStroke(dp(1), stroke);
-        }
-        return d;
-    }
-
-    private GradientDrawable dotDrawable(int color) {
-        GradientDrawable d = new GradientDrawable();
-        d.setShape(GradientDrawable.OVAL);
-        d.setColor(color);
-        return d;
-    }
-
-    private TextView text(String s, float sizeSp, int color, Typeface tf) {
-        TextView t = new TextView(this);
-        t.setText(s);
-        t.setTextSize(sizeSp);
-        t.setTextColor(color);
-        t.setTypeface(tf);
-        t.setIncludeFontPadding(false);
-        return t;
-    }
-
-    private TextView labelView(String s) {
-        TextView t = text(s, 11, ink3, Typeface.MONOSPACE);
-        t.setLetterSpacing(0.06f);
-        return t;
-    }
-
-    /** 路径印章：1dp 描边 + 11sp 等宽，颜色 + 边框 + 文字三重编码。 */
-    private TextView stamp(String s, int color) {
-        TextView t = text(s, 11, color, Typeface.MONOSPACE);
-        t.setLetterSpacing(0.06f);
-        t.setGravity(Gravity.CENTER);
-        t.setBackground(box(Color.TRANSPARENT, color, 3));
-        t.setPadding(dp(6), 0, dp(6), 0);
-        return t;
-    }
-
-    private Button baseButton(String s) {
-        Button b = new Button(this);
-        b.setText(s);
-        b.setTextSize(13);
-        b.setAllCaps(false);
-        b.setTypeface(Typeface.DEFAULT);
-        b.setIncludeFontPadding(false);
-        b.setGravity(Gravity.CENTER);
-        b.setPadding(dp(12), 0, dp(12), 0);
-        b.setMinHeight(0);
-        b.setMinimumHeight(0);
-        b.setMinWidth(0);
-        b.setMinimumWidth(0);
-        b.setElevation(0);
-        b.setStateListAnimator(null);
-        return b;
-    }
-
-    /** 主操作：accent 实底 + 圆角 8，按下加深，禁用转纸灰。 */
-    private Button filledBtn(String s) {
-        Button b = baseButton(s);
-        StateListDrawable sl = new StateListDrawable();
-        sl.addState(new int[]{-android.R.attr.state_enabled}, box(paper3, lineSoft, 8));
-        sl.addState(new int[]{android.R.attr.state_pressed}, box(accentPressed, 0, 8));
-        sl.addState(new int[]{}, box(accent, 0, 8));
-        b.setBackground(sl);
-        b.setTextColor(new ColorStateList(
-                new int[][]{{-android.R.attr.state_enabled}, {}},
-                new int[]{ink3, accentInk}));
-        return b;
-    }
-
-    /** 次操作：纸面底 + 1dp line 描边。 */
-    private Button outlineBtn(String s) {
-        Button b = baseButton(s);
-        StateListDrawable sl = new StateListDrawable();
-        sl.addState(new int[]{-android.R.attr.state_enabled}, box(paper2, lineSoft, 8));
-        sl.addState(new int[]{android.R.attr.state_pressed}, box(paper3, line, 8));
-        sl.addState(new int[]{}, box(paper, line, 8));
-        b.setBackground(sl);
-        b.setTextColor(new ColorStateList(
-                new int[][]{{-android.R.attr.state_enabled}, {}},
-                new int[]{ink3, ink}));
-        return b;
-    }
-
-    private EditText input(EditText e, String hint) {
-        e.setHint(hint);
-        e.setHintTextColor(ink3);
-        e.setTextColor(ink);
-        e.setTextSize(13);
-        e.setSingleLine(true);
-        e.setIncludeFontPadding(false);
-        e.setBackground(box(paper, line, 8));
-        e.setPadding(dp(12), 0, dp(12), 0);
-        return e;
-    }
-
-    private LinearLayout card(String titleText) {
-        LinearLayout c = new LinearLayout(this);
-        c.setOrientation(LinearLayout.VERTICAL);
-        c.setPadding(dp(14), dp(14), dp(14), dp(16));
-        c.setBackground(box(paper2, line, 8));
-        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(WRAP, WRAP);
-        titleLp.bottomMargin = dp(10);
-        c.addView(labelView(titleText), titleLp);
-        return c;
-    }
-
-    private void addCard(LinearLayout root, LinearLayout card) {
-        addCard(root, card, 18);
-    }
-
-    private void addCard(LinearLayout root, LinearLayout card, int topMarginDp) {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(MATCH, WRAP);
-        p.topMargin = dp(topMarginDp);
-        root.addView(card, p);
-    }
-
-    private LinearLayout.LayoutParams fullRow() {
-        return fullRow(0);
-    }
-
-    private LinearLayout.LayoutParams fullRow(int topMarginDp) {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(MATCH, WRAP);
-        p.topMargin = dp(topMarginDp);
-        return p;
-    }
-
-    /** 整行、固定 44dp 高（输入框与次级按钮统一高度）。 */
-    private LinearLayout.LayoutParams tallRow(int topMarginDp) {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(MATCH, dp(44));
-        p.topMargin = dp(topMarginDp);
-        return p;
-    }
-
-    /** 两枚等宽按钮并排，高 44dp。 */
-    private LinearLayout row2(View a, View b) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.addView(a, new LinearLayout.LayoutParams(0, dp(44), 1f));
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(44), 1f);
-        p.leftMargin = dp(8);
-        row.addView(b, p);
-        return row;
-    }
-
-    /** 台账/状态行：12sp、数字等宽；含失败/错误/拒绝的句子整行转 danger。 */
-    private class Ledger extends TextView {
-        private final int normal;
-        private TextView badge;
-
-        Ledger(float sizeSp, int normalColor) {
-            super(MainActivity.this);
-            normal = normalColor;
-            setTextSize(sizeSp);
-            setTextColor(normalColor);
-            setIncludeFontPadding(false);
-            setLineSpacing(dp(4), 1f);
-        }
-
-        void bindBadge(TextView b) {
-            badge = b;
-        }
-
-        @Override
-        public void setText(CharSequence cs, BufferType type) {
-            String s = cs == null ? "" : cs.toString();
-            boolean bad = s.contains("失败") || s.contains("错误") || s.contains("拒绝");
-            setTextColor(bad ? danger : normal);
-            if (badge != null) {
-                badge.setVisibility(bad ? VISIBLE : GONE);
-            }
-            super.setText(monoDigits(s), BufferType.NORMAL);
-        }
-    }
-
-    private static final Pattern NUMBERS =
-            Pattern.compile("[0-9][0-9A-Fa-f.:x]*[0-9A-Fa-f]|[0-9]");
-
-    /** 把数字/十六进制/地址片段套上等宽字形（对齐用）。 */
-    private static CharSequence monoDigits(String s) {
-        SpannableString out = new SpannableString(s);
-        Matcher m = NUMBERS.matcher(s);
-        while (m.find()) {
-            out.setSpan(new TypefaceSpan("monospace"), m.start(), m.end(),
-                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        }
-        return out;
-    }
-
-    /** 接收中 / 已暂停：圆点颜色 + 呼吸（1.6s 周期，仅此一处动效）。 */
-    private void setRunning(boolean running) {
-        receiverRunning = running;
-        if (recvStateText != null) {
-            if (running) {
-            recvEverStarted = true;
-        }
-        recvStateText.setText(running ? "接收中" : (recvEverStarted ? "已暂停" : "未启动"));
-            recvStateText.setTextColor(running ? accent : ink2);
-        }
-        if (recvDot != null) {
-            recvDot.setBackground(dotDrawable(running ? accent : ink3));
-            recvDot.setAlpha(1f);
-        }
-        if (recvChip != null) {
-            recvChip.setBackground(box(running ? accentSoft : Color.TRANSPARENT, 0, 99));
-        }
-        if (running) {
-            startDotPulse();
-        } else {
-            stopDotPulse();
-        }
-    }
-
-    private void startDotPulse() {
-        if (dotAnimator != null) {
-            dotAnimator.cancel();
-        }
-        dotAnimator = ValueAnimator.ofFloat(1f, 0.55f);
-        dotAnimator.setDuration(800);
-        dotAnimator.setRepeatMode(ValueAnimator.REVERSE);
-        dotAnimator.setRepeatCount(ValueAnimator.INFINITE);
-        dotAnimator.setInterpolator(new AccelerateDecelerateInterpolator());
-        dotAnimator.addUpdateListener(a -> {
-            if (recvDot != null) {
-                recvDot.setAlpha((Float) a.getAnimatedValue());
-            }
-        });
-        dotAnimator.start();
-    }
-
-    private void stopDotPulse() {
-        if (dotAnimator != null) {
-            dotAnimator.cancel();
-            dotAnimator = null;
-        }
-        if (recvDot != null) {
-            recvDot.setAlpha(1f);
-        }
-    }
-
-    /** startReceiver 返回 host:port，只取端口显示。 */
-    private void showPort(String addr) {
-        String port = "";
-        if (addr != null) {
-            int i = addr.lastIndexOf(':');
-            if (i >= 0) {
-                port = addr.substring(i + 1).trim();
-            }
-        }
-        if (portText != null) {
-            portText.setText(port.isEmpty() ? "端口 —" : "端口 " + port);
-        }
-    }
-
-    /** 顶部展示本机设备 ID 前 12 位（与配对 URI 里的一致）。 */
-    private void loadDeviceId() {
-        new Thread(() -> {
-            try {
-                File dir = new File(getExternalFilesDir(null), "received");
-                String id = Mobile.deviceIDFor(new File(dir, "device.key").getAbsolutePath());
-                final String shown = id == null ? "" : (id.length() > 12 ? id.substring(0, 12) : id);
-                ui.post(() -> {
-                    if (idText != null && !shown.isEmpty()) {
-                        idText.setText("ID " + shown);
-                    }
-                });
-            } catch (Exception e) {
-                Log.w(TAG, "deviceIDFor", e);
-            }
-        }).start();
+    private String loadSavedName() {
+        SharedPreferences sp = getPreferences(MODE_PRIVATE);
+        String saved = sp.getString("deviceName", "").trim();
+        return saved.isEmpty() ? defaultName() : saved;
     }
 
     private String defaultName() {
-        String model = android.os.Build.MODEL == null ? "phone" : android.os.Build.MODEL;
+        String model = Build.MODEL == null ? "phone" : Build.MODEL;
         String s = model.replaceAll("[^A-Za-z0-9]+", "-");
         if (s.isEmpty() || s.equals("-")) {
             s = "phone";
@@ -999,8 +1892,382 @@ public class MainActivity extends Activity {
     }
 
     private String currentName() {
+        if (nameField == null) {
+            return deviceName;
+        }
         String n = nameField.getText().toString().trim();
         return n.isEmpty() ? deviceName : n;
+    }
+
+    // ================= Device List View =================
+
+    private static class PeerEntry {
+        final String name;
+        final String sub;
+        final String value;
+
+        PeerEntry(String name, String sub, String value) {
+            this.name = name;
+            this.sub = sub;
+            this.value = value;
+        }
+    }
+
+    private static class ReceivedEntry {
+        final String name;
+        final String uri;
+        final String mime;
+        final String via;
+        final long bytes;
+        final long ts;
+
+        ReceivedEntry(String name, String uri, String mime, String via, long bytes, long ts) {
+            this.name = name;
+            this.uri = uri;
+            this.mime = mime;
+            this.via = via;
+            this.bytes = bytes;
+            this.ts = ts;
+        }
+    }
+
+    private class DeviceList extends LinearLayout {
+        private final List<RowItem> rows = new ArrayList<>();
+        private String selected = "";
+
+        DeviceList() {
+            super(MainActivity.this);
+            setOrientation(LinearLayout.VERTICAL);
+        }
+
+        void render(List<PeerEntry> paired, List<PeerEntry> lan, String note) {
+            removeAllViews();
+            rows.clear();
+            boolean any = false;
+            if (paired != null) {
+                for (PeerEntry e : paired) {
+                    addRow(e.name, e.sub, e.value);
+                    any = true;
+                }
+            }
+            if (lan != null) {
+                for (PeerEntry e : lan) {
+                    addRow(e.name, e.sub, e.value);
+                    any = true;
+                }
+            }
+            if (note != null && !note.isEmpty()) {
+                addNote(note);
+                any = true;
+            }
+            if (!any) {
+                addNote("暂无设备 · 去「设备」页完成一次配对，或点右上角搜索局域网");
+            }
+            syncSelection();
+        }
+
+        void syncSelection() {
+            selected = currentTarget();
+            paint();
+        }
+
+        private void addRow(final String name, final String sub, final String value) {
+            LinearLayout row = new LinearLayout(MainActivity.this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(12), dp(10), dp(12), dp(10));
+
+            String initial = name.isEmpty() ? "?" : name.substring(0, 1).toUpperCase(Locale.US);
+            TextView avatar = label(initial, 15, cOnPrimaryContainer, true);
+            avatar.setGravity(Gravity.CENTER);
+            avatar.setBackground(oval(cPrimaryContainer));
+            row.addView(avatar, new LinearLayout.LayoutParams(dp(40), dp(40)));
+
+            LinearLayout col = new LinearLayout(MainActivity.this);
+            col.setOrientation(LinearLayout.VERTICAL);
+            TextView nm = label(name, 15, cOnSurface, true);
+            nm.setSingleLine(true);
+            nm.setEllipsize(TextUtils.TruncateAt.END);
+            col.addView(nm, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+            TextView sb = label(sub, 11, cOnSurfaceVariant, false);
+            sb.setTypeface(Typeface.MONOSPACE);
+            sb.setSingleLine(true);
+            sb.setEllipsize(TextUtils.TruncateAt.END);
+            LinearLayout.LayoutParams sbLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+            sbLp.topMargin = dp(2);
+            col.addView(sb, sbLp);
+
+            LinearLayout.LayoutParams colLp = new LinearLayout.LayoutParams(0, WRAP, 1f);
+            colLp.leftMargin = dp(12);
+            row.addView(col, colLp);
+
+            TextView mark = label("已选", 11, cOnPrimary, true);
+            mark.setPadding(dp(8), dp(4), dp(8), dp(4));
+            mark.setBackground(roundBox(cPrimary, 0, 99));
+            mark.setVisibility(View.GONE);
+            LinearLayout.LayoutParams mkLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+            mkLp.leftMargin = dp(8);
+            row.addView(mark, mkLp);
+
+            row.setOnClickListener(v -> {
+                selected = value;
+                if (peerField != null) {
+                    peerField.setText(value);
+                }
+                paint();
+                updateTargetSummary();
+            });
+
+            LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+            if (!rows.isEmpty()) {
+                rowLp.topMargin = dp(6);
+            }
+            addView(row, rowLp);
+            rows.add(new RowItem(value, row, mark));
+        }
+
+        private void addNote(String note) {
+            TextView t = label(note, 12, cOnSurfaceVariant, false);
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(MATCH, WRAP);
+            p.topMargin = dp(6);
+            addView(t, p);
+        }
+
+        private void paint() {
+            for (RowItem r : rows) {
+                boolean on = r.value.equals(selected) && !selected.isEmpty();
+                int bg = on ? cSecondaryContainer : cSurface;
+                r.row.setBackground(ripple(roundBox(bg, 0, 16), 16));
+                r.mark.setVisibility(on ? View.VISIBLE : View.GONE);
+            }
+        }
+    }
+
+    private static class RowItem {
+        final String value;
+        final LinearLayout row;
+        final TextView mark;
+
+        RowItem(String value, LinearLayout row, TextView mark) {
+            this.value = value;
+            this.row = row;
+            this.mark = mark;
+        }
+    }
+
+    // ================= MD3 Component Builders =================
+
+    private LinearLayout md3Card(int bg, float radiusDp, int l, int t, int r, int b) {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setPadding(dp(l), dp(t), dp(r), dp(b));
+        c.setBackground(roundBox(bg, 0, radiusDp));
+        return c;
+    }
+
+    private TextView label(String text, float sp, int color, boolean medium) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextSize(sp);
+        t.setTextColor(color);
+        t.setIncludeFontPadding(false);
+        t.setTypeface(medium ? Typeface.create("sans-serif-medium", Typeface.NORMAL) : Typeface.DEFAULT);
+        return t;
+    }
+
+    private EditText md3Input(String hint) {
+        EditText e = new EditText(this);
+        e.setHint(hint);
+        e.setHintTextColor(cOnSurfaceVariant);
+        e.setTextColor(cOnSurface);
+        e.setTextSize(14);
+        e.setSingleLine(true);
+        e.setGravity(Gravity.CENTER_VERTICAL);
+        e.setPadding(dp(14), 0, dp(14), 0);
+        e.setBackground(roundBox(cSurface, cOutlineVariant, 14));
+        return e;
+    }
+
+    private Button basePillBtn(String text, float sp) {
+        Button b = new Button(this);
+        b.setText(text);
+        b.setTextSize(sp);
+        b.setAllCaps(false);
+        b.setIncludeFontPadding(false);
+        b.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        b.setGravity(Gravity.CENTER);
+        b.setPadding(dp(16), 0, dp(16), 0);
+        b.setMinHeight(0);
+        b.setMinimumHeight(0);
+        b.setMinWidth(0);
+        b.setMinimumWidth(0);
+        b.setElevation(0);
+        b.setStateListAnimator(null);
+        return b;
+    }
+
+    private Button pillFilledBtn(String text, int bg, int fg) {
+        Button b = basePillBtn(text, 14);
+        applyFilledStyle(b, bg, fg);
+        return b;
+    }
+
+    private Button pillSmallBtn(String text, int bg, int fg) {
+        Button b = basePillBtn(text, 12);
+        b.setPadding(dp(12), 0, dp(12), 0);
+        applyFilledStyle(b, bg, fg);
+        return b;
+    }
+
+    private void applyFilledStyle(Button b, int bg, int fg) {
+        b.setBackground(ripple(roundBox(bg, 0, 99), 99));
+        b.setTextColor(new ColorStateList(
+                new int[][]{{-android.R.attr.state_enabled}, {}},
+                new int[]{cOutline, fg}));
+    }
+
+    private Button pillOutlineBtn(String text) {
+        Button b = basePillBtn(text, 13);
+        b.setBackground(ripple(roundBox(cSurface, cOutline, 99), 99));
+        b.setTextColor(cPrimary);
+        return b;
+    }
+
+    private GradientDrawable roundBox(int fill, int stroke, float radiusDp) {
+        GradientDrawable d = new GradientDrawable();
+        d.setShape(GradientDrawable.RECTANGLE);
+        d.setColor(fill);
+        d.setCornerRadius(dp(radiusDp));
+        if (stroke != 0) {
+            d.setStroke(dp(1), stroke);
+        }
+        return d;
+    }
+
+    private GradientDrawable oval(int color) {
+        GradientDrawable d = new GradientDrawable();
+        d.setShape(GradientDrawable.OVAL);
+        d.setColor(color);
+        return d;
+    }
+
+    private Drawable ripple(Drawable content, float radiusDp) {
+        return new RippleDrawable(ColorStateList.valueOf(cRipple), content,
+                roundBox(Color.WHITE, 0, radiusDp));
+    }
+
+    private TextView pathBadgeView(String via) {
+        TextView t = label(pathLabel(via), 11, cOnPrimaryContainer, true);
+        t.setPadding(dp(8), dp(3), dp(8), dp(3));
+        stylePathBadge(t, via);
+        return t;
+    }
+
+    private void stylePathBadge(TextView t, String via) {
+        String label = pathLabel(via);
+        t.setText(label);
+        if ("lan".equalsIgnoreCase(via)) {
+            t.setTextColor(cOnPrimaryContainer);
+            t.setBackground(roundBox(cPrimaryContainer, 0, 99));
+        } else if ("punch".equalsIgnoreCase(via)) {
+            t.setTextColor(cWarn);
+            t.setBackground(roundBox(cWarnContainer, 0, 99));
+        } else {
+            t.setTextColor(cOnTertiaryContainer);
+            t.setBackground(roundBox(cTertiaryContainer, 0, 99));
+        }
+    }
+
+    private static String pathLabel(String path) {
+        if ("lan".equalsIgnoreCase(path)) {
+            return "LAN";
+        }
+        if ("punch".equalsIgnoreCase(path)) {
+            return "打洞";
+        }
+        if ("relay".equalsIgnoreCase(path)) {
+            return "中继";
+        }
+        return path == null ? "" : path;
+    }
+
+    /** Geometric nav icons drawn via Android Canvas so rendering is crisp at all DPIs. */
+    private class NavIcon extends Drawable {
+        private final int kind;
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        NavIcon(int kind, int color) {
+            this.kind = kind;
+            paint.setColor(color);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(1.9f));
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeJoin(Paint.Join.ROUND);
+        }
+
+        @Override
+        public void draw(Canvas canvas) {
+            android.graphics.Rect b = getBounds();
+            float w = b.width();
+            float h = b.height();
+            Path p = new Path();
+            if (kind == 0) { // Send: diagonal arrow up-right inside tray/open
+                p.moveTo(w * 0.22f, h * 0.78f);
+                p.lineTo(w * 0.78f, h * 0.22f);
+                p.moveTo(w * 0.36f, h * 0.22f);
+                p.lineTo(w * 0.78f, h * 0.22f);
+                p.lineTo(w * 0.78f, h * 0.64f);
+            } else if (kind == 1) { // Receive: downward arrow into tray
+                p.moveTo(w * 0.50f, h * 0.18f);
+                p.lineTo(w * 0.50f, h * 0.65f);
+                p.moveTo(w * 0.30f, h * 0.47f);
+                p.lineTo(w * 0.50f, h * 0.67f);
+                p.lineTo(w * 0.70f, h * 0.47f);
+                p.moveTo(w * 0.20f, h * 0.74f);
+                p.lineTo(w * 0.20f, h * 0.84f);
+                p.lineTo(w * 0.80f, h * 0.84f);
+                p.lineTo(w * 0.80f, h * 0.74f);
+            } else { // Devices / Pair: linked rounded squares
+                canvas.drawRoundRect(w * 0.16f, h * 0.26f, w * 0.58f, h * 0.74f, w * 0.10f, h * 0.10f, paint);
+                canvas.drawRoundRect(w * 0.42f, h * 0.26f, w * 0.84f, h * 0.74f, w * 0.10f, h * 0.10f, paint);
+                return;
+            }
+            canvas.drawPath(p, paint);
+        }
+
+        @Override public void setAlpha(int alpha) {}
+        @Override public void setColorFilter(ColorFilter cf) {}
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+    }
+
+    // ================= Platform & Utility Helpers =================
+
+    private void startDotPulse() {
+        if (dotAnimator != null) {
+            dotAnimator.cancel();
+        }
+        dotAnimator = ValueAnimator.ofFloat(1f, 0.45f);
+        dotAnimator.setDuration(800);
+        dotAnimator.setRepeatMode(ValueAnimator.REVERSE);
+        dotAnimator.setRepeatCount(ValueAnimator.INFINITE);
+        dotAnimator.setInterpolator(new AccelerateDecelerateInterpolator());
+        dotAnimator.addUpdateListener(a -> {
+            if (topDot != null) {
+                topDot.setAlpha((Float) a.getAnimatedValue());
+            }
+        });
+        dotAnimator.start();
+    }
+
+    private void stopDotPulse() {
+        if (dotAnimator != null) {
+            dotAnimator.cancel();
+            dotAnimator = null;
+        }
+        if (topDot != null) {
+            topDot.setAlpha(1f);
+        }
     }
 
     private void startKeepAlive(String text) {
@@ -1014,276 +2281,6 @@ public class MainActivity extends Activity {
 
     private void stopKeepAlive() {
         stopService(new Intent(this, TransferService.class));
-    }
-
-    private void startReceiver() {
-        if (receiverRunning) {
-            toast("已经在接收");
-            return;
-        }
-        startBtn.setEnabled(false);
-        final String name = currentName();
-        new Thread(() -> {
-            try {
-                File dir = new File(getExternalFilesDir(null), "received");
-                String addr = Mobile.startReceiver(name, dir.getAbsolutePath(), lanHint());
-                ui.post(() -> {
-                    setRunning(true);
-                    stopBtn.setEnabled(true);
-                    startBtn.setEnabled(true);
-                    showPort(addr);
-                    status.setText("正在接收：" + addr + "\n收到：" + dir.getAbsolutePath());
-                    acquireMulticastLock();
-                    startKeepAlive("正在接收，端口 " + addr);
-                });
-            } catch (Exception e) {
-                Log.e(TAG, "startReceiver", e);
-                ui.post(() -> {
-                    startBtn.setEnabled(true);
-                    toast("启动失败：" + e.getMessage());
-                });
-            }
-        }).start();
-    }
-
-    /**
-     * Log into the signaling server and wait for relay transfers. The device
-     * key and pair URI live in the app's external files dir, so they can be
-     * exchanged with the PC over adb.
-     */
-    private void showPairUri() {
-        File dir = new File(getExternalFilesDir(null), "received");
-        try {
-            pairField.setText(Mobile.pairURIFor(currentName(), new File(dir, "device.key").getAbsolutePath()));
-        } catch (Exception e) {
-            toast("生成配对 URI 失败: " + e.getMessage());
-        }
-    }
-
-    private void importPairUri() {
-        String uri = pairField.getText().toString().trim();
-        if (uri.isEmpty()) {
-            toast("先把对方配对 URI 粘贴到输入框");
-            return;
-        }
-        // Trusting a stranger is a deliberate act: show who the key belongs to
-        // before it lands in paired.json.
-        String peer = shortPeerId(uri);
-        new AlertDialog.Builder(this)
-                .setTitle("信任这台设备？")
-                .setMessage("设备 ID：" + peer + "\n\n导入后对方可不经你同意向你发起传输。")
-                .setNegativeButton("取消", null)
-                .setPositiveButton("导入", (d, w) -> doImportPairUri(uri))
-                .show();
-    }
-
-    /** shortPeerId pulls the device id out of ftpair://v1/<id>/<pub>/<secret>. */
-    private static String shortPeerId(String uri) {
-        try {
-            String rest = uri.substring(uri.indexOf("://") + 3);
-            String[] parts = rest.split("/");
-            if (parts.length >= 3 && parts[1].length() >= 12) {
-                return parts[1].substring(0, 12) + "…";
-            }
-        } catch (RuntimeException ignored) {
-        }
-        return uri;
-    }
-
-    private void doImportPairUri(String uri) {
-        File dir = new File(getExternalFilesDir(null), "received");
-        try {
-            Mobile.pairImport(uri, new File(dir, "paired.json").getAbsolutePath());
-            toast("已导入对方公钥");
-        } catch (Exception e) {
-            toast("导入失败: " + e.getMessage());
-        }
-    }
-
-    private void startPake(boolean wait) {
-        String code = pakeCodeField.getText().toString().trim();
-        if (code.length() != 6) {
-            toast("配对码是 6 位数字");
-            return;
-        }
-        File dir = new File(getExternalFilesDir(null), "received");
-        File key = new File(dir, "device.key");
-        File paired = new File(dir, "paired.json");
-        String peer = pakePeerField.getText().toString().trim();
-        if (!wait && peer.isEmpty()) {
-            toast("输入对方设备 ID，或先点“等待配对”");
-            return;
-        }
-        pakeInfo.setText(wait ? "正在等待对方输入同一个配对码…" : "正在与对方协商…");
-        new Thread(() -> {
-            try {
-                String res = wait
-                        ? Mobile.waitPairCode("", key.getAbsolutePath(), paired.getAbsolutePath(), code, 90000)
-                        : Mobile.pairWithCode("", key.getAbsolutePath(), paired.getAbsolutePath(), code, peer);
-                ui.post(() -> pakeInfo.setText("配对成功：" + res));
-            } catch (Exception e) {
-                ui.post(() -> pakeInfo.setText("配对失败：" + e.getMessage()));
-            }
-        }).start();
-    }
-
-    private void startRelayReceiver() {
-        relayBtn.setEnabled(false);
-        final String name = currentName();
-        new Thread(() -> {
-            try {
-                File dir = new File(getExternalFilesDir(null), "received");
-                File key = new File(dir, "device.key");
-                File paired = new File(dir, "paired.json");
-                String uri = Mobile.pairURIFor(name, key.getAbsolutePath());
-                String id = Mobile.startRelayReceiver(name, dir.getAbsolutePath(),
-                        "wss://ft.cwlindean.cn/signal", key.getAbsolutePath(), paired.getAbsolutePath());
-                ui.post(() -> {
-                    relayBtn.setEnabled(true);
-                    stopBtn.setEnabled(true);
-                    setRunning(true);
-                    relayInfo.setText("中继接收中\n设备 ID：" + id
-                            + "\n配对文件：" + key.getAbsolutePath() + ".uri"
-                            + "\n（把该文件拷到电脑，用 ft pair --add 导入）");
-                    status.setText("正在经服务器等待发送方…");
-                    startKeepAlive("中继接收中");
-                });
-                Log.i(TAG, "relay uri " + uri);
-                // Acquire the LAN multicast lock as well: switching between LAN and
-                // relay must not depend on the radio dropping the Wi-Fi interface.
-                ui.post(this::acquireMulticastLock);
-            } catch (Exception e) {
-                Log.e(TAG, "startRelayReceiver", e);
-                ui.post(() -> {
-                    relayBtn.setEnabled(true);
-                    toast("中继启动失败：" + e.getMessage());
-                });
-            }
-        }).start();
-    }
-
-    /** 一次“开始接收”：打洞与服务器中继同时等，先接通的那条路胜出（D1/D2）。 */
-    private void startAutoReceiver() {
-        if (receiverRunning) {
-            toast("已经在接收");
-            return;
-        }
-        relayBtn.setEnabled(false);
-        final String name = currentName();
-        new Thread(() -> {
-            try {
-                File dir = new File(getExternalFilesDir(null), "received");
-                File key = new File(dir, "device.key");
-                File paired = new File(dir, "paired.json");
-                String uri = Mobile.pairURIFor(name, key.getAbsolutePath());
-                String id = Mobile.startAutoReceive(name, dir.getAbsolutePath(),
-                        "wss://ft.cwlindean.cn/signal", key.getAbsolutePath(), paired.getAbsolutePath(),
-                        lanHint(), "");
-                ui.post(() -> {
-                    relayBtn.setEnabled(true);
-                    stopBtn.setEnabled(true);
-                    setRunning(true);
-                    relayInfo.setText("接收中（自动选路）\n设备 ID：" + id
-                            + "\n配对 URI 文件：" + key.getAbsolutePath() + ".uri");
-                    status.setText("等待发送方（局域网 / 打洞 / 中继自动）…");
-                    startKeepAlive("正在接收");
-                });
-                Log.i(TAG, "auto uri " + uri);
-                ui.post(this::acquireMulticastLock);
-            } catch (Exception e) {
-                Log.e(TAG, "startAutoReceiver", e);
-                ui.post(() -> {
-                    relayBtn.setEnabled(true);
-                    toast("接收启动失败：" + e.getMessage());
-                });
-            }
-        }).start();
-    }
-
-    private void startWebShare() {
-        webBtn.setEnabled(false);
-        new Thread(() -> {
-            try {
-                File dir = new File(getExternalFilesDir(null), "received");
-                String info = Mobile.startWebShare(dir.getAbsolutePath(), 0L, lanHint());
-                String url = info;
-                try {
-                    url = new org.json.JSONObject(info).optString("url", info);
-                } catch (Exception ignored) {
-                }
-                final String shown = url;
-                ui.post(() -> {
-                    webBtn.setEnabled(true);
-                    webInfo.setText("网页分享中（同一 Wi-Fi）：\n" + shown);
-                    status.setText("浏览器打开：" + shown);
-                });
-            } catch (Exception e) {
-                Log.e(TAG, "startWebShare", e);
-                ui.post(() -> {
-                    webBtn.setEnabled(true);
-                    toast("网页分享失败：" + e.getMessage());
-                });
-            }
-        }).start();
-    }
-
-    private void stopReceiver() {
-        new Thread(() -> {
-            try {
-                Mobile.stopReceiver();
-                Mobile.stopRelayReceiver();
-                Mobile.stopPunchReceiver();
-                Mobile.stopWebShare();
-            } catch (Exception e) {
-                Log.e(TAG, "stopReceiver", e);
-            }
-            ui.post(() -> {
-                setRunning(false);
-                status.setText("已停止");
-                releaseMulticastLock();
-                stopKeepAlive();
-            });
-        }).start();
-    }
-
-    /**
-     * Description of the Wi-Fi interface, as JSON, for the Go side.
-     * Android denies netlink dumps to apps, so Go cannot enumerate interfaces
-     * itself; the transport falls back to this hint.
-     */
-    private String lanHint() {
-        try {
-            List<NetworkInterface> nifs = Collections.list(NetworkInterface.getNetworkInterfaces());
-            for (int pass = 0; pass < 2; pass++) {
-                for (NetworkInterface ni : nifs) {
-                    String n = ni.getName();
-                    if (n == null || !ni.isUp() || ni.isLoopback() || ni.isVirtual()) {
-                        continue;
-                    }
-                    if (n.startsWith("rmnet") || n.startsWith("p2p") || n.startsWith("dummy")
-                            || n.startsWith("tun") || n.startsWith("ip6tnl")) {
-                        continue;
-                    }
-                    if (pass == 0 && !n.toLowerCase().startsWith("wlan")) {
-                        continue;
-                    }
-                    for (InterfaceAddress ia : ni.getInterfaceAddresses()) {
-                        InetAddress a = ia.getAddress();
-                        if (a instanceof Inet4Address && !a.isLoopbackAddress() && !a.isLinkLocalAddress()) {
-                            JSONObject o = new JSONObject();
-                            o.put("name", n);
-                            o.put("index", ni.getIndex());
-                            o.put("ip", a.getHostAddress());
-                            o.put("prefix", ia.getNetworkPrefixLength());
-                            return o.toString();
-                        }
-                    }
-                }
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "lanHint", e);
-        }
-        return "";
     }
 
     private void acquireMulticastLock() {
@@ -1309,242 +2306,93 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void discover() {
-        discoverBtn.setEnabled(false);
-        deviceList.setText("搜索中（约 3 秒）…");
-        final String name = currentName();
-        new Thread(() -> {
-            try {
-                String json = Mobile.discover(name, 3000, lanHint());
-                JSONArray arr = new JSONArray(json);
-                final StringBuilder sb = new StringBuilder();
-                String first = "";
-                for (int i = 0; i < arr.length(); i++) {
-                    JSONObject o = arr.getJSONObject(i);
-                    String line = o.optString("Name") + "\n    " + o.optString("Addr");
-                    sb.append(line).append('\n');
-                    if (first.isEmpty()) {
-                        first = o.optString("Addr");
-                    }
-                }
-                if (arr.length() == 0) {
-                    sb.append("没找到。确认两台设备在同一网络，且对方已开始接收/公告。");
-                }
-                final String peer = first;
-                ui.post(() -> {
-                    deviceList.setText(sb.toString());
-                    if (!peer.isEmpty()) {
-                        peerField.setText(peer);
-                    }
-                    discoverBtn.setEnabled(true);
-                });
-            } catch (Exception e) {
-                Log.e(TAG, "discover", e);
-                ui.post(() -> {
-                    deviceList.setText("搜索失败：" + e.getMessage());
-                    discoverBtn.setEnabled(true);
-                });
-            }
-        }).start();
-    }
-
-    private void pickPairFile() {
-        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        i.addCategory(Intent.CATEGORY_OPENABLE);
-        i.setType("text/plain");
-        startActivityForResult(i, PICK_PAIR_FILE);
-    }
-
-    private void importPairFile(Uri uri) {
-        try {
-            java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
-            try (java.io.InputStream in = getContentResolver().openInputStream(uri)) {
-                byte[] b = new byte[4096];
-                int n;
-                while ((n = in.read(b)) > 0) {
-                    buf.write(b, 0, n);
-                }
-            }
-            String text = buf.toString("UTF-8").trim();
-            if (text.isEmpty()) {
-                toast("配对文件是空的");
-                return;
-            }
-            File dir = new File(getExternalFilesDir(null), "received");
-            Mobile.pairImport(text, new File(dir, "paired.json").getAbsolutePath());
-            toast("已导入对方公钥");
-        } catch (Exception e) {
-            toast("导入失败: " + e.getMessage());
-        }
-    }
-
-    // requestBatteryExemption asks the system to stop killing the receiver in
-    // the background (Doze / OEM battery managers). Without it the app dies
-    // silently minutes after the screen locks.
     private void requestBatteryExemption() {
         try {
             android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
             if (pm != null && pm.isIgnoringBatteryOptimizations(getPackageName())) {
-                toast("系统已允许后台运行");
+                toast("系统已允许后台保活运行");
                 return;
             }
-            Intent i = new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+            Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
             i.setData(Uri.parse("package:" + getPackageName()));
             startActivity(i);
         } catch (Exception e) {
             try {
-                startActivity(new Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+                startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
             } catch (Exception e2) {
-                toast("请到系统设置允许 ft 后台运行");
+                toast("请在系统设置中允许轻渡后台运行");
             }
         }
     }
 
-    private void pickFiles(boolean punch) {
-        if (peerField.getText().toString().trim().isEmpty()) {
-            toast(punch ? "先填写对方设备 ID（64 位 hex）" : "先搜索或填写对方地址");
-            return;
-        }
-        getPreferences(MODE_PRIVATE).edit().putString("lastPeer", peerField.getText().toString().trim()).apply();
-        if (sharedUris != null && !sharedUris.isEmpty()) {
-            List<Uri> uris = sharedUris;
-            sharedUris = null;
-            final String peer = peerField.getText().toString().trim();
-            final String name = currentName();
-            if (punch) {
-                sendPunch(uris, name, peer);
-            } else {
-                sendRelay(uris, name, peer);
-            }
-            return;
-        }
-        pickPunch = punch;
-        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        i.addCategory(Intent.CATEGORY_OPENABLE);
-        i.setType("*/*");
-        i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
-        startActivityForResult(i, PICK_FILES);
-    }
-
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != PICK_FILES || resultCode != RESULT_OK || data == null) {
-            return;
-        }
-        List<Uri> uris = new ArrayList<>();
-        if (data.getClipData() != null) {
-            for (int i = 0; i < data.getClipData().getItemCount(); i++) {
-                uris.add(data.getClipData().getItemAt(i).getUri());
-            }
-        } else if (data.getData() != null) {
-            uris.add(data.getData());
-        }
-        if (uris.isEmpty()) {
-            return;
-        }
-        final String peer = peerField.getText().toString().trim();
-        final String name = currentName();
-        final boolean punch = pickPunch;
-        pickPunch = false;
-        if (punch) {
-            sendPunch(uris, name, peer);
-            return;
-        }
-        sendRelay(uris, name, peer);
-    }
-
-    // sendRelay uploads the chosen files to the peer over the server relay.
-    private void sendRelay(List<Uri> uris, String name, String peer) {
-        status.setText("准备发送 " + uris.size() + " 个文件…");
-        sendBtn.setEnabled(false);
-        startKeepAlive("正在发送 " + uris.size() + " 个文件");
-        new Thread(() -> {
-            try {
-                JSONArray paths = new JSONArray();
-                for (Uri u : uris) {
-                    paths.put(copyToCache(u));
+    private String lanHint() {
+        try {
+            List<NetworkInterface> nifs = Collections.list(NetworkInterface.getNetworkInterfaces());
+            for (int pass = 0; pass < 2; pass++) {
+                for (NetworkInterface ni : nifs) {
+                    String n = ni.getName();
+                    if (n == null || !ni.isUp() || ni.isLoopback() || ni.isVirtual()) {
+                        continue;
+                    }
+                    if (n.startsWith("rmnet") || n.startsWith("p2p") || n.startsWith("dummy")
+                            || n.startsWith("tun") || n.startsWith("ip6tnl")) {
+                        continue;
+                    }
+                    if (pass == 0 && !n.toLowerCase(Locale.US).startsWith("wlan")) {
+                        continue;
+                    }
+                    for (InterfaceAddress ia : ni.getInterfaceAddresses()) {
+                        InetAddress a = ia.getAddress();
+                        if (a instanceof Inet4Address && !a.isLoopbackAddress() && !a.isLinkLocalAddress()) {
+                            JSONObject o = new JSONObject();
+                            o.put("name", n);
+                            o.put("index", ni.getIndex());
+                            o.put("ip", a.getHostAddress());
+                            o.put("prefix", ia.getNetworkPrefixLength());
+                            return o.toString();
+                        }
+                    }
                 }
-                String summary = Mobile.sendFiles(peer, name, paths.toString());
-                ui.post(() -> {
-                    sendBtn.setEnabled(true);
-                    stopKeepAlive();
-                    status.setText("发送结果：" + summary);
-                });
-            } catch (Exception e) {
-                Log.e(TAG, "send", e);
-                ui.post(() -> {
-                    sendBtn.setEnabled(true);
-                    stopKeepAlive();
-                    status.setText("发送失败：" + e.getMessage());
-                });
             }
-        }).start();
+        } catch (Exception e) {
+            Log.w(TAG, "lanHint", e);
+        }
+        return "";
     }
 
-    private void startPunchReceiver() {
-        punchBtn.setEnabled(false);
-        final String name = currentName();
-        new Thread(() -> {
-            try {
-                File dir = new File(getExternalFilesDir(null), "received");
-                File key = new File(dir, "device.key");
-                File paired = new File(dir, "paired.json");
-                String id = Mobile.startPunchReceiver(name, dir.getAbsolutePath(),
-                        "wss://ft.cwlindean.cn/signal", key.getAbsolutePath(), paired.getAbsolutePath(),
-                        lanHint(), "");
-                ui.post(() -> {
-                    punchBtn.setEnabled(true);
-                    stopBtn.setEnabled(true);
-                    setRunning(true);
-                    punchInfo.setText("打洞接收中 设备 ID：" + id);
-                    status.setText("等待对方打洞…");
-                    startKeepAlive("打洞接收中");
-                });
-            } catch (Exception e) {
-                Log.e(TAG, "startPunchReceiver", e);
-                ui.post(() -> {
-                    punchBtn.setEnabled(true);
-                    toast("打洞启动失败：" + e.getMessage());
-                });
-            }
-        }).start();
+    private static boolean isAutoTarget(String peer) {
+        return HEX64.matcher(peer).matches();
     }
 
-    private void sendPunch(List<Uri> uris, String name, String peerId) {
-        status.setText("发送 " + uris.size() + " 个文件（局域网/打洞/中继自动竞速）…");
-        punchSendBtn.setEnabled(false);
-        startKeepAlive("正在发送");
-        new Thread(() -> {
-            try {
-                File dir = new File(getExternalFilesDir(null), "received");
-                JSONArray paths = new JSONArray();
-                for (Uri u : uris) {
-                    paths.put(copyToCache(u));
-                }
-                String summary = Mobile.sendAuto("wss://ft.cwlindean.cn/signal",
-                        new File(dir, "device.key").getAbsolutePath(),
-                        new File(dir, "paired.json").getAbsolutePath(),
-                        peerId, name, paths.toString(), lanHint(), "");
-                ui.post(() -> {
-                    punchSendBtn.setEnabled(true);
-                    stopKeepAlive();
-                    status.setText("发送结果：" + summary);
-                });
-            } catch (Exception e) {
-                Log.e(TAG, "sendPunch", e);
-                ui.post(() -> {
-                    punchSendBtn.setEnabled(true);
-                    stopKeepAlive();
-                    status.setText("发送失败：" + e.getMessage());
-                });
+    private static boolean isLanTarget(String peer) {
+        int i = peer.lastIndexOf(':');
+        if (i <= 0 || i >= peer.length() - 1) {
+            return false;
+        }
+        String port = peer.substring(i + 1);
+        for (int k = 0; k < port.length(); k++) {
+            char c = port.charAt(k);
+            if (c < '0' || c > '9') {
+                return false;
             }
-        }).start();
+        }
+        return true;
     }
 
-    private String copyToCache(Uri uri) throws Exception {
+    private static String shortPeerId(String uri) {
+        try {
+            String rest = uri.substring(uri.indexOf("://") + 3);
+            String[] parts = rest.split("/");
+            if (parts.length >= 3 && parts[1].length() >= 12) {
+                return parts[1].substring(0, 12) + "…";
+            }
+        } catch (RuntimeException ignored) {
+        }
+        return uri;
+    }
+
+    private File copyToCache(Uri uri, File dir) throws Exception {
         String name = displayName(uri);
-        File dir = new File(getCacheDir(), "outgoing");
         if (!dir.exists() && !dir.mkdirs()) {
             throw new Exception("无法创建缓存目录");
         }
@@ -1554,13 +2402,9 @@ public class MainActivity extends Activity {
             if (in == null) {
                 throw new Exception("无法读取 " + uri);
             }
-            byte[] buf = new byte[65536];
-            int n;
-            while ((n = in.read(buf)) > 0) {
-                out.write(buf, 0, n);
-            }
+            copyStream(in, out);
         }
-        return f.getAbsolutePath();
+        return f;
     }
 
     private String displayName(Uri uri) {
@@ -1581,18 +2425,47 @@ public class MainActivity extends Activity {
         if (name == null || name.isEmpty()) {
             name = "file-" + System.currentTimeMillis();
         }
-        // Keep it a plain file name: the protocol rejects separators.
         return name.replace('/', '_').replace('\\', '_');
+    }
+
+    private static void deleteTree(File f, File dir) {
+        if (f != null && f.exists()) {
+            f.delete();
+        }
+        if (dir != null && dir.exists()) {
+            dir.delete();
+        }
+    }
+
+    private static String fmtBytes(long n) {
+        if (n < 1024) {
+            return n + " B";
+        }
+        if (n < 1048576) {
+            return String.format(Locale.US, "%.1f KB", n / 1024.0);
+        }
+        if (n < 1073741824) {
+            return String.format(Locale.US, "%.1f MB", n / 1048576.0);
+        }
+        return String.format(Locale.US, "%.2f GB", n / 1073741824.0);
+    }
+
+    private void copyText(String label, String value, String okMsg) {
+        if (value == null || value.isEmpty()) {
+            return;
+        }
+        ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (cm != null) {
+            cm.setPrimaryClip(ClipData.newPlainText(label, value));
+            toast(okMsg);
+        }
     }
 
     private void toast(String msg) {
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
     }
 
-    @Override
-    protected void onDestroy() {
-        stopDotPulse();
-        releaseMulticastLock();
-        super.onDestroy();
+    private int dp(float v) {
+        return Math.round(v * getResources().getDisplayMetrics().density);
     }
 }

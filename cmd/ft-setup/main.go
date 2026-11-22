@@ -155,6 +155,7 @@ func remove(dir string) error {
 	_ = removeShellMenu()
 	sendTo, _ := sendToDir()
 	if sendTo != "" {
+		_ = os.Remove(filepath.Join(sendTo, "轻渡 发送到.lnk"))
 		_ = os.Remove(filepath.Join(sendTo, "ft 发送到.lnk"))
 	}
 	return os.RemoveAll(dir)
@@ -168,9 +169,9 @@ func writeContextMenu(target string) error {
 		return err
 	}
 	defer k.Close()
-	_ = k.SetStringValue("", "用 ft 发送")
+	_ = k.SetStringValue("", "用轻渡发送")
 	for name, val := range map[string]string{
-		"MUIVerb":          "用 ft 发送",
+		"MUIVerb":          "用轻渡发送",
 		"Icon":             target,
 		"MultiSelectModel": "Single",
 	} {
@@ -238,7 +239,7 @@ func writeSendTo(target string) error {
 	if err := os.MkdirAll(sendTo, 0o755); err != nil {
 		return err
 	}
-	lnk := filepath.Join(sendTo, "ft 发送到.lnk")
+	lnk := filepath.Join(sendTo, "轻渡 发送到.lnk")
 	script := fmt.Sprintf(`$s=(New-Object -ComObject WScript.Shell).CreateShortcut('%s');$s.TargetPath='%s';$s.WorkingDirectory='%s';$s.Save()`,
 		strings.ReplaceAll(lnk, "'", "''"), target, filepath.Dir(target))
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)

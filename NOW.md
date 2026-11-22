@@ -235,3 +235,16 @@ M5 剩余：无（G5 已出，2026-11-08 收尾记录见文末）。
 - [x] 校验：`go build ./...`、`go vet ./...`、`go test -count=1 ./...` 全过（server 17.9 s）；日志 `evidence/stage3/20261111-1355-m10.log`。
 - [x] 报告：`evidence/stage3/20261111-1400-g10-report.md`（G10 判据对照与偏离说明）。
 - [x] 真机截图：`adb` 起不来的原因是 `TMP` 被 MSYS 写成 `/c/...`（adb 拼成 `C:\c\...`）；改 `export TMP="$(cygpath -w $PWD/.tools/tmp)"` 后正常，四张截图已归档。
+
+## M10 前端重构、MCP 接入与正式定名「轻渡 / Ferry」（2026-11-22）
+
+- [x] **正式定名与版本升级（`1.0.0`）**：确定项目名称 **轻渡 / Ferry**，同步更新 Android（应用名「轻渡」、系统通知「轻渡 Ferry」、公共收件目录 `Download/Ferry`、`--version-code 1000 --version-name 1.0.0`）、Windows 桌面端与安装器（窗口/托盘/投放浮窗/右键「用轻渡发送」）、Web 端（`server/assets/app.html`、`core/lanweb/page.go`，伪装页 `index.html` 保持不变）、CLI/MCP（`serverInfo.name="ferry"`、默认收件目录 `~/Downloads/Ferry`）。
+- [x] **官方网站**：新增零外链静态官网 [`site/index.html`](site/index.html)（含浅/深色切换、三档选路交互演示、全端特性介绍与 MCP/CLI 一键复制）。
+- [x] **Agent MCP + CLI**：新增 `cmd/ft/mcp.go`（`ft mcp` / `ferry mcp`）实现标准 JSON-RPC 2.0 stdio MCP 服务端（`ft_whoami`、`ft_list_peers`、`ft_send_files`、`ft_send_text`、`ft_receive_once`、`ft_pair_add`）及 `cmd/ft/mcp_test.go` 单测；自动复用桌面端 `%LOCALAPPDATA%\ft` 身份与配对表。
+- [x] **Android Material Design 3 重构与实机闭环**：
+  - `core/mobile/events.go` 新增 `PollReceived()` 事件队列，`events.jsonl` 迁出接收目录；`MainActivity.java` 改为 MD3 动态取色三页底部导航、单键同时开启局域网+远程自动选路、自动落盘系统公共 `Download/`（带点击打开与传输路径徽章）、剪贴板一键发送，并将 `device.key`/`paired.json` 隔离在内部私有 `state/`（`webshare/` 不再列出任何密钥）。
+  - `android/build.sh` 为 `gomobile bind` 增加 16 KB ELF 页对齐链接参数（`-Wl,-z,max-page-size=16384`），消除 Android 15/16 兼容警告；在真机 `caefbcbc` 上完成公网模拟传输（PC 连热点 `REDMI K90 Ultra` + `Meta` TUN，手机 5G `3gnet` + `Bettbox tun0`，走 `relay` 772 ms 送达 262,144 B、SHA-256 一致、网页分享 `/api/list` 密钥零暴露、停止接收后 `TransferService` 销毁）。
+- [x] **Windows 桌面拖拽浮窗与 Web 修复**：
+  - `cmd/ft-desktop/droppanel.go` 扩展 `SetWinEventHook` 至 `EVENT_OBJECT_CREATE..HIDE` 修复 Windows 11 复用 `SysDragImage` 漏触发问题，接入统一主题 `theme()`；`mainwin.go`/`tray.go`/`send.go` 补全双缓冲绘制与实时台账刷新。
+  - `server/assets/app.html` 修复中继多文件队列、`#drop` 选择与 WS 回收；`core/lanweb/page.go` 修复列表缓存与上传锁（BJ 服务端尚未重部署）。
+- [ ] **待完成**：提交本次全部工作区改动至 Git；若需上线更新后的公网 Web 页与桌面 `ft-setup.exe`，需单独审批部署 BJ 与重新打安装器/正式签名 APK。

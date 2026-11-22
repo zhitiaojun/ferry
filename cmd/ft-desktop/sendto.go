@@ -21,11 +21,11 @@ func installSendTo() error {
 	if appData == "" {
 		return fmt.Errorf("APPDATA is not set")
 	}
-	lnk := filepath.Join(appData, "Microsoft", "Windows", "SendTo", "ft 发送到.lnk")
+	lnk := filepath.Join(appData, "Microsoft", "Windows", "SendTo", "轻渡 发送到.lnk")
 	script := fmt.Sprintf(`$ws = New-Object -ComObject WScript.Shell
 $s = $ws.CreateShortcut('%s')
 $s.TargetPath = '%s'
-$s.Description = '用 filetransfer 发送到已配对设备'
+$s.Description = '用轻渡 Ferry 发送到已配对设备'
 $s.Save()`, escapePS(lnk), escapePS(exe))
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
 	if out, err := cmd.CombinedOutput(); err != nil {

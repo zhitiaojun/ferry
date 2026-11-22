@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>轻渡 Ferry — 在你的设备之间，无感摆渡文件</title>
+<meta name="description" content="轻渡（Ferry）是一款为自有手机、电脑、浏览器与 AI 智能体打造的极简跨端文件摆渡工具：局域网直连、UDP 打洞、私有中继三档自动竞速，原图无损、零账号、原生 MCP 支持。">
+<style>
+  :root{
+    --bg:#F5F7F5;
+    --surface:#FFFFFF;
+    --surface-2:#EBF1EC;
+    --surface-3:#DFE8E1;
+    --ink:#131C17;
+    --ink-2:#46534C;
+    --ink-3:#6D7B73;
+    --line:#D5DFD8;
+    --accent:#1D6B4E;
+    --accent-hover:#15533C;
+    --accent-ink:#FFFFFF;
+    --accent-soft:#CBEBD9;
+    --accent-soft-ink:#072B1C;
+    --amber:#9A5D00;
+    --amber-soft:#FCE7C2;
+    --violet:#58498C;
+    --violet-soft:#E7E0FB;
+    --nav-bg:rgba(245,247,245,.82);
+    --shadow:0 12px 32px rgba(19,28,23,.06);
+    --sans:"Segoe UI","PingFang SC","Microsoft YaHei UI",system-ui,-apple-system,sans-serif;
+    --mono:"Cascadia Mono","JetBrains Mono",Consolas,ui-monospace,monospace;
+  }
+  :root[data-theme="dark"]{
+    --bg:#0D1310;
+    --surface:#141C18;
+    --surface-2:#1B2520;
+    --surface-3:#24312A;
+    --ink:#E6ECE8;
+    --ink-2:#B2BEB7;
+    --ink-3:#808E86;
+    --line:#2B3831;
+    --accent:#7CD4AA;
+    --accent-hover:#97E0BD;
+    --accent-ink:#06291A;
+    --accent-soft:#163E2E;
+    --accent-soft-ink:#B5F2D2;
+    --amber:#F1BA63;
+    --amber-soft:#3E2A06;
+    --violet:#C6B8F8;
+    --violet-soft:#2E254D;
+    --nav-bg:rgba(13,19,16,.84);
+    --shadow:0 16px 40px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;
+    font-family:var(--sans);
+    color:var(--ink);
+    background:
+      radial-gradient(900px 420px at 14% -4%,var(--accent-soft) 0%,transparent 65%),
+      radial-gradient(760px 380px at 90% 6%,var(--violet-soft) 0%,transparent 60%),
+      var(--bg);
+    font-size:15px;
+    line-height:1.65;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:inherit;text-decoration:none}
+  .container{width:min(1120px,100% - 40px);margin:0 auto}
+
+  /* Nav */
+  .nav-wrap{
+    position:sticky;top:0;z-index:40;
+    background:var(--nav-bg);
+    backdrop-filter:blur(14px);
+    -webkit-backdrop-filter:blur(14px);
+    border-bottom:1px solid var(--line);
+  }
+  .nav{
+    height:64px;display:flex;align-items:center;justify-content:space-between;gap:16px;
+  }
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:17px;letter-spacing:.01em}
+  .brand-mark{
+    width:32px;height:32px;border-radius:10px;
+    background:var(--accent);color:var(--accent-ink);
+    display:grid;place-items:center;flex-shrink:0;
+  }
+  .brand small{font-weight:500;font-size:12px;color:var(--ink-3);margin-left:2px;font-family:var(--mono)}
+  .nav-links{display:flex;align-items:center;gap:22px;font-size:14px;color:var(--ink-2)}
+  .nav-links a:hover{color:var(--ink)}
+  .nav-actions{display:flex;align-items:center;gap:10px}
+  .icon-btn{
+    height:36px;padding:0 12px;border-radius:99px;border:1px solid var(--line);
+    background:var(--surface);color:var(--ink-2);cursor:pointer;font-size:13px;
+    display:inline-flex;align-items:center;gap:6px;transition:all .15s;
+  }
+  .icon-btn:hover{border-color:var(--accent);color:var(--ink)}
+
+  /* Buttons */
+  .btn{
+    display:inline-flex;align-items:center;justify-content:center;gap:8px;
+    height:46px;padding:0 22px;border-radius:99px;font-weight:600;font-size:14px;
+    cursor:pointer;border:1px solid transparent;transition:transform .12s,background .15s,border-color .15s;
+  }
+  .btn:active{transform:scale(.98)}
+  .btn-primary{background:var(--accent);color:var(--accent-ink)}
+  .btn-primary:hover{background:var(--accent-hover)}
+  .btn-tonal{background:var(--surface-2);color:var(--ink);border-color:var(--line)}
+  .btn-tonal:hover{border-color:var(--accent)}
+
+  /* Hero */
+  .hero{padding:68px 0 54px}
+  .hero-grid{display:grid;grid-template-columns:1.12fr .88fr;gap:38px;align-items:center}
+  .eyebrow{
+    display:inline-flex;align-items:center;gap:8px;
+    padding:5px 12px;border-radius:99px;background:var(--accent-soft);color:var(--accent-soft-ink);
+    font-size:12px;font-weight:600;letter-spacing:.02em;margin-bottom:18px;
+  }
+  .eyebrow-dot{width:7px;height:7px;border-radius:50%;background:var(--accent)}
+  h1{
+    margin:0 0 16px;font-size:clamp(32px,4.5vw,48px);line-height:1.18;
+    letter-spacing:-.02em;font-weight:800;
+  }
+  .hero-sub{margin:0 0 28px;color:var(--ink-2);font-size:16px;max-width:540px}
+  .hero-cta{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:26px}
+  .hero-meta{
+    display:flex;flex-wrap:wrap;gap:18px;color:var(--ink-3);font-size:13px;
+  }
+  .hero-meta span{display:inline-flex;align-items:center;gap:6px}
+
+  /* Route Widget */
+  .route-card{
+    background:var(--surface);border:1px solid var(--line);border-radius:24px;
+    padding:22px;box-shadow:var(--shadow);
+  }
+  .route-head{
+    display:flex;align-items:center;justify-content:space-between;
+    padding-bottom:14px;border-bottom:1px solid var(--line);margin-bottom:14px;
+  }
+  .route-head b{font-size:14px}
+  .route-head span{font-family:var(--mono);font-size:11px;color:var(--ink-3)}
+  .tier{
+    border:1px solid var(--line);border-radius:16px;padding:13px 14px;margin-bottom:10px;
+    cursor:pointer;transition:all .16s;background:var(--surface);
+  }
+  .tier:last-of-type{margin-bottom:14px}
+  .tier.active{border-color:var(--accent);background:var(--surface-2)}
+  .tier-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .tier-title{display:flex;align-items:center;gap:9px;font-weight:600;font-size:14px}
+  .pill{
+    font-family:var(--mono);font-size:11px;font-weight:600;
+    padding:2px 9px;border-radius:99px;display:inline-block;
+  }
+  .pill.lan{background:var(--accent-soft);color:var(--accent-soft-ink)}
+  .pill.punch{background:var(--amber-soft);color:var(--amber)}
+  .pill.relay{background:var(--violet-soft);color:var(--violet)}
+  .tier p{margin:6px 0 0;font-size:13px;color:var(--ink-2)}
+  .route-log{
+    background:var(--surface-2);border-radius:12px;padding:11px 13px;
+    font-family:var(--mono);font-size:12px;color:var(--ink-2);line-height:1.5;
+  }
+
+  /* Sections */
+  section.block{padding:44px 0}
+  .sec-head{max-width:640px;margin-bottom:28px}
+  .sec-kicker{
+    font-family:var(--mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--accent);font-weight:600;margin-bottom:6px;
+  }
+  h2{margin:0 0 8px;font-size:clamp(24px,3vw,32px);line-height:1.25;letter-spacing:-.01em}
+  .sec-head p{margin:0;color:var(--ink-2)}
+
+  .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  .grid-2{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+  .grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+
+  .card{
+    background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:22px;
+    transition:border-color .15s,transform .15s;
+  }
+  .card:hover{border-color:var(--accent);transform:translateY(-2px)}
+  .card-icon{
+    width:40px;height:40px;border-radius:12px;background:var(--surface-2);color:var(--accent);
+    display:grid;place-items:center;margin-bottom:14px;
+  }
+  .card h3{margin:0 0 8px;font-size:17px;font-weight:700}
+  .card p{margin:0;color:var(--ink-2);font-size:14px}
+  .tag-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}
+  .tag{
+    font-size:11px;font-family:var(--mono);color:var(--ink-2);
+    background:var(--surface-2);padding:3px 9px;border-radius:99px;
+  }
+
+  /* Security */
+  .sec-band{
+    background:var(--surface);border:1px solid var(--line);border-radius:24px;padding:26px;
+  }
+  .sec-item strong{display:block;font-size:15px;margin-bottom:5px}
+  .sec-item span{font-size:13px;color:var(--ink-2)}
+
+  /* Code / Quickstart */
+  .tabs-card{
+    background:var(--surface);border:1px solid var(--line);border-radius:24px;overflow:hidden;
+    box-shadow:var(--shadow);
+  }
+  .tabs-bar{
+    display:flex;align-items:center;justify-content:space-between;gap:12px;
+    padding:12px 16px;background:var(--surface-2);border-bottom:1px solid var(--line);flex-wrap:wrap;
+  }
+  .tab-group{display:flex;gap:6px;flex-wrap:wrap}
+  .tab-btn{
+    height:34px;padding:0 14px;border-radius:99px;border:0;background:transparent;
+    color:var(--ink-2);font-size:13px;font-weight:600;cursor:pointer;
+  }
+  .tab-btn.active{background:var(--accent);color:var(--accent-ink)}
+  .copy-btn{
+    height:32px;padding:0 12px;border-radius:99px;border:1px solid var(--line);
+    background:var(--surface);color:var(--ink);font-size:12px;font-weight:600;cursor:pointer;
+  }
+  .copy-btn:hover{border-color:var(--accent)}
+  pre{
+    margin:0;padding:20px;overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.6;
+    color:var(--ink);
+  }
+
+  /* Footer */
+  footer{
+    border-top:1px solid var(--line);padding:26px 0 42px;margin-top:26px;
+    display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;
+    color:var(--ink-3);font-size:13px;
+  }
+
+  @media (max-width:900px){
+    .hero-grid,.grid-3,.grid-4,.grid-2{grid-template-columns:1fr}
+    .nav-links{display:none}
+    .hero{padding:42px 0 28px}
+  }
+</style>
+</head>
+<body>
+<header class="nav-wrap">
+  <div class="container nav">
+    <a class="brand" href="#">
+      <span class="brand-mark" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 17H19M15 13l4 4-4 4M19 7H5M9 3L5 7l4 4"/>
+        </svg>
+      </span>
+      <span>轻渡</span><small>Ferry</small>
+    </a>
+    <nav class="nav-links">
+      <a href="#routing">三档选路</a>
+      <a href="#platforms">全端矩阵</a>
+      <a href="#security">安全模型</a>
+      <a href="#quickstart">MCP 与上手</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="icon-btn" id="theme-toggle" type="button" aria-label="切换浅色深色模式">浅色 / 深色</button>
+      <a class="btn btn-primary" style="height:36px;padding:0 16px;font-size:13px" href="#quickstart">立即使用</a>
+    </div>
+  </div>
+</header>
+
+<main class="container">
+  <section class="hero">
+    <div class="hero-grid">
+      <div>
+        <div class="eyebrow"><span class="eyebrow-dot"></span>v1.0.0 · 跨网不折腾，私密直达</div>
+        <h1>在你的设备之间，<br>无感摆渡文件</h1>
+        <p class="hero-sub">
+          为「我的手机 ↔ 我的电脑 ↔ 浏览器 ↔ AI 智能体」打造的轻量传输工具。
+          不需要云盘中转、不压缩画质、不登录账号——局域网跑满直连，跨网自动并发打洞与私有中继兜底。
+        </p>
+        <div class="hero-cta">
+          <a class="btn btn-primary" href="#quickstart">下载与安装 v1.0.0</a>
+          <a class="btn btn-tonal" href="#mcp">接入 AI 智能体（MCP）</a>
+        </div>
+        <div class="hero-meta">
+          <span>✓ Ed25519 公钥配对</span>
+          <span>✓ TLS 1.3 端到端钉定</span>
+          <span>✓ Android MD3 + 系统下载文件夹</span>
+          <span>✓ Windows 拖拽浮窗 + 一级右键</span>
+        </div>
+      </div>
+
+      <div class="route-card" id="route-demo">
+        <div class="route-head">
+          <b>自动路径竞速</b>
+          <span>pathmgr.Race(t = 0)</span>
+        </div>
+        <div class="tier active" data-tier="lan">
+          <div class="tier-top">
+            <span class="tier-title">1. 局域网 / 热点直连</span>
+            <span class="pill lan">LAN</span>
+          </div>
+          <p>同一 Wi-Fi 或手机热点下直连 TCP，不走服务器，支持断网秒级断点续传。</p>
+        </div>
+        <div class="tier" data-tier="punch">
+          <div class="tier-top">
+            <span class="tier-title">2. UDP 穿透直连</span>
+            <span class="pill punch">打洞</span>
+          </div>
+          <p>身处不同网络时经信令交换 STUN 候选，在 QUIC 隧道上进行 P2P 点对点加密传输。</p>
+        </div>
+        <div class="tier" data-tier="relay">
+          <div class="tier-top">
+            <span class="tier-title">3. 私有服务器中继</span>
+            <span class="pill relay">中继</span>
+          </div>
+          <p>对称 NAT、校园网防火墙或双端开启 VPN（TUN）时毫秒接管，仍保持端到端 TLS 1.3 加密。</p>
+        </div>
+        <div class="route-log" id="route-log">
+          已选航道：LAN（10.93.x.x:42833） · 不经公网服务器 · 原文件直写
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="routing">
+    <div class="sec-head">
+      <div class="sec-kicker">Why Ferry</div>
+      <h2>为什么不再忍受聊天软件或纯局域网工具</h2>
+      <p>一次配对后无需再选协议：轻渡并发测试可用航道，最先完成握手的那条直接胜出。</p>
+    </div>
+    <div class="grid-3">
+      <article class="card">
+        <div class="card-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+        </div>
+        <h3>不限大小 · 不压缩原文件</h3>
+        <p>不像即时通讯软件强制压缩图片视频、限制单文件体积，分块 SHA-256 逐块校验，原始字节 1:1 送达。</p>
+      </article>
+      <article class="card">
+        <div class="card-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3.6 9h16.8M3.6 15h16.8M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
+        </div>
+        <h3>出局域网也不失联</h3>
+        <p>在家里 Wi-Fi 跑局域网直连，在外面 5G / 挂着 VPN TUN 时自动切换中继，手机与电脑随时互达。</p>
+      </article>
+      <article class="card">
+        <div class="card-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </div>
+        <h3>中断自动断点续传</h3>
+        <p>传输途中切网或重连，接收端保留 <code>.ftpart</code> 进度并在重连后直接续传剩余分块，无需重头来过。</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="block" id="platforms">
+    <div class="sec-head">
+      <div class="sec-kicker">Platforms</div>
+      <h2>一套 Go 核心驱动全平台客户端</h2>
+      <p>没有 Electron 套壳与臃肿依赖，每一端都贴合对应系统的真实操作直觉。</p>
+    </div>
+    <div class="grid-2">
+      <article class="card">
+        <h3>Android 原生端（Material Design 3）</h3>
+        <p>Android 12+ 动态取色、底部三段式导航、一键同时开启局域网与远程接收、发送剪贴板文本、收到文件自动落盘至系统公共 <code>Download/Ferry</code> 目录，相册与系统文件管理即刻可见。</p>
+        <div class="tag-row">
+          <span class="tag">MD3 Dynamic Color</span>
+          <span class="tag">16 KB 页对齐</span>
+          <span class="tag">~20 MB 独立包</span>
+        </div>
+      </article>
+      <article class="card">
+        <h3>Windows 桌面端（原生 Win32 + GDI）</h3>
+        <p>托盘常驻内存极低；资源管理器拖拽文件即刻在屏幕右下角弹出「轻渡投放」浮窗；支持 Windows 11 一级右键菜单「用轻渡发送」、经典「发送到」、开机自启与传输台账。</p>
+        <div class="tag-row">
+          <span class="tag">SysDragImage 浮窗</span>
+          <span class="tag">Win11 一级菜单</span>
+          <span class="tag">双缓冲台账</span>
+        </div>
+      </article>
+      <article class="card">
+        <h3>浏览器零安装网页快传</h3>
+        <p>手机/电脑直接输出局域网分享链接或 6 位临时码，对方浏览器打开即可拖放上传下载。手机私钥与接收目录严格隔离，分享链接不触碰任何本机敏感文件。</p>
+        <div class="tag-row">
+          <span class="tag">零客户端依赖</span>
+          <span class="tag">独立沙盒目录</span>
+          <span class="tag">6 位口令</span>
+        </div>
+      </article>
+      <article class="card" id="mcp">
+        <h3>AI 智能体原生 MCP 与 CLI</h3>
+        <p>内置标准 stdio <b>MCP Server</b>（<code>ferry mcp</code> / <code>ft mcp</code>），暴露设备查看、局域网扫描、文件发送、文本笔记快传、单次等待接收等 6 个工具，自动复用桌面端配对表。</p>
+        <div class="tag-row">
+          <span class="tag">JSON-RPC 2.0 stdio</span>
+          <span class="tag">Antigravity / Claude</span>
+          <span class="tag">CLI 可编排</span>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section class="block" id="security">
+    <div class="sec-head">
+      <div class="sec-kicker">Privacy &amp; Security</div>
+      <h2>默认不留存云端，中继也看不见你的文件内容</h2>
+    </div>
+    <div class="sec-band">
+      <div class="grid-4">
+        <div class="sec-item">
+          <strong>Ed25519 设备身份</strong>
+          <span>每台设备首次运行本地生成唯一非对称密钥对，设备 ID 即公钥 SHA-256，不上传任何账号资料。</span>
+        </div>
+        <div class="sec-item">
+          <strong>TLS 1.3 公钥钉定</strong>
+          <span>经公网中继或打洞时，在信令房间内再套一层双向认证 TLS 1.3，仅信任已配对公钥。</span>
+        </div>
+        <div class="sec-item">
+          <strong>SPAKE2 6 位码配对</strong>
+          <span>一次性 6 位会话码全程零明文上网络，双方零知识证明完成密钥协商后才互信落盘。</span>
+        </div>
+        <div class="sec-item">
+          <strong>最小目录隔离</strong>
+          <span>手机私钥与配对表独立存放于私有 <code>state/</code>，即使开启局域网网页分享也绝不暴露。</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="quickstart">
+    <div class="sec-head">
+      <div class="sec-kicker">Quickstart</div>
+      <h2>立刻在命令行与智能体里使用轻渡</h2>
+    </div>
+    <div class="tabs-card">
+      <div class="tabs-bar">
+        <div class="tab-group">
+          <button class="tab-btn active" type="button" data-tab="mcp">MCP 配置（Antigravity / Cursor / Claude）</button>
+          <button class="tab-btn" type="button" data-tab="cli">CLI 命令行</button>
+          <button class="tab-btn" type="button" data-tab="build">构建与安装包</button>
+        </div>
+        <button class="copy-btn" id="copy-code" type="button">复制代码</button>
+      </div>
+      <pre id="code-pane"></pre>
+    </div>
+  </section>
+</main>
+
+<footer class="container">
+  <span><strong>轻渡 Ferry</strong> · v1.0.0 — 私有设备间的安全直连摆渡</span>
+  <span>Go + Win32 + Android MD3 · 零云端留存</span>
+</footer>
+
+<script>
+(function(){
+  const root = document.documentElement;
+  const saved = localStorage.getItem('ferry_theme');
+  const darkPref = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  function setTheme(mode){
+    root.setAttribute('data-theme', mode);
+    localStorage.setItem('ferry_theme', mode);
+  }
+  setTheme(saved || (darkPref ? 'dark' : 'light'));
+  document.getElementById('theme-toggle').addEventListener('click', function(){
+    setTheme(root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+  });
+
+  const tierMessages = {
+    lan:   '已选航道：LAN（10.93.x.x:42833） · 不经公网服务器 · 原文件直写',
+    punch: '已选航道：UDP 打洞（QUIC · STUN 双向穿透） · 跨网点对点加密直传',
+    relay: '已选航道：私有中继（wss://ft.cwlindean.cn） · 内层 TLS 1.3 公钥钉定穿透双 VPN'
+  };
+  const logEl = document.getElementById('route-log');
+  document.querySelectorAll('.tier').forEach(function(el){
+    el.addEventListener('click', function(){
+      document.querySelectorAll('.tier').forEach(function(t){ t.classList.remove('active'); });
+      el.classList.add('active');
+      logEl.textContent = tierMessages[el.getAttribute('data-tier')] || '';
+    });
+  });
+
+  const snippets = {
+    mcp: `{
+  "mcpServers": {
+    "ferry": {
+      "command": "C:\\\\project\\\\filetransfer\\\\dist\\\\windows\\\\ferry.exe",
+      "args": ["mcp"]
+    }
+  }
+}
+
+// 可用 MCP 工具（自动共享桌面端配对表，接收默认存入 ~/Downloads/Ferry）：
+// 1. ft_whoami       — 查看本机设备 ID 与配对 URI
+// 2. ft_list_peers   — 列出已配对设备 & 扫描局域网接收端
+// 3. ft_send_files   — 按设备备注名 / 设备 ID / IP:端口发送文件
+// 4. ft_send_text    — 直接把一段文本作为笔记发送给对方设备
+// 5. ft_receive_once — 等待接收一次文件（支持 relay / race / punch / lan）
+// 6. ft_pair_add     — 导入对方 ftpair:// 凭证`,
+    cli: `# 1. 启动标准 MCP Server（供 AI 智能体调用）
+ferry.exe mcp
+
+# 2. 6 位一次性配对码建立信任（另一端填同码 + 本机 ID）
+ferry.exe pair --code 123456 --wait
+
+# 3. 发送文件（局域网 / 打洞 / 中继并发竞速）
+ferry.exe send --signal wss://ft.cwlindean.cn/signal --to-id <对方64位ID> --punch --allow punch,relay --file ./report.pdf
+
+# 4. 发起零安装网页快传（生成浏览器直连/中继 6 位码）
+ferry.exe share --dir ./share`,
+    build: `# 1. 编译 Windows 端（CLI/MCP + 桌面端 + 安装程序）
+go build -o dist/windows/ferry.exe ./cmd/ft
+go build -ldflags="-H=windowsgui" -o dist/windows/ft-desktop.exe ./cmd/ft-desktop
+
+# 2. 编译 Android MD3 原生 APK（支持 16 KB 页对齐）
+./android/build.sh
+
+# 3. 安装与接入：
+# - 手机安装包：android/build/ft-debug.apk（系统自动保存收到文件至 Download/Ferry）
+# - 桌面右键与拖放浮窗：运行 dist/windows/ft-desktop.exe`
+  };
+  const pane = document.getElementById('code-pane');
+  const copyBtn = document.getElementById('copy-code');
+  function showTab(name){
+    pane.textContent = snippets[name] || '';
+    document.querySelectorAll('.tab-btn').forEach(function(b){
+      b.classList.toggle('active', b.getAttribute('data-tab') === name);
+    });
+  }
+  document.querySelectorAll('.tab-btn').forEach(function(btn){
+    btn.addEventListener('click', function(){ showTab(btn.getAttribute('data-tab')); });
+  });
+  copyBtn.addEventListener('click', function(){
+    if (!navigator.clipboard) return;
+    navigator.clipboard.writeText(pane.textContent).then(function(){
+      copyBtn.textContent = '已复制';
+      setTimeout(function(){ copyBtn.textContent = '复制代码'; }, 1500);
+    });
+  });
+  showTab('mcp');
+})();
+</script>
+</body>
+</html>

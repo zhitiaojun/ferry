@@ -30,7 +30,7 @@ echo "== go build =="
 
 echo "== gomobile bind =="
 mkdir -p "$OUT"
-(cd "$ROOT" && gomobile.exe bind -target=android/arm64 -androidapi 21 -o android/ft.aar ./core/mobile)
+(cd "$ROOT" && CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384" gomobile.exe bind -target=android/arm64 -androidapi 21 -o android/ft.aar ./core/mobile)
 
 echo "== extract AAR =="
 rm -rf "$WORK"
@@ -65,7 +65,7 @@ echo "== aapt2 link =="
 "$BT/aapt2.exe" link -o "$(m "$WORK/base.apk")" \
   --manifest "$(m "$ROOT/android/AndroidManifest.xml")" \
   -I "$(m "$AJAR")" --min-sdk-version 21 --target-sdk-version 34 \
-  --version-code 800 --version-name 0.8.0 "$(m "$WORK/res.zip")"
+  --version-code 1000 --version-name 1.0.0 "$(m "$WORK/res.zip")"
 
 echo "== package =="
 cp "$WORK/dex/classes.dex" "$WORK/classes.dex"

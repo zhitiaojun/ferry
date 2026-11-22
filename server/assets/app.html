@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>山径笔记 · 传输</title>
+<title>轻渡 · Ferry</title>
 <style>
   :root{
     color-scheme: light dark;
@@ -113,6 +113,7 @@
 
   /* ledger */
   .ledger{margin-top:26px}
+  .tw{overflow-x:auto}
   table{width:100%;border-collapse:collapse}
   thead th{font-family:var(--mono);font-size:11px;line-height:16px;font-weight:500;
         letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);text-align:left;
@@ -134,7 +135,7 @@
   tbody button:hover{border-color:var(--accent);color:var(--accent)}
   .empty{margin:0;padding:22px 12px 16px;text-align:center;color:var(--ink-3);
         font-size:12px;line-height:17px}
-  #list:not([hidden]) + .empty{display:none}
+  .tw:has(#list:not([hidden])) + .empty{display:none}
 
   .foot{margin-top:28px;padding-top:12px;border-top:1px solid var(--line-soft);
         display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;
@@ -154,7 +155,7 @@
 <div class="wrap">
   <header class="sheet">
     <div>
-      <h1>传文件</h1>
+      <h1>轻渡 Ferry</h1>
       <p>输入设备上显示的 6 位码。页面同时尝试局域网直连与服务器中继，先连通的那条生效。</p>
     </div>
     <div class="state">
@@ -180,7 +181,8 @@
     <section>
       <h2>发送<span>SEND</span></h2>
       <p class="wait">连接设备后即可发送文件。</p>
-      <div id="drop" hidden><b>把文件拖到这里</b>或点下面的按钮选择文件</div>
+      <div id="drop" hidden><b>把文件拖到这里</b>或点击这里、用下方按钮选择文件</div>
+      <input type="file" id="drop-pick" multiple hidden>
       <div class="row" id="upload-row" hidden>
         <input type="file" id="file" multiple>
         <button id="upload" class="btn primary">上传</button>
@@ -190,15 +192,17 @@
 
   <section class="ledger">
     <h2>设备上的文件<span>FILES</span></h2>
-    <table id="list" hidden>
-      <thead><tr><th>文件</th><th class="n">大小</th><th>SHA-256</th><th></th></tr></thead>
-      <tbody></tbody>
-    </table>
+    <div class="tw">
+      <table id="list" hidden>
+        <thead><tr><th>文件</th><th class="n">大小</th><th>SHA-256</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
     <p class="empty">还没有文件 · 连接设备后即可发送</p>
   </section>
 
   <footer class="foot">
-    <span>ft · 浏览器端</span>
+    <span>轻渡 · Ferry 浏览器端</span>
     <span>LAN 优先 · 中继兜底</span>
   </footer>
 </div>
@@ -217,7 +221,23 @@
   function fmtSize(n) {
     if (n < 1024) return n + ' B';
     if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
-    return (n / 1048576).toFixed(1) + ' MB';
+    if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+    return (n / 1073741824).toFixed(2) + ' GB';
+  }
+
+  function closeRelay() {
+    var old = state.ws;
+    state.ws = null;
+    state.get = null;
+    state.put = null;
+    state.putNext = null;
+    if (old) {
+      old.onopen = null;
+      old.onmessage = null;
+      old.onerror = null;
+      old.onclose = null;
+      try { old.close(); } catch (e) {}
+    }
   }
 
   function lanReady(base, ms) {
@@ -248,6 +268,9 @@
   function connect() {
     var code = ($('code').value || '').trim();
     if (!/^\d{6}$/.test(code)) { $('status').textContent = '请输入 6 位数字码'; return; }
+    closeRelay();
+    state.base = null;
+    state.mode = null;
     $('go').disabled = true;
     setMode('', '正在查找设备…');
     fetch('/api/resolve?code=' + encodeURIComponent(code), { cache: 'no-store' })
@@ -270,7 +293,12 @@
           ? Promise.race([Promise.any(lanAttempts).catch(function () { return null; }), grace])
           : Promise.resolve(null);
         return first.then(function (lan) {
-          if (lan) return lan;
+          if (lan) {
+            if (relayAttempt) {
+              relayAttempt.then(function (r) { if (r && r.ws) r.ws.close(); }).catch(function () {});
+            }
+            return lan;
+          }
           if (relayAttempt) return relayAttempt;
           throw new Error('局域网与中继都没连上');
         });
@@ -353,6 +381,7 @@
   }
 
   function sha256Hex(buf) {
+    if (!window.crypto || !crypto.subtle) return Promise.resolve(null);
     return crypto.subtle.digest('SHA-256', buf).then(function (d) {
       return Array.from(new Uint8Array(d)).map(function (x) {
         return x.toString(16).padStart(2, '0');
@@ -367,7 +396,15 @@
       if (state.get) { state.get.chunks.push(ev.data); state.get.have += ev.data.byteLength; }
     };
     ws.onclose = function () {
-      if (state.mode === 'relay') { setMode('', '中继连接已断开'); }
+      if (state.ws !== ws) return;
+      state.ws = null;
+      state.get = null;
+      state.put = null;
+      state.putNext = null;
+      if (state.mode === 'relay') {
+        state.mode = null;
+        setMode('', '中继连接已断开');
+      }
     };
   }
 
@@ -386,8 +423,9 @@
       var blob = new Blob(g.chunks);
       blob.arrayBuffer().then(function (buf) {
         return sha256Hex(buf).then(function (h) {
-          $('status').textContent = '下载完成：' + g.name + '（' + fmtSize(buf.byteLength) + '）' +
-            (msg.sha256 && msg.sha256 !== h ? '，哈希不一致！' : '，哈希校验通过');
+          var note = !h ? '（非 HTTPS 环境未校验）'
+            : (msg.sha256 && msg.sha256 !== h ? '，哈希不一致！' : '，哈希校验通过');
+          $('status').textContent = '下载完成：' + g.name + '（' + fmtSize(buf.byteLength) + '）' + note;
           var url = URL.createObjectURL(blob);
           var a = document.createElement('a');
           a.href = url; a.download = g.name; document.body.appendChild(a); a.click();
@@ -404,9 +442,18 @@
       state.put = null;
       $('status').textContent = '上传完成：' + msg.name + '，SHA-256 ' + msg.sha256.slice(0, 12) + '…';
       relayList();
+      if (state.putNext) {
+        var next = state.putNext;
+        next();
+      }
       return;
     }
-    if (msg.t === 'err') { $('status').textContent = '传输失败：' + msg.msg; }
+    if (msg.t === 'err') {
+      state.get = null;
+      state.put = null;
+      state.putNext = null;
+      $('status').textContent = '传输失败：' + msg.msg;
+    }
   }
 
   function relayList() {
@@ -415,16 +462,24 @@
 
   function relayDownload(name) {
     if (!state.ws) return;
+    if (state.get) { $('status').textContent = '已有文件正在下载，请稍候'; return; }
+    state.get = { name: name, size: 0, chunks: [], have: 0 };
     $('status').textContent = '请求下载：' + name;
     relaySend({ t: 'get', name: name });
   }
 
   function relayUploadAll(files) {
+    if (state.put) { $('status').textContent = '已有文件正在上传，请稍候'; return; }
     var list = Array.prototype.slice.call(files || []);
     if (!list.length || !state.ws) return;
+    var total = list.length;
     var next = function () {
       var f = list.shift();
-      if (!f) { $('status').textContent = '全部上传完成'; return; }
+      if (!f) {
+        state.putNext = null;
+        if (total > 1) $('status').textContent = '全部上传完成（共 ' + total + ' 个）';
+        return;
+      }
       startPut(f);
     };
     state.putNext = next;
@@ -432,10 +487,20 @@
   }
 
   function startPut(file) {
+    var job = { file: file, buf: null, off: 0, name: null };
+    state.put = job;
+    $('status').textContent = '准备上传：' + file.name;
     file.arrayBuffer().then(function (buf) {
-      state.put = { file: file, buf: buf, off: 0, name: null };
+      if (state.put !== job || !state.ws) return;
+      job.buf = buf;
       $('status').textContent = '上传中：' + file.name;
       relaySend({ t: 'put.begin', name: file.name, size: file.size });
+    }).catch(function (e) {
+      if (state.put === job) {
+        state.put = null;
+        state.putNext = null;
+        $('status').textContent = '读取文件失败：' + (e && e.message ? e.message : e);
+      }
     });
   }
 
@@ -470,7 +535,15 @@
 
   $('go').addEventListener('click', connect);
   $('code').addEventListener('keydown', function (e) { if (e.key === 'Enter') connect(); });
-  $('upload').addEventListener('click', function () { upload($('file').files); });
+  $('drop').addEventListener('click', function () { $('drop-pick').click(); });
+  $('drop-pick').addEventListener('change', function () {
+    upload($('drop-pick').files);
+    $('drop-pick').value = '';
+  });
+  $('upload').addEventListener('click', function () {
+    upload($('file').files);
+    $('file').value = '';
+  });
   ['dragenter', 'dragover'].forEach(function (t) {
     $('drop').addEventListener(t, function (e) { e.preventDefault(); $('drop').classList.add('over'); });
   });

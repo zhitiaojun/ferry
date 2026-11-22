@@ -42,7 +42,7 @@ public class TransferService extends Service {
         Notification.Builder b = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(this, CHANNEL)
                 : new Notification.Builder(this);
-        b.setContentTitle("ft")
+        b.setContentTitle("轻渡 Ferry")
                 .setContentText(text)
                 .setSmallIcon(android.R.drawable.stat_sys_upload)
                 .setOngoing(true);

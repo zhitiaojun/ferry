@@ -241,13 +241,14 @@ func autoServe(ctx context.Context, key *identity.Key, name, outDir, signalURL, 
 	if logger != nil {
 		logger.Event("path.selected", map[string]any{"path": winner, "peer": truncID(req.FromDevice)})
 	}
-	_, err = transfer.Receive(sess, outDir, transfer.Config{
+	res, err := transfer.Receive(sess, outDir, transfer.Config{
 		ChunkSize: 0, Timeout: 30 * time.Second, Log: logger,
 		TransferID: hex16(req.TransferID),
 	})
 	if err != nil {
 		return err
 	}
+	recordReceived(outDir, winner, res.Files, res.Bytes)
 	if logger != nil {
 		logger.Event("auto.done", map[string]any{"path": winner, "peer": truncID(req.FromDevice)})
 	}

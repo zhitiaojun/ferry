@@ -1,0 +1,227 @@
+name: Build and Release Ferry
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Go Vet & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test -count=1 ./...
+
+  build-windows:
+    name: Build Windows (CLI / Desktop / Setup)
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build CLI, Desktop GUI, ShellMenu and Installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path out/windows, cmd/ft-setup/payload/menu/Assets | Out-Null
+
+          go build -trimpath -o out/windows/ferry-windows-amd64.exe ./cmd/ft
+          go build -trimpath -ldflags="-H=windowsgui" -o out/windows/ferry-desktop-windows-amd64.exe ./cmd/ft-desktop
+          go build -trimpath -o cmd/ft-setup/payload/menu/ftstub.exe ./cmd/ft-msix-stub
+
+          $cc = ""
+          if (Test-Path "C:\msys64\mingw64\bin\gcc.exe") {
+            $cc = "C:\msys64\mingw64\bin\gcc.exe"
+          } elseif ($c = Get-Command gcc,clang -ErrorAction SilentlyContinue | Select-Object -First 1) {
+            $cc = $c.Source
+          } else {
+            throw "No MinGW C compiler found to build ftmenu.dll"
+          }
+          & $cc -shared -O2 -o cmd/ft-setup/payload/menu/ftmenu.dll cmd/ft-shellmenu/ftmenu.c cmd/ft-shellmenu/ftmenu.def "-Wl,--exclude-all-symbols" -lole32 -luuid -lshell32 -ladvapi32
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          Copy-Item out/windows/ferry-windows-amd64.exe cmd/ft-setup/payload/ft.exe -Force
+          Copy-Item out/windows/ferry-desktop-windows-amd64.exe cmd/ft-setup/payload/ft-desktop.exe -Force
+          Copy-Item deploy/msix/AppxManifest.xml cmd/ft-setup/payload/menu/ -Force
+          Copy-Item deploy/msix/ft.ico cmd/ft-setup/payload/menu/ -Force
+          Copy-Item deploy/msix/Assets/*.png cmd/ft-setup/payload/menu/Assets/ -Force
+
+          go build -trimpath -o out/windows/ferry-setup-windows-amd64.exe ./cmd/ft-setup
+          go vet ./...
+          go test -count=1 ./cmd/ft ./cmd/ft-desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts
+          path: out/windows/*
+
+  build-linux:
+    name: Build Linux (CLI / Relay Server)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build Linux amd64 binaries
+        run: |
+          mkdir -p out/linux
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o out/linux/ferry-linux-amd64 ./cmd/ft
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o out/linux/ferry-server-linux-amd64 ./cmd/ft-server
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-artifacts
+          path: out/linux/*
+
+  build-android:
+    name: Build Android APK (arm64-v8a, 16KB aligned)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install Android SDK 34 & NDK r27c
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMGR=""
+          for p in "$SDK/cmdline-tools/latest/bin/sdkmanager" "$SDK/cmdline-tools/bin/sdkmanager"; do
+            if [ -x "$p" ]; then SDKMGR="$p"; break; fi
+          done
+          if [ -z "$SDKMGR" ]; then
+            SDKMGR=$(find "$SDK/cmdline-tools" -maxdepth 3 -name sdkmanager -type f | head -n1)
+          fi
+          yes | "$SDKMGR" --licenses >/dev/null || true
+          "$SDKMGR" "platforms;android-34" "build-tools;34.0.0" "ndk;27.2.12479018"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$SDK/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - name: Install gomobile & gobind
+        shell: bash
+        run: |
+          set -euo pipefail
+          go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20261011034528-197770444867
+          go install golang.org/x/mobile/cmd/gobind@v0.0.0-20261011034528-197770444867
+          PATH="$(go env GOPATH)/bin:$PATH" gomobile init
+      - name: Build and Sign Android APK
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          ANDROID_KEY_PASS: ${{ secrets.ANDROID_KEY_PASS }}
+        run: |
+          set -euo pipefail
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          SDK="$ANDROID_HOME"
+          BT="$SDK/build-tools/34.0.0"
+          AJAR="$SDK/platforms/android-34/android.jar"
+          WORK="/tmp/ferry-android"
+          OUT="out/android"
+          VER_NAME="${GITHUB_REF_NAME#v}"
+          if [ -z "$VER_NAME" ] || [ "$GITHUB_REF_NAME" = "main" ]; then
+            VER_NAME="1.0.0"
+          fi
+
+          mkdir -p "$OUT" "$WORK/aar" "$WORK/classes" "$WORK/dex"
+          CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384" \
+            gomobile bind -target=android/arm64 -androidapi 21 -o android/ft.aar ./core/mobile
+
+          python3 - android/ft.aar "$WORK/aar" "$WORK" <<'PY'
+          import sys, zipfile
+          aar, aarout, work = sys.argv[1], sys.argv[2], sys.argv[3]
+          with zipfile.ZipFile(aar) as z:
+              z.extract("classes.jar", aarout)
+              z.extract("jni/arm64-v8a/libgojni.so", work)
+          PY
+          mkdir -p "$WORK/lib/arm64-v8a"
+          cp "$WORK/jni/arm64-v8a/libgojni.so" "$WORK/lib/arm64-v8a/libgojni.so"
+
+          find android/src -name '*.java' > "$WORK/sources.txt"
+          javac -encoding UTF-8 --release 8 -Xlint:-options \
+            -classpath "$AJAR:$WORK/aar/classes.jar" \
+            -d "$WORK/classes" @"$WORK/sources.txt"
+
+          find "$WORK/classes" -name '*.class' > "$WORK/classes.txt"
+          java -cp "$BT/lib/d8.jar" com.android.tools.r8.D8 \
+            --min-api 21 --lib "$AJAR" \
+            --output "$WORK/dex" @"$WORK/classes.txt" "$WORK/aar/classes.jar"
+
+          "$BT/aapt2" compile --dir android/res -o "$WORK/res.zip"
+          "$BT/aapt2" link -o "$WORK/base.apk" \
+            --manifest android/AndroidManifest.xml \
+            -I "$AJAR" --min-sdk-version 21 --target-sdk-version 34 \
+            --version-code 1000 --version-name "$VER_NAME" "$WORK/res.zip"
+
+          cp "$WORK/dex/classes.dex" "$WORK/classes.dex"
+          (cd "$WORK" && python3 "$GITHUB_WORKSPACE/android/zipadd.py" base.apk classes.dex=classes.dex lib/arm64-v8a/libgojni.so=lib/arm64-v8a/libgojni.so)
+          "$BT/zipalign" -f -p 4 "$WORK/base.apk" "$WORK/aligned.apk"
+
+          if [ -n "${ANDROID_KEYSTORE_B64:-}" ]; then
+            echo "$ANDROID_KEYSTORE_B64" | base64 -d > "$WORK/release.keystore"
+            KS="$WORK/release.keystore"
+            ALIAS="$ANDROID_KEY_ALIAS"
+            KSPASS="$ANDROID_KEYSTORE_PASS"
+            KPASS="$ANDROID_KEY_PASS"
+          else
+            KS="$WORK/debug.keystore"
+            ALIAS="androiddebugkey"
+            KSPASS="android"
+            KPASS="android"
+            keytool -genkeypair -keystore "$KS" -alias "$ALIAS" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$KSPASS" -keypass "$KPASS" \
+              -dname "CN=Ferry CI,O=Ferry,C=CN" >/dev/null 2>&1
+          fi
+
+          java -jar "$BT/lib/apksigner.jar" sign \
+            --ks "$KS" --ks-key-alias "$ALIAS" \
+            --ks-pass "pass:$KSPASS" --key-pass "pass:$KPASS" \
+            --out "$OUT/ferry-android-arm64.apk" "$WORK/aligned.apk"
+          java -jar "$BT/lib/apksigner.jar" verify --print-certs "$OUT/ferry-android-arm64.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-artifacts
+          path: out/android/*
+
+  release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-linux, build-android]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Generate SHA256SUMS
+        run: |
+          cd release-assets
+          sha256sum ferry-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-assets/*
+            site/index.html
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}

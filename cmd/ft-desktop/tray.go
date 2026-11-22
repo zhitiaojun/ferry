@@ -47,7 +47,7 @@ func runTray(a *app, keyPath string) int {
 	t := &tray{app: a}
 	key, err := identity.LoadOrCreateKey(keyPath)
 	if err != nil {
-		messageBox("ft", "无法加载设备密钥："+err.Error())
+		messageBox("轻渡", "无法加载设备密钥："+err.Error())
 		return 1
 	}
 	t.key = key
@@ -60,7 +60,7 @@ func runTray(a *app, keyPath string) int {
 	// Background receiver.
 	ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", a.port))
 	if err != nil {
-		messageBox("ft", fmt.Sprintf("端口 %d 被占用：%v", a.port, err))
+		messageBox("轻渡", fmt.Sprintf("端口 %d 被占用：%v", a.port, err))
 		return 1
 	}
 	t.ln = ln
@@ -73,7 +73,7 @@ func runTray(a *app, keyPath string) int {
 
 	// Tray window + icon.
 	if !t.createWindow() {
-		messageBox("ft", "创建托盘窗口失败")
+		messageBox("轻渡", "创建托盘窗口失败")
 		return 1
 	}
 	t.addIcon()
@@ -142,7 +142,7 @@ func (t *tray) createWindow() bool {
 		return false
 	}
 	hwnd, _, _ := procCreateWindowExW.Call(
-		wsExToolWindow, uintptr(unsafe.Pointer(cls)), uintptr(unsafe.Pointer(utf16Ptr("ft"))),
+		wsExToolWindow, uintptr(unsafe.Pointer(cls)), uintptr(unsafe.Pointer(utf16Ptr("轻渡 Ferry"))),
 		0, 0, 0, 0, 0, 0, 0, uintptr(hInst), 0)
 	if hwnd == 0 {
 		return false
@@ -164,7 +164,7 @@ func (t *tray) addIcon() {
 		uCallbackMessage: wmTray,
 		hIcon:            syscall.Handle(icon),
 	}
-	utf16Into(nid.szTip[:], "ft：局域网接收中，右键菜单")
+	utf16Into(nid.szTip[:], "轻渡 Ferry：局域网接收中，右键菜单")
 	nid.cbSize = uint32(unsafe.Sizeof(nid))
 	procShellNotifyIconW.Call(nimAdd, uintptr(unsafe.Pointer(&nid)))
 	t.nid = nid
@@ -230,7 +230,7 @@ func (t *tray) command(id uint16) {
 	case menuOpenDir:
 		shellOpen(t.app.dir)
 	case menuInfo:
-		messageBox("ft 接收信息", fmt.Sprintf(
+		messageBox("轻渡 接收信息", fmt.Sprintf(
 			"设备 ID：%x\n端口：%d\n目录：%s\n\n在手机/电脑上用这个地址即可发送：\n%s",
 			t.devID[:4], t.app.port, t.app.dir, localAddr(t.app.port)))
 	case menuMain:
@@ -254,7 +254,7 @@ func (t *tray) command(id uint16) {
 		if err := installSendTo(); err != nil {
 			t.balloon("发送到", fmt.Sprintf("安装失败：%v", err))
 		} else {
-			t.balloon("发送到", "已在右键菜单加入「ft 发送到」")
+			t.balloon("发送到", "已在右键菜单加入「轻渡 发送到」")
 		}
 	case menuQuit:
 		procPostQuitMessage.Call(0)
@@ -290,6 +290,7 @@ func (t *tray) acceptLoop() {
 }
 
 func (t *tray) handle(nc net.Conn) {
+	start := time.Now()
 	params := session.Params{DeviceID: t.devID, Name: t.name, Capabilities: proto.CapResume}
 	sess, err := session.Accept(nc, params)
 	if err != nil {
@@ -298,6 +299,10 @@ func (t *tray) handle(nc net.Conn) {
 		return
 	}
 	peer := fmt.Sprintf("%x", sess.Peer.DeviceID[:4])
+	peerName := sess.Peer.Name
+	if peerName == "" {
+		peerName = peer
+	}
 	t.app.event("desktop.session_ready", map[string]any{"peer": peer, "name": sess.Peer.Name})
 
 	if !recvEnabled.Load() {
@@ -307,15 +312,23 @@ func (t *tray) handle(nc net.Conn) {
 	res, err := transfer.Receive(sess, t.app.dir, transfer.Config{})
 	if err != nil {
 		t.app.event("desktop.transfer_error", map[string]any{"peer": peer, "error": err.Error()})
+		t.app.note(fmt.Sprintf("%s  ← %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerName)))
+		if h := existingMainWindow(); h != 0 {
+			procPostMessageW.Call(uintptr(h), wmAppPaint, 0, 0)
+		}
 		t.balloon("接收失败", err.Error())
 		return
 	}
 	t.app.event("desktop.transfer_done", map[string]any{
 		"peer": peer, "files": res.Files, "bytes": res.Bytes,
 	})
-	t.app.note(fmt.Sprintf("%s  ← %s  %d 个文件 · %s", time.Now().Format("15:04"), peer, len(res.Files), humanBytes(res.Bytes)))
+	t.app.note(fmt.Sprintf("%s  ← %s · %d 个文件 · %s · %s · LAN",
+		time.Now().Format("15:04"), sanitizeLedgerText(peerName), len(res.Files), humanBytes(res.Bytes), fmtDur(time.Since(start))))
+	if h := existingMainWindow(); h != 0 {
+		procPostMessageW.Call(uintptr(h), wmAppPaint, 0, 0)
+	}
 	title := fmt.Sprintf("已接收 %d 个文件", len(res.Files))
-	t.balloon(title, fmt.Sprintf("来自 %s，共 %d 字节，已存入 %s", peer, res.Bytes, t.app.dir))
+	t.balloon(title, fmt.Sprintf("来自 %s，共 %d 字节，已存入 %s", peerName, res.Bytes, t.app.dir))
 }
 
 func trayWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {

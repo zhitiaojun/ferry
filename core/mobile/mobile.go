@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,7 +27,7 @@ import (
 )
 
 // Version is the core version shown in the Android UI.
-const Version = "0.8.0"
+const Version = "1.0.0"
 
 var (
 	mu  sync.Mutex
@@ -79,7 +78,7 @@ func StartReceiver(name, outDir, hintJSON string) (string, error) {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return "", fmt.Errorf("create output dir: %w", err)
 	}
-	logf, err := os.OpenFile(filepath.Join(outDir, "events.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	logf, err := os.OpenFile(stateLogPath(outDir, "events.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return "", fmt.Errorf("open log: %w", err)
 	}
@@ -172,10 +171,12 @@ func (r *receiver) handle(ctx context.Context, nc net.Conn) {
 	}
 	defer s.Close()
 	r.logger.Event("session.ready", map[string]any{"peer": s.Peer.Name, "path": "lan"})
-	if _, err := transfer.Receive(s, r.outDir, transfer.Config{Log: r.logger}); err != nil {
+	res, err := transfer.Receive(s, r.outDir, transfer.Config{Log: r.logger})
+	if err != nil {
 		r.logger.Event("transfer.error", map[string]any{"error": err.Error()})
 		return
 	}
+	recordReceived(r.outDir, "lan", res.Files, res.Bytes)
 }
 
 // Discover waits timeoutMS for LAN announcements and returns a JSON array of

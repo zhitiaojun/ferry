@@ -78,14 +78,38 @@ func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error)
 	}, peer.ID, files)
 	if err != nil {
 		a.event("desktop.send_error", map[string]any{"to": truncID(peer.ID), "error": err.Error()})
+		a.note(fmt.Sprintf("%s  → %s · %d 个文件 · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), len(files)))
 		return client.Result{}, err
 	}
 	a.event("desktop.send_done", map[string]any{
 		"to": truncID(peer.ID), "bytes": res.Bytes, "chunks": res.Chunks,
 		"duration_ms": res.Duration.Milliseconds(), "transfer_id": res.TransferID,
 	})
-	a.note(fmt.Sprintf("%s  → %s  %d 个文件 · %s", time.Now().Format("15:04"), peerLabel(peer), len(res.Files), humanBytes(res.Bytes)))
+	a.note(fmt.Sprintf("%s  → %s · %d 个文件 · %s · %s · 中继",
+		time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), len(res.Files), humanBytes(res.Bytes), fmtDur(res.Duration)))
 	return res, nil
+}
+
+func fmtDur(d time.Duration) string {
+	if d < time.Second {
+		ms := d.Milliseconds()
+		if ms < 1 {
+			ms = 1
+		}
+		return fmt.Sprintf("%d ms", ms)
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.1f s", d.Seconds())
+	}
+	return fmt.Sprintf("%.1f min", d.Minutes())
+}
+
+func sanitizeLedgerText(s string) string {
+	s = strings.ReplaceAll(s, "·", "-")
+	for strings.Contains(s, "  ") {
+		s = strings.ReplaceAll(s, "  ", " ")
+	}
+	return strings.TrimSpace(s)
 }
 
 // pickPeer shows a popup menu with one entry per paired device.

@@ -8,7 +8,7 @@ const pageHTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>ft · 浏览器收发</title>
+<title>轻渡 Ferry · 浏览器收发</title>
 <style>
   :root{
     color-scheme: light dark;
@@ -112,7 +112,7 @@ const pageHTML = `<!doctype html>
 <div class="wrap">
   <header class="sheet">
     <div>
-      <h1>浏览器收发</h1>
+      <h1>轻渡 Ferry · 浏览器收发</h1>
       <div class="addr"><code id="tok"></code></div>
     </div>
     <div class="state">
@@ -132,7 +132,7 @@ const pageHTML = `<!doctype html>
     <p class="empty">还没有文件 · 把文件拖进上面的区域</p>
   </main>
   <footer class="foot">
-    <span>ft · 局域网直连</span>
+    <span>轻渡 Ferry · 局域网直连</span>
     <span>传输仅在本机与设备之间</span>
   </footer>
 </div>
@@ -153,13 +153,16 @@ const pageHTML = `<!doctype html>
     var td4=document.createElement("td"); var a=document.createElement("a"); a.href=base+"/f/"+encodeURIComponent(f.name); a.textContent="下载"; td4.appendChild(a);
     tr.appendChild(td1);tr.appendChild(td2);tr.appendChild(td3);tr.appendChild(td4);rows.appendChild(tr);
   }
+  var busy = false;
   function load(){
-    fetch(base+"/api/list").then(function(r){return r.json()}).then(function(j){
+    fetch(base+"/api/list",{cache:"no-store"}).then(function(r){return r.json()}).then(function(j){
       rows.innerHTML=""; (j.files||[]).forEach(addRow);
     }).catch(function(e){ msg.textContent="列表失败："+e; });
   }
   function send(files){
     if(!files || !files.length) return;
+    if(busy){ msg.textContent="正在上传中，请稍候"; return; }
+    busy = true;
     var fd=new FormData();
     for(var i=0;i<files.length;i++) fd.append("file", files[i], files[i].name);
     msg.textContent=""; bar.style.display="block"; fill.style.width="0%";
@@ -167,11 +170,13 @@ const pageHTML = `<!doctype html>
     xhr.open("POST", base+"/upload");
     xhr.upload.onprogress=function(e){ if(e.lengthComputable) fill.style.width=(100*e.loaded/e.total).toFixed(1)+"%"; };
     xhr.onload=function(){
+      busy = false;
       bar.style.display="none";
       if(xhr.status!==200){ msg.textContent="上传失败："+xhr.status+" "+(xhr.responseText||""); return; }
       msg.textContent="上传完成"; load();
     };
-    xhr.onerror=function(){ bar.style.display="none"; msg.textContent="上传失败：网络错误"; };
+    xhr.onerror=function(){ busy=false; bar.style.display="none"; msg.textContent="上传失败：网络错误"; };
+    xhr.onabort=function(){ busy=false; bar.style.display="none"; };
     xhr.send(fd);
   }
   var drop=document.getElementById("drop");

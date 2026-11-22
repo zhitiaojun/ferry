@@ -308,6 +308,7 @@ func openMainWindow(a *app) {
 		procShowWindow.Call(uintptr(h), swShow)
 		procSetForegroundWindow.Call(uintptr(h))
 		if mw := currentWin(h); mw != nil {
+			mw.loadPeers()
 			mw.syncTimer(h)
 		}
 		procInvalidateRect.Call(uintptr(h), 0, 1)
@@ -338,13 +339,13 @@ func openMainWindow(a *app) {
 		// Already registered by a previous window: reuse it.
 	}
 	h, _, _ := procCreateWindowExW.Call(
-		wsExAppWindow, uintptr(unsafe.Pointer(cls)), uintptr(unsafe.Pointer(utf16Ptr("ft · 文件传递"))),
+		wsExAppWindow, uintptr(unsafe.Pointer(cls)), uintptr(unsafe.Pointer(utf16Ptr("轻渡 · Ferry"))),
 		wsOverlappedWindow, 0x80000000, 0x80000000, uintptr(ww), uintptr(wh),
 		0, 0, uintptr(hInst), 0)
 	hwnd := syscall.Handle(h)
 	if hwnd == 0 {
 		err := syscall.GetLastError()
-		messageBox("ft", fmt.Sprintf("创建主窗口失败：%v", err))
+		messageBox("轻渡", fmt.Sprintf("创建主窗口失败：%v", err))
 		return
 	}
 	mainMu.Lock()
@@ -744,6 +745,20 @@ func (w *mainWin) paintDC(hdc uintptr, hwnd syscall.Handle) {
 	}
 	w.layout(cr.right, cr.bottom)
 
+	memDC, _, _ := procCompatDC.Call(hdc)
+	if memDC != 0 {
+		bmp, _, _ := procCompatBmp.Call(hdc, uintptr(cr.right), uintptr(cr.bottom))
+		if bmp != 0 {
+			oldBmp, _, _ := procSelectObject.Call(memDC, bmp)
+			w.drawScene(memDC, cr)
+			procBitBlt.Call(hdc, 0, 0, uintptr(cr.right), uintptr(cr.bottom), memDC, 0, 0, srcCopy)
+			procSelectObject.Call(memDC, oldBmp)
+			procDeleteObject.Call(bmp)
+			procDeleteDC.Call(memDC)
+			return
+		}
+		procDeleteDC.Call(memDC)
+	}
 	w.drawScene(hdc, cr)
 }
 
@@ -763,9 +778,9 @@ func (w *mainWin) drawHeader(dc uintptr, cr rectT) {
 
 	x := p(contentPad)
 	bot := w.hdrR.bottom
-	ftW := textWidth(dc, w.fontWin, "ft")
-	drawText(dc, w.fontWin, "ft", rectT{x, 0, x + ftW + p(2), bot}, dtSingleLine|dtVCenter, w.pal.ink)
-	drawText(dc, w.fontWin, "· 文件传递", rectT{x + ftW + p(2), 0, x + ftW + p(110), bot},
+	ftW := textWidth(dc, w.fontWin, "轻渡")
+	drawText(dc, w.fontWin, "轻渡", rectT{x, 0, x + ftW + p(2), bot}, dtSingleLine|dtVCenter, w.pal.ink)
+	drawText(dc, w.fontWin, "· Ferry", rectT{x + ftW + p(4), 0, x + ftW + p(110), bot},
 		dtSingleLine|dtVCenter, w.pal.ink2)
 
 	if sub := w.localSummary(); sub != "" {
@@ -860,8 +875,12 @@ func (w *mainWin) drawPane(dc uintptr, cr rectT) {
 	}
 
 	// Drop zone: paper-2 fill, 1px dashed line border, centred hint.
-	roundBox(dc, w.zone, p(7), w.pal.paper2, w.pal.paper2)
-	dashedBox(dc, w.zone, p(7), w.pal.line)
+	zoneFill, zoneEdge := w.pal.paper2, w.pal.line
+	if w.hover == hoverZone {
+		zoneFill, zoneEdge = w.pal.accentSoft, w.pal.accent
+	}
+	roundBox(dc, w.zone, p(7), zoneFill, zoneFill)
+	dashedBox(dc, w.zone, p(7), zoneEdge)
 	cy := (w.zone.top + w.zone.bottom) / 2
 	big := "拖文件到这里"
 	if !w.hasPeers() {
@@ -870,7 +889,7 @@ func (w *mainWin) drawPane(dc uintptr, cr rectT) {
 	drawText(dc, w.fontSerif, big,
 		rectT{w.zone.left, cy - p(22), w.zone.right, cy + p(1)},
 		dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
-	drawText(dc, w.fontSm, "或点下方「选择文件…」，将在 LAN / 打洞 / 中继之间自动择优",
+	drawText(dc, w.fontSm, "或点下方「选择文件…」发送给左侧选中的设备",
 		rectT{w.zone.left + p(10), cy + p(1), w.zone.right - p(10), cy + p(21)},
 		dtCenter|dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
 
@@ -1194,7 +1213,7 @@ func (w *mainWin) stamp(dc uintptr, right, cy int32, label string, color uint32)
 
 func (w *mainWin) cursorIsHand() bool {
 	switch w.hover {
-	case hoverFile, hoverOpen, hoverPause, hoverEmpty:
+	case hoverFile, hoverOpen, hoverPause, hoverEmpty, hoverZone, hoverPeer:
 		return true
 	}
 	return false
@@ -1292,7 +1311,7 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 func (w *mainWin) pickAndSend(hwnd syscall.Handle) {
 	peer, ok := w.activePeer()
 	if !ok {
-		messageBox("ft", "还没有配对设备：先用 ft pair 或 App 的 6 位码配对")
+		messageBox("轻渡", "还没有配对设备：先用 ferry/ft pair 或 App 的 6 位码配对")
 		return
 	}
 	files := openFileDialog(uintptr(hwnd))
@@ -1306,7 +1325,7 @@ func (w *mainWin) onDrop(hwnd syscall.Handle, hdrop syscall.Handle) {
 	defer procDragFinish.Call(uintptr(hdrop))
 	peer, ok := w.activePeer()
 	if !ok {
-		messageBox("ft", "还没有配对设备：先用 ft pair 或 App 的 6 位码配对")
+		messageBox("轻渡", "还没有配对设备：先用 ferry/ft pair 或 App 的 6 位码配对")
 		return
 	}
 	var files []string

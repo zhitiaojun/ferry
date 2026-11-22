@@ -31,7 +31,7 @@ import (
 	qrcode "github.com/skip2/go-qrcode"
 )
 
-var version = "0.8.0"
+var version = "1.0.0"
 
 var (
 	goVersion  = runtime.Version()
@@ -45,7 +45,7 @@ func main() {
 	}
 	switch os.Args[1] {
 	case "-version", "--version", "version":
-		fmt.Printf("ft %s\nprotocol %d\ngo %s\nplatform %s\n", version, proto.Version, goVersion, goPlatform)
+		fmt.Printf("Ferry (ft) %s\nprotocol %d\ngo %s\nplatform %s\n", version, proto.Version, goVersion, goPlatform)
 		return
 	case "send":
 		os.Exit(runSend(os.Args[2:]))
@@ -57,6 +57,8 @@ func main() {
 		os.Exit(runPair(os.Args[2:]))
 	case "share":
 		os.Exit(runShare(os.Args[2:]))
+	case "mcp":
+		os.Exit(runMCP(os.Args[2:]))
 	case "help", "-h", "--help":
 		usage()
 		return
@@ -110,6 +112,7 @@ func usage() {
 	fmt.Fprint(os.Stderr, `usage:
   ft send --addr <host:port> --file <path> [--file <path>...] [options]
   ft recv --listen <host:port> --out <dir> [options]
+  ft mcp [--key FILE] [--paired FILE] [--out DIR] [--signal URL]
   ft version
 
 send options:
@@ -254,14 +257,23 @@ func runSend(args []string) int {
 		return 2
 	}
 
-	topology := topologyOf(target)
-	res, err := sendLAN(target, files, *chunk, *timeout, *retryFor, logger)
+	sum, err := sendLANTarget(target, paths[0], files, *chunk, *timeout, *retryFor, logger)
 	if err != nil {
 		return fail(logger, "transfer", err)
 	}
-	printSummary(summary{
+	printSummary(sum)
+	return 0
+}
+
+func sendLANTarget(target, pathName string, files []string, chunk int, timeout, retryFor time.Duration, logger *logging.Logger) (summary, error) {
+	topology := topologyOf(target)
+	res, err := sendLAN(target, files, chunk, timeout, retryFor, logger)
+	if err != nil {
+		return summary{}, err
+	}
+	return summary{
 		OK:         true,
-		Path:       paths[0],
+		Path:       pathName,
 		Topology:   topology,
 		Peer:       res.Peer,
 		TransferID: fmt.Sprintf("%x", res.Res.TransferID),
@@ -270,8 +282,7 @@ func runSend(args []string) int {
 		Chunks:     res.Res.Chunks,
 		DurationMS: res.Res.Duration.Milliseconds(),
 		Attempts:   res.Attempts,
-	})
-	return 0
+	}, nil
 }
 
 func runRecv(args []string) int {
@@ -381,9 +392,23 @@ func runRecv(args []string) int {
 		return 0
 	}
 
-	addr := *listen
+	sum, err := recvLAN(context.Background(), *listen, *lan, *out, *name, *chunk, *timeout, 120*time.Second, func(a string) {
+		fmt.Fprintf(os.Stderr, "listening %s\n", a)
+	}, logger)
+	if err != nil {
+		return fail(logger, "recv", err)
+	}
+	printSummary(sum)
+	return 0
+}
+
+func recvLAN(parent context.Context, listen string, lan bool, out, name string, chunk int, timeout, acceptTimeout time.Duration, onListen func(string), logger *logging.Logger) (summary, error) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	addr := listen
 	if addr == "" {
-		if *lan {
+		if lan {
 			addr = "0.0.0.0:0"
 		} else {
 			addr = "127.0.0.1:0"
@@ -391,46 +416,48 @@ func runRecv(args []string) int {
 	}
 	p, err := pathmgr.NewTCPListener(addr)
 	if err != nil {
-		return fail(logger, "listen", err)
+		return summary{}, err
 	}
 	defer p.Close()
 
 	// The address line is how the evidence script discovers an ephemeral port.
 	if logger != nil {
-		logger.Event("path.listen", map[string]any{"addr": p.Addr(), "path": p.Name(), "lan": *lan})
+		logger.Event("path.listen", map[string]any{"addr": p.Addr(), "path": p.Name(), "lan": lan})
 	}
-	fmt.Fprintf(os.Stderr, "listening %s\n", p.Addr())
+	if onListen != nil {
+		onListen(p.Addr())
+	}
 	// Optional LAN announcement: peers find this receiver without --addr.
-	announceCtx, stopAnnounce := context.WithCancel(context.Background())
+	announceCtx, stopAnnounce := context.WithCancel(parent)
 	defer stopAnnounce()
-	if *lan {
+	if lan {
 		tcpPort := listenerPort(p.Addr())
 		go func() {
 			_ = discovery.Announce(announceCtx, discovery.Config{
-				DeviceID: identity.DeviceID(*name),
-				Name:     *name,
+				DeviceID: identity.DeviceID(name),
+				Name:     name,
 				Port:     tcpPort,
 				Log:      logger,
 			})
 		}()
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(parent, acceptTimeout)
 	defer cancel()
 	nc, err := p.Accept(ctx)
 	if err != nil {
-		return fail(logger, "accept", err)
+		return summary{}, err
 	}
 	stopAnnounce()
 
 	s, err := session.Accept(nc, session.Params{
-		DeviceID:     identity.DeviceID(*name),
-		Name:         *name,
+		DeviceID:     identity.DeviceID(name),
+		Name:         name,
 		Capabilities: proto.CapResume,
 	})
 	if err != nil {
 		_ = nc.Close()
-		return fail(logger, "handshake", err)
+		return summary{}, err
 	}
 	defer s.Close()
 
@@ -439,15 +466,15 @@ func runRecv(args []string) int {
 		logger.Event("session.ready", map[string]any{"peer": s.Peer.Name, "path": p.Name(), "topology": topology, "addr": nc.RemoteAddr().String()})
 	}
 
-	res, err := transfer.Receive(s, *out, transfer.Config{
-		ChunkSize: uint32(*chunk),
-		Timeout:   *timeout,
+	res, err := transfer.Receive(s, out, transfer.Config{
+		ChunkSize: uint32(chunk),
+		Timeout:   timeout,
 		Log:       logger,
 	})
 	if err != nil {
-		return fail(logger, "transfer", err)
+		return summary{}, err
 	}
-	printSummary(summary{
+	return summary{
 		OK:         true,
 		Path:       p.Name(),
 		Topology:   topology,
@@ -457,8 +484,7 @@ func runRecv(args []string) int {
 		Bytes:      res.Bytes,
 		Chunks:     res.Chunks,
 		DurationMS: res.Duration.Milliseconds(),
-	})
-	return 0
+	}, nil
 }
 
 // hasPath reports whether name is in the --allow list.

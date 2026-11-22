@@ -30,6 +30,7 @@ var (
 	procUnhookWinEvent   = user32.NewProc("UnhookWinEvent")
 	procGetClassNameW    = user32.NewProc("GetClassNameW")
 	procIsWindow         = user32.NewProc("IsWindow")
+	procIsWindowVisible  = user32.NewProc("IsWindowVisible")
 	procGetAsyncKeyState = user32.NewProc("GetAsyncKeyState")
 	procDragQueryPoint   = shell32.NewProc("DragQueryPoint")
 )
@@ -57,14 +58,6 @@ const (
 	anchorGap = 24
 
 	panelTimerID = 7
-
-	// COLORREF is 0x00BBGGRR.
-	colSurface    = 0x00FFFFFF
-	colLine       = 0x00D6DDD5
-	colAccent     = 0x005B6B09
-	colAccentSoft = 0x00ECF2E4
-	colInk        = 0x001D2117
-	colMuted      = 0x0061675B
 )
 
 type dropPanel struct {
@@ -125,7 +118,7 @@ func (p *dropPanel) ensure() error {
 	cw, ch := p.size()
 	h, _, err := procCreateWindowExW.Call(
 		uintptr(wsExTopmost|wsExToolWindow|wsExNoActivate),
-		uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(utf16Ptr("ft 投放"))),
+		uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(utf16Ptr("轻渡 投放"))),
 		uintptr(wsPopup),
 		0, 0, uintptr(cw), uintptr(ch), 0, 0, uintptr(hinst), 0)
 	if h == 0 {
@@ -207,8 +200,11 @@ func (p *dropPanel) show() {
 	}
 	p.expanded = false
 	p.outside = 0
+	p.dragGone = 0
+	p.buttonUp = 0
 	w, h := p.size()
 	p.pw, p.ph = w, h
+	p.applyRegion()
 	x, y := p.place(w, h)
 	procSetWindowPos.Call(uintptr(p.hwnd), hwndTopmost, uintptr(x), uintptr(y), uintptr(w), uintptr(h),
 		swpNoActivate|swpShowWindow)
@@ -321,11 +317,11 @@ func (p *dropPanel) paint(hwnd syscall.Handle) {
 	var ps paintStruct
 	hdc, _, _ := procBeginPaint.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&ps)))
 	defer procEndPaint.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&ps)))
-	defer procDeleteObject.Call(hdc)
 	d := uintptr(hdc)
+	pal, _ := theme()
 
-	pen, _, _ := procCreatePen.Call(0, 1, uintptr(colLine))
-	brush, _, _ := procCreateBrush.Call(uintptr(colSurface))
+	pen, _, _ := procCreatePen.Call(0, 1, uintptr(pal.line))
+	brush, _, _ := procCreateBrush.Call(uintptr(pal.paper))
 	oldPen, _, _ := procSelectObject.Call(d, pen)
 	oldBrush, _, _ := procSelectObject.Call(d, brush)
 	rad := uintptr(float64(14) * float64(p.dpi) / 96.0)
@@ -342,26 +338,26 @@ func (p *dropPanel) paint(hwnd syscall.Handle) {
 		if sc := int32(float64(9) * float64(p.dpi) / 96.0); sc > inset {
 			inset = sc
 		}
-		dotPen, _, _ := procCreatePen.Call(2, 1, uintptr(colAccent)) // PS_DOT
+		dotPen, _, _ := procCreatePen.Call(2, 1, uintptr(pal.accent)) // PS_DOT
 		old, _, _ := procSelectObject.Call(d, dotPen)
 		procRectangle.Call(d, uintptr(inset), uintptr(inset), uintptr(p.pw-inset), uintptr(p.ph-inset))
 		procSelectObject.Call(d, old)
 		procDeleteObject.Call(dotPen)
-		drawText(d, p.fontNm, "拖到此处开始传文件",
+		drawText(d, p.fontNm, "拖到此处 · 轻渡快传",
 			rectT{inset + 6, inset + 4, p.pw - inset - 6, p.ph - inset - 4},
-			dtSingleLine|dtVCenter|dtCenter, colMuted)
+			dtSingleLine|dtVCenter|dtCenter, pal.ink2)
 		return
 	}
 	title, boxes, foot := p.layout(p.pw, p.ph)
-	drawText(d, p.fontLg, "发送到设备", title, dtSingleLine|dtVCenter, colInk)
+	drawText(d, p.fontLg, "发送到设备", title, dtSingleLine|dtVCenter, pal.ink)
 
 	for i, b := range boxes {
 		active := i == p.active
-		fill := uintptr(colSurface)
-		edge := uintptr(colLine)
+		fill := uintptr(pal.paper)
+		edge := uintptr(pal.line)
 		if active {
-			fill = uintptr(colAccentSoft)
-			edge = uintptr(colAccent)
+			fill = uintptr(pal.accentSoft)
+			edge = uintptr(pal.accent)
 		}
 		bp, _, _ := procCreateBrush.Call(fill)
 		ep, _, _ := procCreatePen.Call(0, 1, edge)
@@ -381,23 +377,23 @@ func (p *dropPanel) paint(hwnd syscall.Handle) {
 		if narrow {
 			// A narrow box only has room for the name, wrapped over two lines.
 			nm := rectT{b.left + 3, b.top + 8, b.right - 3, b.bottom - 8}
-			drawText(d, p.fontSm, name, nm, dtSingleLine|dtVCenter|dtCenter|dtEndEllipsis, colInk)
+			drawText(d, p.fontSm, name, nm, dtSingleLine|dtVCenter|dtCenter|dtEndEllipsis, pal.ink)
 		} else {
 			nm := rectT{b.left + 6, b.top + 10, b.right - 6, b.top + 32}
-			drawText(d, p.fontNm, name, nm, dtSingleLine|dtVCenter|dtCenter|dtEndEllipsis, colInk)
+			drawText(d, p.fontNm, name, nm, dtSingleLine|dtVCenter|dtCenter|dtEndEllipsis, pal.ink)
 			id := rectT{b.left + 6, b.top + 34, b.right - 6, b.top + 50}
-			drawText(d, p.fontSm, shortID(p.peers[i].ID), id, dtSingleLine|dtCenter, colMuted)
+			drawText(d, p.fontSm, shortID(p.peers[i].ID), id, dtSingleLine|dtCenter, pal.ink2)
 		}
 		if active {
 			tag := rectT{b.left + 6, b.bottom - 24, b.right - 6, b.bottom - 8}
-			drawText(d, p.fontSm, "松手发送", tag, dtSingleLine|dtCenter, colAccent)
+			drawText(d, p.fontSm, "松手发送", tag, dtSingleLine|dtCenter, pal.accent)
 		}
 	}
 	if len(p.peers) == 0 {
 		drawText(d, p.fontSm, "还没有配对设备", rectT{12, p.ph / 2, p.pw - 12, p.ph/2 + 20},
-			dtSingleLine|dtCenter, colMuted)
+			dtSingleLine|dtCenter, pal.ink2)
 	}
-	drawText(d, p.fontSm, "拖动时出现，松手后自动隐藏", foot, dtSingleLine|dtVCenter|dtCenter, colMuted)
+	drawText(d, p.fontSm, "拖动时出现，松手后自动隐藏", foot, dtSingleLine|dtVCenter|dtCenter, pal.ink2)
 }
 
 func shortID(id string) string {
@@ -484,6 +480,10 @@ func panelWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintp
 				delete(dragWins, h)
 				continue
 			}
+			if v, _, _ := procIsWindowVisible.Call(h); v == 0 {
+				delete(dragWins, h)
+				continue
+			}
 			var buf [64]uint16
 			n, _, _ := procGetClassNameW.Call(h, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
 			if n == 0 || syscall.UTF16ToString(buf[:n]) != "SysDragImage" {
@@ -556,6 +556,8 @@ func winEventProc(hook uintptr, event uint32, hwnd uintptr, idObject, idChild in
 	const (
 		eventObjectCreate  = 0x8000
 		eventObjectDestroy = 0x8001
+		eventObjectShow    = 0x8002
+		eventObjectHide    = 0x8003
 	)
 	if hwnd == 0 || idObject != 0 { // OBJID_WINDOW
 		return 0
@@ -572,20 +574,18 @@ func winEventProc(hook uintptr, event uint32, hwnd uintptr, idObject, idChild in
 	if thePanel == nil || thePanel.hwnd == 0 {
 		return 0
 	}
-	// The shell may create and destroy helper drag-image windows while one drag
-	// is in flight (for example when the pointer crosses into our own panel).
-	// Only the transition between "no drag window" and "at least one" decides
-	// visibility, otherwise the panel would flicker between its two shapes.
+	// The shell may reuse or cycle helper drag-image windows while one drag is
+	// in flight, so watch Create/Show and Destroy/Hide transitions uniformly.
 	dragMu.Lock()
 	switch event {
-	case eventObjectCreate:
+	case eventObjectCreate, eventObjectShow:
 		dragWins[hwnd] = true
-	case eventObjectDestroy:
+	case eventObjectDestroy, eventObjectHide:
 		delete(dragWins, hwnd)
 	}
 	alive := len(dragWins)
 	dragMu.Unlock()
-	if event == eventObjectCreate && alive > 0 {
+	if (event == eventObjectCreate || event == eventObjectShow) && alive > 0 {
 		procPostMessageW.Call(uintptr(thePanel.hwnd), wmPanelShow, 0, 0)
 	}
 	return 0
@@ -601,15 +601,15 @@ var (
 // are delivered through that message loop.
 func startDragWatch() uintptr {
 	const (
-		eventObjectCreate  = 0x8000
-		eventObjectDestroy = 0x8001
-		winEventOutOfCtx   = 0x0000
-		winEventSkipOwn    = 0x0002
+		eventObjectCreate = 0x8000
+		eventObjectHide   = 0x8003
+		winEventOutOfCtx  = 0x0000
+		winEventSkipOwn   = 0x0002
 	)
 	if winEventPtr == 0 {
 		winEventPtr = syscall.NewCallback(winEventProc)
 	}
-	h, _, _ := procSetWinEventHook.Call(eventObjectCreate, eventObjectDestroy, 0, winEventPtr, 0, 0,
+	h, _, _ := procSetWinEventHook.Call(eventObjectCreate, eventObjectHide, 0, winEventPtr, 0, 0,
 		winEventOutOfCtx|winEventSkipOwn)
 	return h
 }

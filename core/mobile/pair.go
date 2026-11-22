@@ -86,3 +86,26 @@ func pairResult(peer pairing.Peer, total int) string {
 	})
 	return string(raw)
 }
+
+// PairedPeers lists the trusted peers stored at pairedPath as a JSON array of
+// {"id":"...","name":"..."} objects (returning "[]" if no file exists yet).
+func PairedPeers(pairedPath string) (string, error) {
+	store, err := identity.LoadPaired(pairedPath)
+	if err != nil {
+		return "", err
+	}
+	type item struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	list := store.List()
+	out := make([]item, 0, len(list))
+	for _, d := range list {
+		out = append(out, item{ID: d.DeviceID, Name: d.Name})
+	}
+	raw, err := json.Marshal(out)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
