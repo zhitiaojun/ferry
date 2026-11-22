@@ -136,8 +136,8 @@ func openPairWindow(owner syscall.Handle, a *app) {
 	}
 	procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
 
-	// WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN
-	const style = 0x00000000 | 0x00C00000 | 0x00080000 | 0x02000000
+	// WS_CAPTION | WS_CLIPCHILDREN (omit WS_SYSMENU so DWM draws no ghost close button)
+	const style = 0x00C00000 | 0x02000000
 	trayApp = a
 	h, _, _ := procCreateWindowExW.Call(
 		0x00010000, // WS_EX_CONTROLPARENT
@@ -173,8 +173,8 @@ func pairWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintpt
 			dark: dark,
 			dpi:  windowDPI(hwnd),
 		}
-		p.acrylic = enableAcrylicBackdrop(hwnd, dark)
 		procSetWindowPos.Call(uintptr(hwnd), 0, 0, 0, 0, 0, 0x0027)
+		p.acrylic = enableAcrylicBackdrop(hwnd, dark)
 		p.editBg = syscall.Handle(createPairBrush(pal.paper2))
 		p.makeFonts()
 		p.initEdits()
@@ -190,9 +190,6 @@ func pairWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintpt
 		if wParam != 0 {
 			return 0
 		}
-
-	case wmNcActivate:
-		return 1
 
 	case wmNcHitTest:
 		if pw != nil {

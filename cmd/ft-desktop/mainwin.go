@@ -343,7 +343,7 @@ func openMainWindow(a *app) {
 	}
 	h, _, _ := procCreateWindowExW.Call(
 		wsExAppWindow, uintptr(unsafe.Pointer(cls)), uintptr(unsafe.Pointer(utf16Ptr("轻渡"))),
-		wsOverlappedWindow, 0x80000000, 0x80000000, uintptr(ww), uintptr(wh),
+		wsOverlappedWindow&^0x00080000, 0x80000000, 0x80000000, uintptr(ww), uintptr(wh),
 		0, 0, uintptr(hInst), 0)
 	hwnd := syscall.Handle(h)
 	if hwnd == 0 {
@@ -389,8 +389,8 @@ func mainWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintpt
 		mw := &mainWin{app: trayApp, pal: pal, dark: dark, sel: 0, page: pageHome, filter: fltAll}
 		mw.hwnd = hwnd
 		mw.dpi = windowDPI(hwnd)
-		mw.acrylic = enableAcrylicBackdrop(hwnd, dark)
 		procSetWindowPos.Call(uintptr(hwnd), 0, 0, 0, 0, 0, 0x0027)
+		mw.acrylic = enableAcrylicBackdrop(hwnd, dark)
 		mw.makeFonts()
 		mw.loadPeers()
 		mw.refreshLocalMeta()
@@ -411,10 +411,6 @@ func mainWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintpt
 				r.bottom -= pad
 			}
 			return 0
-		}
-	case wmNcActivate:
-		if iconic, _, _ := procIsIconic.Call(uintptr(hwnd)); iconic == 0 {
-			return 1
 		}
 	case wmNcHitTest:
 		if w != nil {
