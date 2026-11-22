@@ -1,48 +1,77 @@
 package cn.cwlindean.ft;
 
+import android.Manifest;
 import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.Dialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.ContentValues;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.ColorFilter;
+import android.graphics.ImageFormat;
+import android.graphics.Matrix;
+import android.graphics.Outline;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
+import android.graphics.RectF;
+import android.graphics.SurfaceTexture;
 import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
+import android.hardware.camera2.CameraCaptureSession;
+import android.hardware.camera2.CameraCharacteristics;
+import android.hardware.camera2.CameraDevice;
+import android.hardware.camera2.CameraManager;
+import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.params.StreamConfigurationMap;
+import android.media.Image;
+import android.media.ImageReader;
 import android.net.Uri;
 import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.CountDownTimer;
 import android.os.Environment;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.provider.Settings;
-import android.text.Editable;
+import android.text.InputFilter;
 import android.text.InputType;
 import android.text.TextUtils;
-import android.text.TextWatcher;
 import android.util.Log;
+import android.util.Size;
 import android.view.Gravity;
+import android.view.Surface;
+import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewOutlineProvider;
+import android.view.Window;
+import android.view.WindowManager;
 import android.view.animation.AccelerateDecelerateInterpolator;
 import android.webkit.MimeTypeMap;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -62,37 +91,40 @@ import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.InterfaceAddress;
 import java.net.NetworkInterface;
+import java.nio.ByteBuffer;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
 
 import mobile.Mobile;
 
 /**
- * Material Design 3 UI shell for ft. Transport, discovery, relay signaling and
- * crypto identity live in the Go AAR (core/mobile).
+ * 轻渡 Ferry Android UI shell.
+ * Transport, discovery, relay signaling, QR encode/decode and crypto identity live in the Go AAR (core/mobile).
  */
 public class MainActivity extends Activity {
     private static final String TAG = "ft";
     private static final String SIGNAL_URL = "wss://ft.cwlindean.cn/signal";
     private static final int PICK_FILES = 42;
     private static final int PICK_PAIR_FILE = 43;
+    private static final int REQ_CAMERA = 44;
+    private static final int PAIR_TTL_SEC = 600;
     private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
     private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
     private static final Pattern HEX64 = Pattern.compile("^[0-9a-fA-F]{64}$");
 
-    // MD3 tonal roles (Dynamic on Android 12+, refined sage palette fallback).
-    private int cPrimary, cOnPrimary, cPrimaryContainer, cOnPrimaryContainer;
-    private int cSecondaryContainer, cOnSecondaryContainer;
-    private int cTertiaryContainer, cOnTertiaryContainer;
-    private int cSurface, cSurfaceContainerLow, cSurfaceContainer, cSurfaceContainerHigh;
-    private int cOnSurface, cOnSurfaceVariant, cOutline, cOutlineVariant;
+    // Theme tokens (v2 light/dark aesthetic matching ferry_mobile_redesign.html)
+    private int cPrimary, cPrimaryPressed, cOnPrimary, cPrimaryContainer, cOnPrimaryContainer;
+    private int cSurface, cCard, cSurfaceAlt, cSheetBg, cBorder;
+    private int cOnSurface, cOnSurfaceVariant, cOutline;
     private int cError, cOnError, cErrorContainer, cOnErrorContainer;
     private int cWarn, cWarnContainer, cRipple;
 
@@ -100,61 +132,91 @@ public class MainActivity extends Activity {
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService ioPool = Executors.newSingleThreadExecutor();
     private WifiManager.MulticastLock multicastLock;
-    private String deviceName;
+    private String deviceName = "";
     private String fullDeviceId = "";
     private String webShareUrl = "";
     private boolean recvRunning;
     private boolean webRunning;
-    private boolean recvEverStarted;
-    private int activeTab;
+    private boolean lanSearching;
+    private int activePage; // 0 = Home, 1 = Settings
     private String lanPort = "";
+    private String selectedTarget = "";
+    private String activeFilter = "all"; // "all" | "recv" | "send"
     private List<Uri> sharedUris;
     private final List<PeerEntry> pairedEntries = new ArrayList<>();
     private final List<PeerEntry> lanEntries = new ArrayList<>();
     private final List<ReceivedEntry> recentEntries = new ArrayList<>();
-    private String lanNote = "";
 
-    // Top bar & bottom nav
-    private LinearLayout topChip;
-    private View topDot;
-    private TextView topStateText;
-    private TextView topIdChip;
-    private final LinearLayout[] navItems = new LinearLayout[3];
-    private final View[] navPills = new View[3];
-    private final ImageView[] navIcons = new ImageView[3];
-    private final TextView[] navLabels = new TextView[3];
-    private View panelSend, panelRecv, panelPair;
+    // Top Bar views
+    private View backBtn;
+    private View brandMarkView;
+    private TextView topTitleView;
+    private View topActionsWrap;
+
+    // Pages
+    private ScrollView pageHome;
+    private ScrollView pageSettings;
+
+    // Home views
+    private HorizontalScrollView peerScroll;
+    private LinearLayout peerChipRow;
+    private LinearLayout sendCard;
+    private LinearLayout unpairedCard;
+    private TextView sendTargetTitle;
+    private TextView sendRecvStatusBtn;
+    private View recvPulseDot;
     private ValueAnimator dotAnimator;
-
-    // Send tab views
-    private TextView targetTitleView;
-    private TextView targetSubView;
     private TextView shareBannerView;
-    private Button sendPickBtn;
-    private Button sendClipBtn;
+    private LinearLayout sendPickTile;
+    private LinearLayout sendClipTile;
     private LinearLayout sendResultCard;
     private TextView sendResultBadge;
     private TextView sendResultText;
-    private Button discoverBtn;
-    private DeviceList deviceList;
-    private EditText peerField;
 
-    // Receive tab views
-    private LinearLayout recvHeroCard;
-    private TextView recvHeroTitle;
-    private TextView recvHeroSub;
-    private Button recvToggleBtn;
-    private Button webToggleBtn;
-    private TextView webUrlView;
+    // Recent list views
+    private final TextView[] filterTabs = new TextView[3];
     private LinearLayout recentListView;
+    private LinearLayout recentEmptyView;
 
-    // Pair tab views
-    private EditText nameField;
-    private TextView pairFullIdView;
-    private EditText pakeCodeField;
-    private EditText pakePeerField;
-    private TextView pakeInfoView;
-    private EditText pairUriField;
+    // Settings views
+    private Button setRecvBtn;
+    private Button setWebBtn;
+    private TextView setWebUrlView;
+    private TextView setNameVal;
+    private TextView setIdVal;
+    private TextView setPortVal;
+
+    // Pairing Dialog state & views
+    private Dialog pairDialog;
+    private int pairMode; // 0 = scan, 1 = show QR, 2 = enter code
+    private View modeScanWrap, modeShowWrap, modeEnterWrap;
+    private TextureView scanTextureView;
+    private TextView scanStatusLabel;
+    private LinearLayout scanPermOverlay;
+    private ImageView showQrImage;
+    private LinearLayout showExpiredMask;
+    private TextView showCodeText;
+    private TextView showTtlText;
+    private EditText enterCodeField;
+    private EditText enterPeerField;
+    private TextView enterStatusView;
+    private Button enterSubmitBtn;
+    private CountDownTimer pairCountdown;
+    private int pairShowSeq;
+
+    // Camera2 QR scanner state
+    private volatile boolean cameraWanted;
+    private HandlerThread camThread;
+    private Handler camHandler;
+    private CameraDevice cameraDevice;
+    private CameraCaptureSession captureSession;
+    private ImageReader imageReader;
+    private Size previewSize = new Size(960, 720);
+    private final AtomicBoolean decodingFrame = new AtomicBoolean(false);
+    private final AtomicBoolean scanSucceeded = new AtomicBoolean(false);
+    private long lastScanTickMs;
+    private String lastRejectedQR = "";
+    private long lastRejectMs;
 
     private final Runnable pollTask = new Runnable() {
         @Override
@@ -169,7 +231,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        loadMd3Tokens();
+        loadThemeTokens();
         applyWindowChrome();
         migrateLegacyState();
         deviceName = loadSavedName();
@@ -186,12 +248,25 @@ public class MainActivity extends Activity {
         loadRecentState();
         sweepLeftoverInbox();
         handleShareIntent(getIntent());
+
+        if (getPreferences(MODE_PRIVATE).getBoolean("recvAuto", true)) {
+            startAllReceive();
+        }
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         pollReceivedOnce();
+        if (pairDialog != null && pairDialog.isShowing() && pairMode == 0) {
+            startCameraIfReady();
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        stopCamera();
+        super.onPause();
     }
 
     @Override
@@ -202,7 +277,21 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    public void onBackPressed() {
+        if (pairDialog != null && pairDialog.isShowing()) {
+            closePairSheet();
+            return;
+        }
+        if (activePage == 1) {
+            showPage(0);
+            return;
+        }
+        super.onBackPressed();
+    }
+
+    @Override
     protected void onDestroy() {
+        closePairSheet();
         ui.removeCallbacks(pollTask);
         stopDotPulse();
         releaseMulticastLock();
@@ -212,7 +301,6 @@ public class MainActivity extends Activity {
 
     // ================= App Directories (Key Isolation) =================
 
-    /** Internal private dir holding device.key, paired.json, logs, and recent index. */
     private File stateDir() {
         File d = new File(getFilesDir(), "state");
         if (!d.exists()) {
@@ -221,7 +309,6 @@ public class MainActivity extends Activity {
         return d;
     }
 
-    /** Internal staging dir for incoming Go transfers before moving to Download/ft. */
     private File inboxDir() {
         File d = new File(getFilesDir(), "inbox");
         if (!d.exists()) {
@@ -230,7 +317,6 @@ public class MainActivity extends Activity {
         return d;
     }
 
-    /** Separate directory for LAN Web Share so private keys are never exposed. */
     private File webShareDir() {
         File d = new File(getFilesDir(), "webshare");
         if (!d.exists()) {
@@ -251,7 +337,6 @@ public class MainActivity extends Activity {
         return new File(stateDir(), "recent.json");
     }
 
-    /** Preserves existing identity/pairings from older v0.8 external received/ layout. */
     private void migrateLegacyState() {
         File ext = getExternalFilesDir(null);
         if (ext == null) {
@@ -278,120 +363,63 @@ public class MainActivity extends Activity {
         }
     }
 
-    // ================= MD3 Tokens & Chrome =================
+    // ================= Theme Tokens & Chrome =================
 
     private boolean isNight() {
         return (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
                 == Configuration.UI_MODE_NIGHT_YES;
     }
 
-    private int sysColor(int resId, int fallback) {
-        if (Build.VERSION.SDK_INT >= 31) {
-            try {
-                return getColor(resId);
-            } catch (Exception ignored) {
-            }
-        }
-        return fallback;
-    }
-
-    private void loadMd3Tokens() {
-        boolean night = isNight();
-        if (Build.VERSION.SDK_INT >= 31) {
-            if (night) {
-                cPrimary = sysColor(android.R.color.system_accent1_200, 0xFF8CD6B1);
-                cOnPrimary = sysColor(android.R.color.system_accent1_800, 0xFF003824);
-                cPrimaryContainer = sysColor(android.R.color.system_accent1_700, 0xFF0A5138);
-                cOnPrimaryContainer = sysColor(android.R.color.system_accent1_100, 0xFFA8F2CC);
-                cSecondaryContainer = sysColor(android.R.color.system_accent2_700, 0xFF354B40);
-                cOnSecondaryContainer = sysColor(android.R.color.system_accent2_100, 0xFFCFE9DA);
-                cTertiaryContainer = sysColor(android.R.color.system_accent3_700, 0xFF2B4A58);
-                cOnTertiaryContainer = sysColor(android.R.color.system_accent3_100, 0xFFC4E7F8);
-                cSurface = sysColor(android.R.color.system_neutral1_900, 0xFF101512);
-                cSurfaceContainerLow = Color.parseColor("#181D1A");
-                cSurfaceContainer = Color.parseColor("#1C221E");
-                cSurfaceContainerHigh = Color.parseColor("#262D28");
-                cOnSurface = sysColor(android.R.color.system_neutral1_100, 0xFFE0E4E0);
-                cOnSurfaceVariant = sysColor(android.R.color.system_neutral2_200, 0xFFBFC9C2);
-                cOutline = sysColor(android.R.color.system_neutral2_400, 0xFF89938C);
-                cOutlineVariant = sysColor(android.R.color.system_neutral2_700, 0xFF404943);
-            } else {
-                cPrimary = sysColor(android.R.color.system_accent1_600, 0xFF1D6B4E);
-                cOnPrimary = Color.WHITE;
-                cPrimaryContainer = sysColor(android.R.color.system_accent1_100, 0xFFA8F2CC);
-                cOnPrimaryContainer = sysColor(android.R.color.system_accent1_900, 0xFF002114);
-                cSecondaryContainer = sysColor(android.R.color.system_accent2_100, 0xFFCFE9DA);
-                cOnSecondaryContainer = sysColor(android.R.color.system_accent2_900, 0xFF0B1F16);
-                cTertiaryContainer = sysColor(android.R.color.system_accent3_100, 0xFFC4E7F8);
-                cOnTertiaryContainer = sysColor(android.R.color.system_accent3_900, 0xFF001F29);
-                cSurface = sysColor(android.R.color.system_neutral1_10, 0xFFF7FAF7);
-                cSurfaceContainerLow = sysColor(android.R.color.system_neutral1_50, 0xFFF0F5F0);
-                cSurfaceContainer = Color.parseColor("#E9EFEA");
-                cSurfaceContainerHigh = sysColor(android.R.color.system_neutral1_100, 0xFFE2E9E3);
-                cOnSurface = sysColor(android.R.color.system_neutral1_900, 0xFF181D1A);
-                cOnSurfaceVariant = sysColor(android.R.color.system_neutral2_700, 0xFF404943);
-                cOutline = sysColor(android.R.color.system_neutral2_500, 0xFF707973);
-                cOutlineVariant = sysColor(android.R.color.system_neutral2_200, 0xFFBFC9C2);
-            }
-        } else if (night) {
-            cPrimary = Color.parseColor("#8CD6B1");
-            cOnPrimary = Color.parseColor("#003824");
-            cPrimaryContainer = Color.parseColor("#0A5138");
-            cOnPrimaryContainer = Color.parseColor("#A8F2CC");
-            cSecondaryContainer = Color.parseColor("#354B40");
-            cOnSecondaryContainer = Color.parseColor("#CFE9DA");
-            cTertiaryContainer = Color.parseColor("#2B4A58");
-            cOnTertiaryContainer = Color.parseColor("#C4E7F8");
-            cSurface = Color.parseColor("#101512");
-            cSurfaceContainerLow = Color.parseColor("#181D1A");
-            cSurfaceContainer = Color.parseColor("#1C221E");
-            cSurfaceContainerHigh = Color.parseColor("#262D28");
-            cOnSurface = Color.parseColor("#E0E4E0");
-            cOnSurfaceVariant = Color.parseColor("#BFC9C2");
-            cOutline = Color.parseColor("#89938C");
-            cOutlineVariant = Color.parseColor("#404943");
-        } else {
-            cPrimary = Color.parseColor("#1D6B4E");
+    private void loadThemeTokens() {
+        if (isNight()) {
+            cPrimary = Color.parseColor("#14B8A6");
+            cPrimaryPressed = Color.parseColor("#0D9488");
             cOnPrimary = Color.WHITE;
-            cPrimaryContainer = Color.parseColor("#A8F2CC");
-            cOnPrimaryContainer = Color.parseColor("#002114");
-            cSecondaryContainer = Color.parseColor("#CFE9DA");
-            cOnSecondaryContainer = Color.parseColor("#0B1F16");
-            cTertiaryContainer = Color.parseColor("#C4E7F8");
-            cOnTertiaryContainer = Color.parseColor("#001F29");
-            cSurface = Color.parseColor("#F7FAF7");
-            cSurfaceContainerLow = Color.parseColor("#EFF5F0");
-            cSurfaceContainer = Color.parseColor("#E8EFEA");
-            cSurfaceContainerHigh = Color.parseColor("#DFE8E2");
-            cOnSurface = Color.parseColor("#181D1A");
-            cOnSurfaceVariant = Color.parseColor("#404943");
-            cOutline = Color.parseColor("#707973");
-            cOutlineVariant = Color.parseColor("#BFC9C2");
-        }
-
-        if (night) {
-            cError = Color.parseColor("#FFB4AB");
-            cOnError = Color.parseColor("#690005");
-            cErrorContainer = Color.parseColor("#93000A");
-            cOnErrorContainer = Color.parseColor("#FFDAD6");
-            cWarn = Color.parseColor("#F4BF6A");
-            cWarnContainer = Color.parseColor("#4C3304");
-            cRipple = Color.parseColor("#28FFFFFF");
+            cPrimaryContainer = Color.parseColor("#134E4A");
+            cOnPrimaryContainer = Color.parseColor("#99F6E4");
+            cSurface = Color.parseColor("#111827");
+            cCard = Color.parseColor("#182230");
+            cSurfaceAlt = Color.parseColor("#1F2937");
+            cSheetBg = Color.parseColor("#EB182230");
+            cBorder = Color.parseColor("#273244");
+            cOnSurface = Color.parseColor("#F3F4F6");
+            cOnSurfaceVariant = Color.parseColor("#9CA3AF");
+            cOutline = Color.parseColor("#4B5563");
+            cError = Color.parseColor("#F87171");
+            cOnError = Color.parseColor("#450A0A");
+            cErrorContainer = Color.parseColor("#7F1D1D");
+            cOnErrorContainer = Color.parseColor("#FEE2E2");
+            cWarn = Color.parseColor("#FBBF24");
+            cWarnContainer = Color.parseColor("#451A03");
+            cRipple = Color.parseColor("#26FFFFFF");
         } else {
-            cError = Color.parseColor("#BA1A1A");
+            cPrimary = Color.parseColor("#0D9488");
+            cPrimaryPressed = Color.parseColor("#0F766E");
+            cOnPrimary = Color.WHITE;
+            cPrimaryContainer = Color.parseColor("#CCFBF1");
+            cOnPrimaryContainer = Color.parseColor("#134E4A");
+            cSurface = Color.parseColor("#FFFFFF");
+            cCard = Color.parseColor("#FAFAFA");
+            cSurfaceAlt = Color.parseColor("#F3F4F6");
+            cSheetBg = Color.parseColor("#F0FFFFFF");
+            cBorder = Color.parseColor("#E5E7EB");
+            cOnSurface = Color.parseColor("#111827");
+            cOnSurfaceVariant = Color.parseColor("#6B7280");
+            cOutline = Color.parseColor("#9CA3AF");
+            cError = Color.parseColor("#DC2626");
             cOnError = Color.WHITE;
-            cErrorContainer = Color.parseColor("#FFDAD6");
-            cOnErrorContainer = Color.parseColor("#410002");
-            cWarn = Color.parseColor("#8A5600");
-            cWarnContainer = Color.parseColor("#FFE2B7");
-            cRipple = Color.parseColor("#1A000000");
+            cErrorContainer = Color.parseColor("#FEE2E2");
+            cOnErrorContainer = Color.parseColor("#7F1D1D");
+            cWarn = Color.parseColor("#B45309");
+            cWarnContainer = Color.parseColor("#FEF3C7");
+            cRipple = Color.parseColor("#18000000");
         }
     }
 
     private void applyWindowChrome() {
         try {
             getWindow().setStatusBarColor(cSurface);
-            getWindow().setNavigationBarColor(cSurfaceContainer);
+            getWindow().setNavigationBarColor(cSurface);
             View dv = getWindow().getDecorView();
             int flags = dv.getSystemUiVisibility();
             if (isNight()) {
@@ -412,51 +440,25 @@ public class MainActivity extends Activity {
         }
     }
 
-    // ================= Build MD3 Scaffold =================
+    // ================= Build Redesigned UI (No Bottom Tabs) =================
 
     private View buildUi() {
         LinearLayout scaffold = new LinearLayout(this);
         scaffold.setOrientation(LinearLayout.VERTICAL);
         scaffold.setBackgroundColor(cSurface);
+        scaffold.setFitsSystemWindows(true);
 
-        scaffold.addView(buildTopBar(), new LinearLayout.LayoutParams(MATCH, WRAP));
+        scaffold.addView(buildTopBar(), new LinearLayout.LayoutParams(MATCH, dp(56)));
 
-        ScrollView scroller = new ScrollView(this);
-        scroller.setFillViewport(true);
-        scroller.setVerticalScrollBarEnabled(false);
+        FrameLayout contentHost = new FrameLayout(this);
+        pageHome = buildHomePage();
+        pageSettings = buildSettingsPage();
+        pageSettings.setVisibility(View.GONE);
+        contentHost.addView(pageHome, new FrameLayout.LayoutParams(MATCH, MATCH));
+        contentHost.addView(pageSettings, new FrameLayout.LayoutParams(MATCH, MATCH));
 
-        LinearLayout content = new LinearLayout(this);
-        content.setOrientation(LinearLayout.VERTICAL);
-        content.setPadding(dp(16), dp(4), dp(16), dp(20));
-
-        LinearLayout send = new LinearLayout(this);
-        send.setOrientation(LinearLayout.VERTICAL);
-        buildSendPanel(send);
-        panelSend = send;
-        content.addView(send, new LinearLayout.LayoutParams(MATCH, WRAP));
-
-        LinearLayout recv = new LinearLayout(this);
-        recv.setOrientation(LinearLayout.VERTICAL);
-        buildReceivePanel(recv);
-        panelRecv = recv;
-        content.addView(recv, new LinearLayout.LayoutParams(MATCH, WRAP));
-
-        LinearLayout pair = new LinearLayout(this);
-        pair.setOrientation(LinearLayout.VERTICAL);
-        buildPairPanel(pair);
-        panelPair = pair;
-        content.addView(pair, new LinearLayout.LayoutParams(MATCH, WRAP));
-
-        scroller.addView(content, new ScrollView.LayoutParams(MATCH, WRAP));
-        scaffold.addView(scroller, new LinearLayout.LayoutParams(MATCH, 0, 1f));
-
-        View divider = new View(this);
-        divider.setBackgroundColor(cOutlineVariant);
-        scaffold.addView(divider, new LinearLayout.LayoutParams(MATCH, Math.max(1, dp(0.5f))));
-
-        scaffold.addView(buildBottomNav(), new LinearLayout.LayoutParams(MATCH, dp(72)));
-
-        selectTab(0);
+        scaffold.addView(contentHost, new LinearLayout.LayoutParams(MATCH, 0, 1f));
+        showPage(0);
         return scaffold;
     }
 
@@ -464,431 +466,1438 @@ public class MainActivity extends Activity {
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setPadding(dp(20), dp(14), dp(16), dp(12));
+        bar.setPadding(dp(20), dp(4), dp(14), dp(4));
 
-        TextView title = label("轻渡", 22, cOnSurface, true);
-        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
-        bar.addView(title, new LinearLayout.LayoutParams(WRAP, WRAP));
+        // Left: back button (Settings) + brand mark (Home) + title
+        ImageView backImg = new ImageView(this);
+        backImg.setImageDrawable(new IconDrawable(IconDrawable.BACK, cOnSurface));
+        backImg.setPadding(dp(6), dp(6), dp(6), dp(6));
+        backImg.setBackground(ripple(oval(Color.TRANSPARENT), 99));
+        backImg.setContentDescription("返回");
+        backImg.setOnClickListener(v -> showPage(0));
+        backImg.setVisibility(View.GONE);
+        backBtn = backImg;
+        LinearLayout.LayoutParams bkLp = new LinearLayout.LayoutParams(dp(36), dp(36));
+        bkLp.rightMargin = dp(4);
+        bar.addView(backImg, bkLp);
 
-        topIdChip = label("ID —", 11, cOnSurfaceVariant, false);
-        topIdChip.setTypeface(Typeface.MONOSPACE);
-        topIdChip.setPadding(dp(10), dp(5), dp(10), dp(5));
-        topIdChip.setBackground(ripple(roundBox(cSurfaceContainerHigh, 0, 99), 99));
-        topIdChip.setOnClickListener(v -> copyText("设备 ID", fullDeviceId, "已复制完整设备 ID"));
-        LinearLayout.LayoutParams idLp = new LinearLayout.LayoutParams(WRAP, WRAP);
-        idLp.leftMargin = dp(10);
-        bar.addView(topIdChip, idLp);
+        ImageView mark = new ImageView(this);
+        mark.setImageDrawable(new FerryMarkDrawable());
+        brandMarkView = mark;
+        LinearLayout.LayoutParams mkLp = new LinearLayout.LayoutParams(dp(22), dp(22));
+        mkLp.rightMargin = dp(9);
+        bar.addView(mark, mkLp);
 
-        bar.addView(new View(this), new LinearLayout.LayoutParams(0, dp(1), 1f));
+        topTitleView = label("轻渡", 18, cOnSurface, true);
+        bar.addView(topTitleView, new LinearLayout.LayoutParams(0, WRAP, 1f));
 
-        topChip = new LinearLayout(this);
-        topChip.setOrientation(LinearLayout.HORIZONTAL);
-        topChip.setGravity(Gravity.CENTER_VERTICAL);
-        topChip.setPadding(dp(10), dp(6), dp(12), dp(6));
-        topChip.setBackground(ripple(roundBox(cSurfaceContainerHigh, 0, 99), 99));
-        topChip.setOnClickListener(v -> selectTab(1));
+        // Right: minimal scan + settings icon actions
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.CENTER_VERTICAL);
+        topActionsWrap = actions;
 
-        topDot = new View(this);
-        topDot.setBackground(oval(cOnSurfaceVariant));
-        topChip.addView(topDot, new LinearLayout.LayoutParams(dp(8), dp(8)));
+        ImageView scanBtn = iconActionBtn(IconDrawable.SCAN, "扫一扫", v -> openPairSheet(0));
+        LinearLayout.LayoutParams scLp = new LinearLayout.LayoutParams(dp(40), dp(40));
+        scLp.rightMargin = dp(2);
+        actions.addView(scanBtn, scLp);
 
-        topStateText = label("未开启", 12, cOnSurfaceVariant, true);
-        LinearLayout.LayoutParams stLp = new LinearLayout.LayoutParams(WRAP, WRAP);
-        stLp.leftMargin = dp(6);
-        topChip.addView(topStateText, stLp);
+        ImageView settingsBtn = iconActionBtn(IconDrawable.SETTINGS, "设置", v -> showPage(1));
+        actions.addView(settingsBtn, new LinearLayout.LayoutParams(dp(40), dp(40)));
 
-        bar.addView(topChip, new LinearLayout.LayoutParams(WRAP, WRAP));
+        bar.addView(actions, new LinearLayout.LayoutParams(WRAP, WRAP));
         return bar;
     }
 
-    private LinearLayout buildBottomNav() {
-        LinearLayout nav = new LinearLayout(this);
-        nav.setOrientation(LinearLayout.HORIZONTAL);
-        nav.setBackgroundColor(cSurfaceContainer);
-        nav.setGravity(Gravity.CENTER_VERTICAL);
-
-        final String[] labels = {"发送", "接收", "设备"};
-        for (int i = 0; i < 3; i++) {
-            final int idx = i;
-            LinearLayout item = new LinearLayout(this);
-            item.setOrientation(LinearLayout.VERTICAL);
-            item.setGravity(Gravity.CENTER);
-            item.setClickable(true);
-            item.setFocusable(true);
-            item.setOnClickListener(v -> selectTab(idx));
-
-            LinearLayout pill = new LinearLayout(this);
-            pill.setGravity(Gravity.CENTER);
-            ImageView icon = new ImageView(this);
-            pill.addView(icon, new LinearLayout.LayoutParams(dp(20), dp(20)));
-            item.addView(pill, new LinearLayout.LayoutParams(dp(64), dp(32)));
-
-            TextView lbl = label(labels[i], 12, cOnSurfaceVariant, false);
-            LinearLayout.LayoutParams lLp = new LinearLayout.LayoutParams(WRAP, WRAP);
-            lLp.topMargin = dp(4);
-            item.addView(lbl, lLp);
-
-            navItems[i] = item;
-            navPills[i] = pill;
-            navIcons[i] = icon;
-            navLabels[i] = lbl;
-            nav.addView(item, new LinearLayout.LayoutParams(0, MATCH, 1f));
-        }
-        return nav;
+    private ImageView iconActionBtn(int kind, String desc, View.OnClickListener listener) {
+        ImageView iv = new ImageView(this);
+        iv.setImageDrawable(new IconDrawable(kind, cOnSurface));
+        iv.setPadding(dp(9), dp(9), dp(9), dp(9));
+        iv.setBackground(ripple(oval(Color.TRANSPARENT), 99));
+        iv.setContentDescription(desc);
+        iv.setOnClickListener(listener);
+        return iv;
     }
 
-    private void selectTab(int index) {
-        activeTab = index;
-        View[] panels = {panelSend, panelRecv, panelPair};
-        for (int i = 0; i < 3; i++) {
-            boolean on = i == index;
-            if (panels[i] != null) {
-                panels[i].setVisibility(on ? View.VISIBLE : View.GONE);
-            }
-            if (navPills[i] != null) {
-                navPills[i].setBackground(roundBox(on ? cSecondaryContainer : Color.TRANSPARENT, 0, 16));
-            }
-            if (navIcons[i] != null) {
-                navIcons[i].setImageDrawable(new NavIcon(i, on ? cOnSecondaryContainer : cOnSurfaceVariant));
-            }
-            if (navLabels[i] != null) {
-                navLabels[i].setTextColor(on ? cOnSurface : cOnSurfaceVariant);
-                navLabels[i].setTypeface(on
-                        ? Typeface.create("sans-serif-medium", Typeface.BOLD)
-                        : Typeface.DEFAULT);
-            }
+    private void showPage(int page) {
+        activePage = page;
+        boolean isSet = page == 1;
+        pageHome.setVisibility(isSet ? View.GONE : View.VISIBLE);
+        pageSettings.setVisibility(isSet ? View.VISIBLE : View.GONE);
+        backBtn.setVisibility(isSet ? View.VISIBLE : View.GONE);
+        brandMarkView.setVisibility(isSet ? View.GONE : View.VISIBLE);
+        topActionsWrap.setVisibility(isSet ? View.GONE : View.VISIBLE);
+        topTitleView.setText(isSet ? "设置" : "轻渡");
+        if (isSet) {
+            refreshSettingsInfo();
         }
     }
 
-    // ================= Tab 0: Send =================
+    // ================= Page 0: Home =================
 
-    private void buildSendPanel(LinearLayout root) {
-        LinearLayout hero = md3Card(cSurfaceContainerLow, 24, 20, 20, 20, 20);
-        root.addView(hero, new LinearLayout.LayoutParams(MATCH, WRAP));
+    private ScrollView buildHomePage() {
+        ScrollView sv = new ScrollView(this);
+        sv.setFillViewport(true);
 
-        hero.addView(label("发往目标", 12, cOnSurfaceVariant, true),
-                new LinearLayout.LayoutParams(WRAP, WRAP));
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(20), dp(8), dp(20), dp(28));
 
-        targetTitleView = label("尚未选择接收设备", 18, cOnSurface, true);
-        LinearLayout.LayoutParams ttLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        ttLp.topMargin = dp(4);
-        hero.addView(targetTitleView, ttLp);
+        // 1. Horizontal Paired / LAN Device Selector Bar
+        peerScroll = new HorizontalScrollView(this);
+        peerScroll.setHorizontalScrollBarEnabled(false);
+        peerChipRow = new LinearLayout(this);
+        peerChipRow.setOrientation(LinearLayout.HORIZONTAL);
+        peerChipRow.setGravity(Gravity.CENTER_VERTICAL);
+        peerScroll.addView(peerChipRow, new FrameLayout.LayoutParams(WRAP, WRAP));
+        LinearLayout.LayoutParams psLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        psLp.bottomMargin = dp(16);
+        root.addView(peerScroll, psLp);
 
-        targetSubView = label("可在下方列表点击已配对或局域网设备", 12, cOnSurfaceVariant, false);
-        LinearLayout.LayoutParams tsLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        tsLp.topMargin = dp(3);
-        hero.addView(targetSubView, tsLp);
+        // 2. Paired Send Card
+        sendCard = new LinearLayout(this);
+        sendCard.setOrientation(LinearLayout.VERTICAL);
+        sendCard.setPadding(dp(16), dp(14), dp(16), dp(16));
+        sendCard.setBackground(roundBox(cCard, cBorder, 16));
 
-        shareBannerView = label("", 12, cOnSecondaryContainer, true);
-        shareBannerView.setBackground(roundBox(cSecondaryContainer, 0, 12));
-        shareBannerView.setPadding(dp(12), dp(10), dp(12), dp(10));
+        LinearLayout cardTop = new LinearLayout(this);
+        cardTop.setOrientation(LinearLayout.HORIZONTAL);
+        cardTop.setGravity(Gravity.CENTER_VERTICAL);
+
+        sendTargetTitle = label("发往 未选择设备", 13, cOnSurface, true);
+        sendTargetTitle.setSingleLine(true);
+        sendTargetTitle.setEllipsize(TextUtils.TruncateAt.END);
+        cardTop.addView(sendTargetTitle, new LinearLayout.LayoutParams(0, WRAP, 1f));
+
+        LinearLayout recvStatusWrap = new LinearLayout(this);
+        recvStatusWrap.setOrientation(LinearLayout.HORIZONTAL);
+        recvStatusWrap.setGravity(Gravity.CENTER_VERTICAL);
+        recvStatusWrap.setPadding(dp(8), dp(4), dp(8), dp(4));
+        recvStatusWrap.setBackground(ripple(roundBox(Color.TRANSPARENT, 0, 99), 99));
+        recvStatusWrap.setOnClickListener(v -> toggleReceive());
+
+        recvPulseDot = new View(this);
+        recvPulseDot.setBackground(oval(cOnSurfaceVariant));
+        LinearLayout.LayoutParams dotLp = new LinearLayout.LayoutParams(dp(7), dp(7));
+        dotLp.rightMargin = dp(5);
+        recvStatusWrap.addView(recvPulseDot, dotLp);
+
+        sendRecvStatusBtn = label("未开启接收", 12, cOnSurfaceVariant, false);
+        recvStatusWrap.addView(sendRecvStatusBtn, new LinearLayout.LayoutParams(WRAP, WRAP));
+        cardTop.addView(recvStatusWrap, new LinearLayout.LayoutParams(WRAP, WRAP));
+        sendCard.addView(cardTop, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        shareBannerView = label("", 12, cOnPrimaryContainer, true);
+        shareBannerView.setPadding(dp(12), dp(8), dp(12), dp(8));
+        shareBannerView.setBackground(roundBox(cPrimaryContainer, 0, 10));
         shareBannerView.setVisibility(View.GONE);
         LinearLayout.LayoutParams sbLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        sbLp.topMargin = dp(12);
-        hero.addView(shareBannerView, sbLp);
+        sbLp.topMargin = dp(10);
+        sendCard.addView(shareBannerView, sbLp);
 
-        sendPickBtn = pillFilledBtn("选择文件发送", cPrimary, cOnPrimary);
-        sendPickBtn.setOnClickListener(v -> pickFiles());
-        LinearLayout.LayoutParams spLp = new LinearLayout.LayoutParams(MATCH, dp(52));
-        spLp.topMargin = dp(16);
-        hero.addView(sendPickBtn, spLp);
+        LinearLayout tileGrid = new LinearLayout(this);
+        tileGrid.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams tgLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        tgLp.topMargin = dp(12);
 
-        sendClipBtn = pillFilledBtn("发送剪贴板文本", cSecondaryContainer, cOnSecondaryContainer);
-        sendClipBtn.setOnClickListener(v -> sendClipboard());
-        LinearLayout.LayoutParams scLp = new LinearLayout.LayoutParams(MATCH, dp(44));
-        scLp.topMargin = dp(10);
-        hero.addView(sendClipBtn, scLp);
+        sendPickTile = actionTile("发文件 / 照片", IconDrawable.UPLOAD, true, v -> pickFiles());
+        LinearLayout.LayoutParams t1Lp = new LinearLayout.LayoutParams(0, WRAP, 1f);
+        t1Lp.rightMargin = dp(10);
+        tileGrid.addView(sendPickTile, t1Lp);
 
+        sendClipTile = actionTile("发剪贴板", IconDrawable.CLIP, false, v -> sendClipboard());
+        tileGrid.addView(sendClipTile, new LinearLayout.LayoutParams(0, WRAP, 1f));
+        sendCard.addView(tileGrid, tgLp);
+
+        // Result feedback banner inside Send Card (hidden when idle)
         sendResultCard = new LinearLayout(this);
         sendResultCard.setOrientation(LinearLayout.HORIZONTAL);
         sendResultCard.setGravity(Gravity.CENTER_VERTICAL);
-        sendResultCard.setPadding(dp(12), dp(10), dp(12), dp(10));
-        sendResultCard.setBackground(roundBox(cSurfaceContainerHigh, 0, 14));
+        sendResultCard.setPadding(dp(12), dp(9), dp(12), dp(9));
         sendResultCard.setVisibility(View.GONE);
 
         sendResultBadge = label("", 11, cOnPrimaryContainer, true);
         sendResultBadge.setPadding(dp(8), dp(3), dp(8), dp(3));
-        sendResultBadge.setBackground(roundBox(cPrimaryContainer, 0, 99));
-        sendResultBadge.setVisibility(View.GONE);
-        sendResultCard.addView(sendResultBadge, new LinearLayout.LayoutParams(WRAP, WRAP));
+        LinearLayout.LayoutParams rbLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        rbLp.rightMargin = dp(8);
+        sendResultCard.addView(sendResultBadge, rbLp);
 
         sendResultText = label("", 12, cOnSurface, false);
-        LinearLayout.LayoutParams rtLp = new LinearLayout.LayoutParams(0, WRAP, 1f);
-        rtLp.leftMargin = dp(8);
-        sendResultCard.addView(sendResultText, rtLp);
+        sendResultCard.addView(sendResultText, new LinearLayout.LayoutParams(0, WRAP, 1f));
 
         LinearLayout.LayoutParams srLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        srLp.topMargin = dp(12);
-        hero.addView(sendResultCard, srLp);
+        srLp.topMargin = dp(10);
+        sendCard.addView(sendResultCard, srLp);
 
-        // Available devices card
-        LinearLayout devCard = md3Card(cSurfaceContainerLow, 20, 16, 16, 16, 16);
-        LinearLayout.LayoutParams dcLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        dcLp.topMargin = dp(14);
-        root.addView(devCard, dcLp);
+        LinearLayout.LayoutParams scLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        scLp.bottomMargin = dp(20);
+        root.addView(sendCard, scLp);
 
-        LinearLayout devHead = new LinearLayout(this);
-        devHead.setOrientation(LinearLayout.HORIZONTAL);
-        devHead.setGravity(Gravity.CENTER_VERTICAL);
-        devHead.addView(label("可用设备", 15, cOnSurface, true),
-                new LinearLayout.LayoutParams(0, WRAP, 1f));
+        // 3. Unpaired Onboarding Card
+        unpairedCard = new LinearLayout(this);
+        unpairedCard.setOrientation(LinearLayout.VERTICAL);
+        unpairedCard.setGravity(Gravity.CENTER_HORIZONTAL);
+        unpairedCard.setPadding(dp(20), dp(22), dp(20), dp(20));
+        unpairedCard.setBackground(roundBox(cCard, cBorder, 16));
 
-        discoverBtn = pillSmallBtn("搜索局域网", cSecondaryContainer, cOnSecondaryContainer);
-        discoverBtn.setOnClickListener(v -> discover());
-        devHead.addView(discoverBtn, new LinearLayout.LayoutParams(WRAP, dp(34)));
-        devCard.addView(devHead, new LinearLayout.LayoutParams(MATCH, WRAP));
+        TextView upTitle = label("先配对一台电脑", 15, cOnSurface, true);
+        upTitle.setGravity(Gravity.CENTER);
+        unpairedCard.addView(upTitle, new LinearLayout.LayoutParams(WRAP, WRAP));
 
-        deviceList = new DeviceList();
-        LinearLayout.LayoutParams dlLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        dlLp.topMargin = dp(10);
-        devCard.addView(deviceList, dlLp);
+        TextView upSub = label("在电脑轻渡点击「添加设备」，手机扫一下即可互传文件。", 12, cOnSurfaceVariant, false);
+        upSub.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams usLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        usLp.topMargin = dp(6);
+        unpairedCard.addView(upSub, usLp);
 
-        // Manual input card
-        LinearLayout manCard = md3Card(cSurfaceContainerLow, 20, 16, 14, 16, 16);
-        LinearLayout.LayoutParams mcLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        mcLp.topMargin = dp(14);
-        root.addView(manCard, mcLp);
+        Button scanCta = filledBtn("扫码配对电脑", cPrimaryPressed, cOnPrimary);
+        scanCta.setOnClickListener(v -> openPairSheet(0));
+        LinearLayout.LayoutParams ctaLp = new LinearLayout.LayoutParams(MATCH, dp(42));
+        ctaLp.topMargin = dp(14);
+        unpairedCard.addView(scanCta, ctaLp);
 
-        manCard.addView(label("手动填写目标（设备 ID 或 IP:端口）", 12, cOnSurfaceVariant, true),
-                new LinearLayout.LayoutParams(WRAP, WRAP));
+        LinearLayout upLinks = new LinearLayout(this);
+        upLinks.setOrientation(LinearLayout.HORIZONTAL);
+        upLinks.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams ulLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        ulLp.topMargin = dp(12);
 
-        peerField = md3Input("粘贴 64 位设备 ID，或输入 IP:端口");
-        peerField.addTextChangedListener(new TextWatcher() {
-            @Override public void beforeTextChanged(CharSequence s, int st, int c, int a) {}
-            @Override public void onTextChanged(CharSequence s, int st, int b, int c) {}
-            @Override public void afterTextChanged(Editable s) {
-                updateTargetSummary();
-                if (deviceList != null) {
-                    deviceList.syncSelection();
-                }
-            }
-        });
-        LinearLayout.LayoutParams pfLp = new LinearLayout.LayoutParams(MATCH, dp(48));
-        pfLp.topMargin = dp(8);
-        manCard.addView(peerField, pfLp);
-        deviceList.render(pairedEntries, lanEntries, lanNote);
-    }
+        TextView manualLink = label("手动输入 6 位配对码", 12, cPrimary, true);
+        manualLink.setPadding(dp(8), dp(4), dp(8), dp(4));
+        manualLink.setOnClickListener(v -> openPairSheet(2));
+        upLinks.addView(manualLink, new LinearLayout.LayoutParams(WRAP, WRAP));
 
-    // ================= Tab 1: Receive & Files =================
+        TextView dotSep = label("·", 12, cOnSurfaceVariant, false);
+        dotSep.setPadding(dp(4), 0, dp(4), 0);
+        upLinks.addView(dotSep, new LinearLayout.LayoutParams(WRAP, WRAP));
 
-    private void buildReceivePanel(LinearLayout root) {
-        recvHeroCard = md3Card(cSurfaceContainerLow, 24, 20, 20, 20, 20);
-        root.addView(recvHeroCard, new LinearLayout.LayoutParams(MATCH, WRAP));
+        TextView lanLink = label("搜索同局域网设备", 12, cOnSurfaceVariant, false);
+        lanLink.setPadding(dp(8), dp(4), dp(8), dp(4));
+        lanLink.setOnClickListener(v -> discover());
+        upLinks.addView(lanLink, new LinearLayout.LayoutParams(WRAP, WRAP));
+        unpairedCard.addView(upLinks, ulLp);
 
-        recvHeroTitle = label("准备接收文件", 20, cOnSurface, true);
-        recvHeroCard.addView(recvHeroTitle, new LinearLayout.LayoutParams(MATCH, WRAP));
+        LinearLayout.LayoutParams ucLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        ucLp.bottomMargin = dp(20);
+        root.addView(unpairedCard, ucLp);
 
-        recvHeroSub = label("点击下方按钮后同时开启局域网与远程自动选路，收到文件自动保存到系统「下载 / Ferry」",
-                13, cOnSurfaceVariant, false);
-        recvHeroSub.setLineSpacing(dp(4), 1f);
-        LinearLayout.LayoutParams hsLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        hsLp.topMargin = dp(6);
-        recvHeroCard.addView(recvHeroSub, hsLp);
+        // 4. Recent Transfers Section Header + Filters
+        LinearLayout recHdr = new LinearLayout(this);
+        recHdr.setOrientation(LinearLayout.HORIZONTAL);
+        recHdr.setGravity(Gravity.CENTER_VERTICAL);
+        recHdr.setPadding(0, 0, 0, dp(10));
 
-        recvToggleBtn = pillFilledBtn("开启接收", cPrimary, cOnPrimary);
-        recvToggleBtn.setOnClickListener(v -> toggleReceive());
-        LinearLayout.LayoutParams rtLp = new LinearLayout.LayoutParams(MATCH, dp(52));
-        rtLp.topMargin = dp(18);
-        recvHeroCard.addView(recvToggleBtn, rtLp);
+        recHdr.addView(label("最近记录", 15, cOnSurface, true), new LinearLayout.LayoutParams(0, WRAP, 1f));
 
-        // Tools: Web share & background optimization
-        LinearLayout toolsCard = md3Card(cSurfaceContainerLow, 20, 16, 16, 16, 16);
-        LinearLayout.LayoutParams tcLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        tcLp.topMargin = dp(14);
-        root.addView(toolsCard, tcLp);
+        String[] fKeys = {"all", "recv", "send"};
+        String[] fNames = {"全部", "已收到", "已发出"};
+        for (int i = 0; i < 3; i++) {
+            final String fk = fKeys[i];
+            TextView tv = label(fNames[i], 13, cOnSurfaceVariant, true);
+            tv.setPadding(dp(10), dp(4), i == 2 ? 0 : dp(10), dp(4));
+            tv.setOnClickListener(v -> {
+                activeFilter = fk;
+                renderFilterTabs();
+                renderRecentList();
+            });
+            filterTabs[i] = tv;
+            recHdr.addView(tv, new LinearLayout.LayoutParams(WRAP, WRAP));
+        }
+        root.addView(recHdr, new LinearLayout.LayoutParams(MATCH, WRAP));
 
-        toolsCard.addView(label("网页快传与保活", 15, cOnSurface, true),
-                new LinearLayout.LayoutParams(WRAP, WRAP));
-        LinearLayout.LayoutParams wSubLp = new LinearLayout.LayoutParams(WRAP, WRAP);
-        wSubLp.topMargin = dp(3);
-        toolsCard.addView(label("网页分享仅共享独立临时目录，不包含设备密钥与配对表", 12, cOnSurfaceVariant, false), wSubLp);
-
-        LinearLayout btnRow = new LinearLayout(this);
-        btnRow.setOrientation(LinearLayout.HORIZONTAL);
-        webToggleBtn = pillFilledBtn("开启网页分享", cSecondaryContainer, cOnSecondaryContainer);
-        webToggleBtn.setOnClickListener(v -> toggleWebShare());
-        Button battBtn = pillOutlineBtn("允许后台保活");
-        battBtn.setOnClickListener(v -> requestBatteryExemption());
-        btnRow.addView(webToggleBtn, new LinearLayout.LayoutParams(0, dp(44), 1f));
-        LinearLayout.LayoutParams b2Lp = new LinearLayout.LayoutParams(0, dp(44), 1f);
-        b2Lp.leftMargin = dp(10);
-        btnRow.addView(battBtn, b2Lp);
-        LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        rowLp.topMargin = dp(12);
-        toolsCard.addView(btnRow, rowLp);
-
-        webUrlView = label("", 12, cOnPrimaryContainer, true);
-        webUrlView.setTypeface(Typeface.MONOSPACE);
-        webUrlView.setPadding(dp(12), dp(10), dp(12), dp(10));
-        webUrlView.setBackground(ripple(roundBox(cPrimaryContainer, 0, 12), 12));
-        webUrlView.setVisibility(View.GONE);
-        webUrlView.setOnClickListener(v -> copyText("网页分享地址", webShareUrl, "已复制网页分享链接"));
-        LinearLayout.LayoutParams wuLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        wuLp.topMargin = dp(10);
-        toolsCard.addView(webUrlView, wuLp);
-
-        // Recent received files card
-        LinearLayout recentCard = md3Card(cSurfaceContainerLow, 20, 16, 16, 16, 16);
-        LinearLayout.LayoutParams rcLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        rcLp.topMargin = dp(14);
-        root.addView(recentCard, rcLp);
-
-        LinearLayout recHead = new LinearLayout(this);
-        recHead.setOrientation(LinearLayout.HORIZONTAL);
-        recHead.setGravity(Gravity.CENTER_VERTICAL);
-        recHead.addView(label("最近收到", 15, cOnSurface, true),
-                new LinearLayout.LayoutParams(0, WRAP, 1f));
-        recHead.addView(label("Download/Ferry", 11, cOnSurfaceVariant, true),
-                new LinearLayout.LayoutParams(WRAP, WRAP));
-        recentCard.addView(recHead, new LinearLayout.LayoutParams(MATCH, WRAP));
+        View divider = new View(this);
+        divider.setBackgroundColor(cBorder);
+        root.addView(divider, new LinearLayout.LayoutParams(MATCH, 1));
 
         recentListView = new LinearLayout(this);
         recentListView.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout.LayoutParams rlLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        rlLp.topMargin = dp(10);
-        recentCard.addView(recentListView, rlLp);
+        root.addView(recentListView, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        recentEmptyView = new LinearLayout(this);
+        recentEmptyView.setOrientation(LinearLayout.VERTICAL);
+        recentEmptyView.setGravity(Gravity.CENTER_HORIZONTAL);
+        recentEmptyView.setPadding(dp(16), dp(36), dp(16), dp(24));
+        TextView empTitle = label("还没有传输记录", 13, cOnSurface, true);
+        recentEmptyView.addView(empTitle, new LinearLayout.LayoutParams(WRAP, WRAP));
+        TextView empSub = label("收到的文件会自动放进系统 Download/Ferry 文件夹。", 12, cOnSurfaceVariant, false);
+        empSub.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams esLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        esLp.topMargin = dp(4);
+        recentEmptyView.addView(empSub, esLp);
+        root.addView(recentEmptyView, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        renderPeerSection();
+        renderFilterTabs();
         renderRecentList();
+        refreshReceiveUi();
+
+        sv.addView(root, new FrameLayout.LayoutParams(MATCH, WRAP));
+        return sv;
     }
 
-    // ================= Tab 2: Devices & Pairing =================
+    private LinearLayout actionTile(String text, int iconKind, boolean primary, View.OnClickListener click) {
+        LinearLayout tile = new LinearLayout(this);
+        tile.setOrientation(LinearLayout.VERTICAL);
+        tile.setGravity(Gravity.CENTER);
+        tile.setPadding(dp(12), dp(16), dp(12), dp(16));
+        Drawable bg = primary
+                ? roundBox(cPrimaryPressed, 0, 12)
+                : roundBox(cSurface, cBorder, 12);
+        tile.setBackground(ripple(bg, 12));
+        tile.setOnClickListener(click);
 
-    private void buildPairPanel(LinearLayout root) {
-        LinearLayout idCard = md3Card(cSurfaceContainerLow, 20, 16, 16, 16, 16);
-        root.addView(idCard, new LinearLayout.LayoutParams(MATCH, WRAP));
+        ImageView iv = new ImageView(this);
+        iv.setImageDrawable(new IconDrawable(iconKind, primary ? cOnPrimary : cOnSurface));
+        LinearLayout.LayoutParams ivLp = new LinearLayout.LayoutParams(dp(22), dp(22));
+        ivLp.bottomMargin = dp(7);
+        tile.addView(iv, ivLp);
 
-        idCard.addView(label("本机身份", 15, cOnSurface, true),
-                new LinearLayout.LayoutParams(WRAP, WRAP));
+        TextView tv = label(text, 13, primary ? cOnPrimary : cOnSurface, true);
+        tile.addView(tv, new LinearLayout.LayoutParams(WRAP, WRAP));
+        return tile;
+    }
 
-        LinearLayout.LayoutParams nlLp = new LinearLayout.LayoutParams(WRAP, WRAP);
-        nlLp.topMargin = dp(10);
-        idCard.addView(label("显示名称", 12, cOnSurfaceVariant, false), nlLp);
+    // ================= Page 1: Settings (Local Device Info lives here) =================
 
-        nameField = md3Input("对端看到的设备名称");
-        nameField.setText(deviceName);
-        nameField.addTextChangedListener(new TextWatcher() {
-            @Override public void beforeTextChanged(CharSequence s, int st, int c, int a) {}
-            @Override public void onTextChanged(CharSequence s, int st, int b, int c) {}
-            @Override public void afterTextChanged(Editable s) {
-                String n = s.toString().trim();
-                if (!n.isEmpty()) {
+    private ScrollView buildSettingsPage() {
+        ScrollView sv = new ScrollView(this);
+        sv.setFillViewport(true);
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(20), dp(10), dp(20), dp(32));
+
+        // Group 1: Receive + WebShare + Battery
+        LinearLayout grp1 = new LinearLayout(this);
+        grp1.setOrientation(LinearLayout.VERTICAL);
+        grp1.setBackground(roundBox(cCard, cBorder, 16));
+
+        setRecvBtn = smallOutlineBtn("开启中", v -> toggleReceive());
+        grp1.addView(settingActionRow("后台接收文件", "自动存入系统 Download/Ferry", setRecvBtn, null),
+                new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        grp1.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
+
+        setWebBtn = smallOutlineBtn("开启", v -> toggleWebShare());
+        grp1.addView(settingActionRow("网页快传", "临时给未安装软件的设备传文件", setWebBtn, v -> toggleWebShare()),
+                new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        setWebUrlView = label("", 12, cPrimary, true);
+        setWebUrlView.setPadding(dp(16), dp(4), dp(16), dp(14));
+        setWebUrlView.setVisibility(View.GONE);
+        setWebUrlView.setOnClickListener(v -> copyText("网页分享地址", webShareUrl, "已复制局域网网址，请在浏览器打开"));
+        grp1.addView(setWebUrlView, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        grp1.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
+
+        Button batBtn = smallOutlineBtn("去设置", v -> requestBatteryExemption());
+        grp1.addView(settingActionRow("电池后台白名单", "减少系统休眠导致的接收断开", batBtn, v -> requestBatteryExemption()),
+                new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        LinearLayout.LayoutParams g1Lp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        g1Lp.bottomMargin = dp(22);
+        root.addView(grp1, g1Lp);
+
+        // Group 2: 本机信息 (Technical info tucked out of daily Home)
+        TextView infoHdr = label("本机信息", 12, cOnSurfaceVariant, true);
+        infoHdr.setPadding(dp(4), 0, dp(4), dp(8));
+        root.addView(infoHdr, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        LinearLayout grp2 = new LinearLayout(this);
+        grp2.setOrientation(LinearLayout.VERTICAL);
+        grp2.setBackground(roundBox(cCard, cBorder, 16));
+
+        setNameVal = label(deviceName, 13, cOnSurface, true);
+        grp2.addView(settingInfoRow("设备名称（点击修改）", setNameVal, v -> showRenameDialog()),
+                new LinearLayout.LayoutParams(MATCH, WRAP));
+        grp2.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
+
+        setIdVal = label("读取中…", 13, cOnSurface, false);
+        setIdVal.setTypeface(Typeface.MONOSPACE);
+        grp2.addView(settingInfoRow("设备 ID", setIdVal, v ->
+                        copyText("设备 ID", fullDeviceId, "已复制完整设备 ID")),
+                new LinearLayout.LayoutParams(MATCH, WRAP));
+        grp2.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
+
+        setPortVal = label("未开启", 13, cOnSurface, false);
+        setPortVal.setTypeface(Typeface.MONOSPACE);
+        grp2.addView(settingInfoRow("本地监听端口", setPortVal, null),
+                new LinearLayout.LayoutParams(MATCH, WRAP));
+        grp2.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
+
+        TextView verVal = label(Mobile.Version, 13, cOnSurfaceVariant, false);
+        verVal.setTypeface(Typeface.MONOSPACE);
+        grp2.addView(settingInfoRow("版本", verVal, null),
+                new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        LinearLayout.LayoutParams g2Lp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        g2Lp.bottomMargin = dp(18);
+        root.addView(grp2, g2Lp);
+
+        // Legacy pair file import fallback
+        TextView importLegacyBtn = label("导入旧版配对文件 (.txt)", 12, cOnSurfaceVariant, false);
+        importLegacyBtn.setGravity(Gravity.CENTER);
+        importLegacyBtn.setPadding(dp(12), dp(10), dp(12), dp(10));
+        importLegacyBtn.setBackground(ripple(roundBox(Color.TRANSPARENT, 0, 12), 12));
+        importLegacyBtn.setOnClickListener(v -> pickPairFile());
+        root.addView(importLegacyBtn, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        sv.addView(root, new FrameLayout.LayoutParams(MATCH, WRAP));
+        return sv;
+    }
+
+    private LinearLayout settingActionRow(String title, String sub, View rightView, View.OnClickListener rowClick) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(16), dp(14), dp(16), dp(14));
+        if (rowClick != null) {
+            row.setBackground(ripple(roundBox(Color.TRANSPARENT, 0, 0), 0));
+            row.setOnClickListener(rowClick);
+        }
+
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.addView(label(title, 13, cOnSurface, true), new LinearLayout.LayoutParams(MATCH, WRAP));
+        TextView subTv = label(sub, 12, cOnSurfaceVariant, false);
+        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        sLp.topMargin = dp(2);
+        col.addView(subTv, sLp);
+        row.addView(col, new LinearLayout.LayoutParams(0, WRAP, 1f));
+
+        LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(WRAP, dp(30));
+        rLp.leftMargin = dp(12);
+        row.addView(rightView, rLp);
+        return row;
+    }
+
+    private LinearLayout settingInfoRow(String key, TextView valView, View.OnClickListener click) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(16), dp(13), dp(16), dp(13));
+        if (click != null) {
+            row.setBackground(ripple(roundBox(Color.TRANSPARENT, 0, 0), 0));
+            row.setOnClickListener(click);
+        }
+        row.addView(label(key, 13, cOnSurfaceVariant, false), new LinearLayout.LayoutParams(0, WRAP, 1f));
+        LinearLayout.LayoutParams vLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        vLp.leftMargin = dp(12);
+        row.addView(valView, vLp);
+        return row;
+    }
+
+    private View hairline() {
+        View v = new View(this);
+        v.setBackgroundColor(cBorder);
+        return v;
+    }
+
+    private void refreshSettingsInfo() {
+        if (setNameVal != null) {
+            setNameVal.setText(deviceName);
+        }
+        if (setIdVal != null && !fullDeviceId.isEmpty()) {
+            String shortId = fullDeviceId.length() > 12 ? fullDeviceId.substring(0, 12) : fullDeviceId;
+            setIdVal.setText(shortId + "（点击复制）");
+        }
+        if (setPortVal != null) {
+            setPortVal.setText(recvRunning && !lanPort.isEmpty() ? lanPort : (recvRunning ? "启动中" : "未开启"));
+        }
+    }
+
+    private void showRenameDialog() {
+        final EditText input = modalInput("输入设备名称");
+        input.setText(deviceName);
+        input.setSelection(deviceName.length());
+
+        FrameLayout wrap = new FrameLayout(this);
+        wrap.setPadding(dp(20), dp(10), dp(20), 0);
+        wrap.addView(input, new FrameLayout.LayoutParams(MATCH, dp(44)));
+
+        new AlertDialog.Builder(this)
+                .setTitle("修改设备名称")
+                .setView(wrap)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("保存", (d, w) -> {
+                    String n = input.getText().toString().trim();
+                    if (n.isEmpty()) {
+                        n = defaultName();
+                    }
+                    deviceName = n;
                     getPreferences(MODE_PRIVATE).edit().putString("deviceName", n).apply();
-                }
+                    refreshSettingsInfo();
+                    toast("设备名称已更新，下次开启接收或配对生效");
+                })
+                .show();
+    }
+
+    // ================= Pairing Dialog (Android 12+ Blur + Camera2 QR + 10-min Timer) =================
+
+    private void openPairSheet(int initialMode) {
+        if (pairDialog != null && pairDialog.isShowing()) {
+            switchPairMode(initialMode);
+            return;
+        }
+        pairMode = initialMode;
+        scanSucceeded.set(false);
+        lastRejectedQR = "";
+
+        Dialog dlg = new Dialog(this, android.R.style.Theme_Translucent_NoTitleBar);
+        dlg.requestWindowFeature(Window.FEATURE_NO_TITLE);
+
+        FrameLayout overlay = new FrameLayout(this);
+        overlay.setBackgroundColor(Color.parseColor("#73000000"));
+        overlay.setPadding(dp(16), dp(28), dp(16), dp(24));
+        overlay.setOnClickListener(v -> closePairSheet());
+
+        ScrollView sheetScroller = new ScrollView(this);
+        sheetScroller.setFillViewport(false);
+        FrameLayout.LayoutParams scLp = new FrameLayout.LayoutParams(MATCH, WRAP, Gravity.CENTER);
+        scLp.width = Math.min(getResources().getDisplayMetrics().widthPixels - dp(32), dp(372));
+
+        LinearLayout sheet = new LinearLayout(this);
+        sheet.setOrientation(LinearLayout.VERTICAL);
+        sheet.setPadding(dp(20), dp(18), dp(20), dp(20));
+        sheet.setBackground(roundBox(cSheetBg, cBorder, 24));
+        sheet.setClickable(true);
+
+        // Close button top-right
+        FrameLayout hdrWrap = new FrameLayout(this);
+        TextView closeX = label("✕", 14, cOnSurfaceVariant, true);
+        closeX.setGravity(Gravity.CENTER);
+        closeX.setBackground(ripple(oval(Color.TRANSPARENT), 99));
+        closeX.setOnClickListener(v -> closePairSheet());
+        hdrWrap.addView(closeX, new FrameLayout.LayoutParams(dp(30), dp(30), Gravity.END | Gravity.CENTER_VERTICAL));
+        sheet.addView(hdrWrap, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        modeScanWrap = buildModeScan();
+        modeShowWrap = buildModeShowQR();
+        modeEnterWrap = buildModeEnterCode();
+
+        sheet.addView(modeScanWrap, new LinearLayout.LayoutParams(MATCH, WRAP));
+        sheet.addView(modeShowWrap, new LinearLayout.LayoutParams(MATCH, WRAP));
+        sheet.addView(modeEnterWrap, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        sheetScroller.addView(sheet, new FrameLayout.LayoutParams(MATCH, WRAP));
+        overlay.addView(sheetScroller, scLp);
+
+        dlg.setContentView(overlay);
+        dlg.setCanceledOnTouchOutside(true);
+        dlg.setOnDismissListener(d -> cleanupPairDialog());
+
+        Window win = dlg.getWindow();
+        if (win != null) {
+            win.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            win.setLayout(MATCH, MATCH);
+            win.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+            WindowManager.LayoutParams lp = win.getAttributes();
+            lp.dimAmount = 0.45f;
+            win.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+            if (Build.VERSION.SDK_INT >= 31) {
+                win.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND);
+                lp.setBlurBehindRadius(36);
+                win.setBackgroundBlurRadius(36);
+            }
+            win.setAttributes(lp);
+        }
+
+        pairDialog = dlg;
+        dlg.show();
+        switchPairMode(initialMode);
+    }
+
+    private View buildModeScan() {
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setGravity(Gravity.CENTER_HORIZONTAL);
+
+        TextView title = label("扫一扫配对", 17, cOnSurface, true);
+        col.addView(title, new LinearLayout.LayoutParams(WRAP, WRAP));
+
+        TextView sub = label("对准电脑或另一台手机轻渡显示的二维码", 12, cOnSurfaceVariant, false);
+        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        sLp.topMargin = dp(4);
+        sLp.bottomMargin = dp(16);
+        col.addView(sub, sLp);
+
+        // 224dp rounded square viewfinder
+        FrameLayout vf = new FrameLayout(this);
+        vf.setBackgroundColor(Color.parseColor("#020617"));
+        vf.setOutlineProvider(new ViewOutlineProvider() {
+            @Override
+            public void getOutline(View view, Outline outline) {
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(16));
             }
         });
-        LinearLayout.LayoutParams nfLp = new LinearLayout.LayoutParams(MATCH, dp(48));
-        nfLp.topMargin = dp(6);
-        idCard.addView(nameField, nfLp);
+        vf.setClipToOutline(true);
 
-        LinearLayout.LayoutParams flLp = new LinearLayout.LayoutParams(WRAP, WRAP);
-        flLp.topMargin = dp(12);
-        idCard.addView(label("设备 ID（点击复制）", 12, cOnSurfaceVariant, false), flLp);
+        scanTextureView = new TextureView(this);
+        scanTextureView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
+            @Override
+            public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
+                if (pairDialog != null && pairDialog.isShowing() && pairMode == 0) {
+                    startCameraIfReady();
+                }
+            }
 
-        pairFullIdView = label("加载中…", 11, cOnSurface, false);
-        pairFullIdView.setTypeface(Typeface.MONOSPACE);
-        pairFullIdView.setPadding(dp(12), dp(10), dp(12), dp(10));
-        pairFullIdView.setBackground(ripple(roundBox(cSurfaceContainerHigh, 0, 12), 12));
-        pairFullIdView.setOnClickListener(v -> copyText("设备 ID", fullDeviceId, "已复制完整设备 ID"));
-        LinearLayout.LayoutParams fidLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        fidLp.topMargin = dp(6);
-        idCard.addView(pairFullIdView, fidLp);
+            @Override
+            public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
+                configureCameraTransform(width, height);
+            }
 
-        Button copyUriBtn = pillFilledBtn("复制本机配对 URI", cSecondaryContainer, cOnSecondaryContainer);
-        copyUriBtn.setOnClickListener(v -> showAndCopyPairUri());
-        LinearLayout.LayoutParams cuLp = new LinearLayout.LayoutParams(MATCH, dp(44));
-        cuLp.topMargin = dp(12);
-        idCard.addView(copyUriBtn, cuLp);
+            @Override
+            public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
+                stopCamera();
+                return true;
+            }
 
-        // 6-digit PAKE card
-        LinearLayout pakeCard = md3Card(cSurfaceContainerLow, 20, 16, 16, 16, 16);
-        LinearLayout.LayoutParams pcLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        pcLp.topMargin = dp(14);
-        root.addView(pakeCard, pcLp);
+            @Override
+            public void onSurfaceTextureUpdated(SurfaceTexture surface) {
+            }
+        });
+        vf.addView(scanTextureView, new FrameLayout.LayoutParams(MATCH, MATCH));
 
-        pakeCard.addView(label("6 位一次性配对码", 15, cOnSurface, true),
-                new LinearLayout.LayoutParams(WRAP, WRAP));
-        pakeCodeField = md3Input("输入 6 位数字配对码");
-        pakeCodeField.setInputType(InputType.TYPE_CLASS_NUMBER);
-        LinearLayout.LayoutParams pcfLp = new LinearLayout.LayoutParams(MATCH, dp(48));
-        pcfLp.topMargin = dp(10);
-        pakeCard.addView(pakeCodeField, pcfLp);
+        CornerBracketsView brackets = new CornerBracketsView();
+        vf.addView(brackets, new FrameLayout.LayoutParams(dp(146), dp(146), Gravity.CENTER));
 
-        pakePeerField = md3Input("对方设备 ID（点“等待配对”时留空）");
-        LinearLayout.LayoutParams ppfLp = new LinearLayout.LayoutParams(MATCH, dp(48));
-        ppfLp.topMargin = dp(8);
-        pakeCard.addView(pakePeerField, ppfLp);
+        scanStatusLabel = label("相机取景中", 12, Color.parseColor("#E5E7EB"), false);
+        scanStatusLabel.setGravity(Gravity.CENTER);
+        scanStatusLabel.setPadding(dp(10), dp(4), dp(10), dp(4));
+        scanStatusLabel.setBackground(roundBox(Color.parseColor("#88020617"), 0, 99));
+        FrameLayout.LayoutParams stLp = new FrameLayout.LayoutParams(WRAP, WRAP, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        stLp.bottomMargin = dp(12);
+        vf.addView(scanStatusLabel, stLp);
 
-        LinearLayout pakeBtns = new LinearLayout(this);
-        pakeBtns.setOrientation(LinearLayout.HORIZONTAL);
-        Button waitBtn = pillOutlineBtn("等待配对");
-        waitBtn.setOnClickListener(v -> startPake(true));
-        Button doBtn = pillFilledBtn("开始配对", cPrimary, cOnPrimary);
-        doBtn.setOnClickListener(v -> startPake(false));
-        pakeBtns.addView(waitBtn, new LinearLayout.LayoutParams(0, dp(44), 1f));
-        LinearLayout.LayoutParams dbLp = new LinearLayout.LayoutParams(0, dp(44), 1f);
-        dbLp.leftMargin = dp(10);
-        pakeBtns.addView(doBtn, dbLp);
-        LinearLayout.LayoutParams pbLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        pbLp.topMargin = dp(12);
-        pakeCard.addView(pakeBtns, pbLp);
+        // Permission prompt overlay if camera not granted
+        scanPermOverlay = new LinearLayout(this);
+        scanPermOverlay.setOrientation(LinearLayout.VERTICAL);
+        scanPermOverlay.setGravity(Gravity.CENTER);
+        scanPermOverlay.setPadding(dp(16), dp(16), dp(16), dp(16));
+        scanPermOverlay.setBackgroundColor(Color.parseColor("#E60F172A"));
+        scanPermOverlay.setVisibility(View.GONE);
 
-        pakeInfoView = label("配对完成后，对方设备会自动出现在「发送」页。", 12, cOnSurfaceVariant, false);
-        LinearLayout.LayoutParams piLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        piLp.topMargin = dp(8);
-        pakeCard.addView(pakeInfoView, piLp);
+        TextView permTxt = label("需要相机权限以扫描二维码", 12, Color.WHITE, false);
+        permTxt.setGravity(Gravity.CENTER);
+        scanPermOverlay.addView(permTxt, new LinearLayout.LayoutParams(WRAP, WRAP));
 
-        // URI / file import card
-        LinearLayout impCard = md3Card(cSurfaceContainerLow, 20, 16, 16, 16, 16);
-        LinearLayout.LayoutParams icLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        icLp.topMargin = dp(14);
-        root.addView(impCard, icLp);
+        Button permBtn = smallFilledBtn("授权相机", cPrimaryPressed, cOnPrimary, v -> requestCameraPerm());
+        LinearLayout.LayoutParams pbLp = new LinearLayout.LayoutParams(WRAP, dp(34));
+        pbLp.topMargin = dp(10);
+        scanPermOverlay.addView(permBtn, pbLp);
+        vf.addView(scanPermOverlay, new FrameLayout.LayoutParams(MATCH, MATCH));
 
-        impCard.addView(label("通过 URI 或文件导入", 15, cOnSurface, true),
-                new LinearLayout.LayoutParams(WRAP, WRAP));
-        pairUriField = md3Input("粘贴 ftpair://… 凭证");
-        LinearLayout.LayoutParams puLp = new LinearLayout.LayoutParams(MATCH, dp(48));
-        puLp.topMargin = dp(10);
-        impCard.addView(pairUriField, puLp);
+        LinearLayout.LayoutParams vfLp = new LinearLayout.LayoutParams(dp(224), dp(224));
+        vfLp.bottomMargin = dp(18);
+        col.addView(vf, vfLp);
 
-        LinearLayout impBtns = new LinearLayout(this);
-        impBtns.setOrientation(LinearLayout.HORIZONTAL);
-        Button impUriBtn = pillOutlineBtn("导入 URI");
-        impUriBtn.setOnClickListener(v -> importPairUri());
-        Button impFileBtn = pillOutlineBtn("选择配对文件");
-        impFileBtn.setOnClickListener(v -> pickPairFile());
-        impBtns.addView(impUriBtn, new LinearLayout.LayoutParams(0, dp(44), 1f));
-        LinearLayout.LayoutParams ifLp = new LinearLayout.LayoutParams(0, dp(44), 1f);
-        ifLp.leftMargin = dp(10);
-        impBtns.addView(impFileBtn, ifLp);
-        LinearLayout.LayoutParams ibLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        ibLp.topMargin = dp(10);
-        impCard.addView(impBtns, ibLp);
+        LinearLayout links = new LinearLayout(this);
+        links.setOrientation(LinearLayout.HORIZONTAL);
+        links.setPadding(0, dp(12), 0, 0);
+
+        TextView toShow = label("显示我的二维码", 12, cPrimary, true);
+        toShow.setOnClickListener(v -> switchPairMode(1));
+        links.addView(toShow, new LinearLayout.LayoutParams(0, WRAP, 1f));
+
+        TextView toEnter = label("输入 6 位配对码", 12, cPrimary, true);
+        toEnter.setGravity(Gravity.END);
+        toEnter.setOnClickListener(v -> switchPairMode(2));
+        links.addView(toEnter, new LinearLayout.LayoutParams(0, WRAP, 1f));
+
+        col.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
+        col.addView(links, new LinearLayout.LayoutParams(MATCH, WRAP));
+        return col;
     }
 
-    // ================= Receive Control (Unified) =================
+    private View buildModeShowQR() {
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setGravity(Gravity.CENTER_HORIZONTAL);
+        col.setVisibility(View.GONE);
+
+        TextView title = label("我的配对二维码", 17, cOnSurface, true);
+        col.addView(title, new LinearLayout.LayoutParams(WRAP, WRAP));
+
+        TextView sub = label("供另一台手机或电脑配对使用", 12, cOnSurfaceVariant, false);
+        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        sLp.topMargin = dp(4);
+        sLp.bottomMargin = dp(14);
+        col.addView(sub, sLp);
+
+        // White QR container so camera scan contrasts reliably in dark theme too
+        FrameLayout qrBox = new FrameLayout(this);
+        qrBox.setPadding(dp(12), dp(12), dp(12), dp(12));
+        qrBox.setBackground(roundBox(Color.WHITE, Color.parseColor("#E5E7EB"), 16));
+
+        showQrImage = new ImageView(this);
+        showQrImage.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        qrBox.addView(showQrImage, new FrameLayout.LayoutParams(MATCH, MATCH));
+
+        showExpiredMask = new LinearLayout(this);
+        showExpiredMask.setOrientation(LinearLayout.VERTICAL);
+        showExpiredMask.setGravity(Gravity.CENTER);
+        showExpiredMask.setPadding(dp(12), dp(12), dp(12), dp(12));
+        showExpiredMask.setBackground(roundBox(Color.parseColor("#F5FFFFFF"), 0, 14));
+        showExpiredMask.setVisibility(View.GONE);
+
+        TextView expTxt = label("已过期（超过 10 分钟）", 12, Color.parseColor("#DC2626"), true);
+        expTxt.setGravity(Gravity.CENTER);
+        showExpiredMask.addView(expTxt, new LinearLayout.LayoutParams(WRAP, WRAP));
+
+        Button regenBtn = smallFilledBtn("重新生成", cPrimaryPressed, cOnPrimary, v -> refreshMyPairCode());
+        LinearLayout.LayoutParams rgLp = new LinearLayout.LayoutParams(WRAP, dp(32));
+        rgLp.topMargin = dp(10);
+        showExpiredMask.addView(regenBtn, rgLp);
+        qrBox.addView(showExpiredMask, new FrameLayout.LayoutParams(MATCH, MATCH));
+
+        LinearLayout.LayoutParams qbLp = new LinearLayout.LayoutParams(dp(184), dp(184));
+        qbLp.bottomMargin = dp(14);
+        col.addView(qrBox, qbLp);
+
+        // 6-digit code + copy
+        LinearLayout codeRow = new LinearLayout(this);
+        codeRow.setOrientation(LinearLayout.HORIZONTAL);
+        codeRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        showCodeText = label("--- ---", 22, cOnSurface, true);
+        showCodeText.setTypeface(Typeface.MONOSPACE);
+        if (Build.VERSION.SDK_INT >= 21) {
+            showCodeText.setLetterSpacing(0.14f);
+        }
+        codeRow.addView(showCodeText, new LinearLayout.LayoutParams(WRAP, WRAP));
+
+        Button copyCodeBtn = smallOutlineBtn("复制", v -> {
+            String raw = showCodeText.getText().toString().replace(" ", "");
+            if (raw.length() == 6) {
+                copyText("配对码", raw, "已复制 6 位配对码");
+            }
+        });
+        LinearLayout.LayoutParams ccLp = new LinearLayout.LayoutParams(WRAP, dp(28));
+        ccLp.leftMargin = dp(10);
+        codeRow.addView(copyCodeBtn, ccLp);
+
+        LinearLayout.LayoutParams crLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        crLp.bottomMargin = dp(6);
+        col.addView(codeRow, crLp);
+
+        // 10-min countdown + refresh
+        LinearLayout ttlRow = new LinearLayout(this);
+        ttlRow.setOrientation(LinearLayout.HORIZONTAL);
+        ttlRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        showTtlText = label("10 分钟内有效 · 剩余 10:00", 12, cOnSurfaceVariant, false);
+        ttlRow.addView(showTtlText, new LinearLayout.LayoutParams(WRAP, WRAP));
+
+        TextView midDot = label(" · ", 12, cOnSurfaceVariant, false);
+        ttlRow.addView(midDot, new LinearLayout.LayoutParams(WRAP, WRAP));
+
+        TextView refBtn = label("刷新", 12, cPrimary, true);
+        refBtn.setPadding(dp(4), dp(2), dp(4), dp(2));
+        refBtn.setOnClickListener(v -> refreshMyPairCode());
+        ttlRow.addView(refBtn, new LinearLayout.LayoutParams(WRAP, WRAP));
+
+        LinearLayout.LayoutParams trLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        trLp.bottomMargin = dp(14);
+        col.addView(ttlRow, trLp);
+
+        col.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
+
+        LinearLayout links = new LinearLayout(this);
+        links.setOrientation(LinearLayout.HORIZONTAL);
+        links.setPadding(0, dp(12), 0, 0);
+
+        TextView toScan = label("返回扫一扫", 12, cPrimary, true);
+        toScan.setOnClickListener(v -> switchPairMode(0));
+        links.addView(toScan, new LinearLayout.LayoutParams(0, WRAP, 1f));
+
+        TextView toEnter = label("输入 6 位配对码", 12, cPrimary, true);
+        toEnter.setGravity(Gravity.END);
+        toEnter.setOnClickListener(v -> switchPairMode(2));
+        links.addView(toEnter, new LinearLayout.LayoutParams(0, WRAP, 1f));
+        col.addView(links, new LinearLayout.LayoutParams(MATCH, WRAP));
+        return col;
+    }
+
+    private View buildModeEnterCode() {
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setVisibility(View.GONE);
+
+        TextView title = label("输入配对码", 17, cOnSurface, true);
+        title.setGravity(Gravity.CENTER);
+        col.addView(title, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        TextView sub = label("输入电脑上显示的 6 位配对码（10 分钟内有效）", 12, cOnSurfaceVariant, false);
+        sub.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        sLp.topMargin = dp(4);
+        sLp.bottomMargin = dp(14);
+        col.addView(sub, sLp);
+
+        TextView lblCode = label("6 位配对码", 12, cOnSurfaceVariant, false);
+        col.addView(lblCode, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        enterCodeField = modalInput("482917");
+        enterCodeField.setInputType(InputType.TYPE_CLASS_NUMBER);
+        enterCodeField.setFilters(new InputFilter[]{new InputFilter.LengthFilter(6)});
+        enterCodeField.setTypeface(Typeface.MONOSPACE);
+        if (Build.VERSION.SDK_INT >= 21) {
+            enterCodeField.setLetterSpacing(0.15f);
+        }
+        LinearLayout.LayoutParams cfLp = new LinearLayout.LayoutParams(MATCH, dp(44));
+        cfLp.topMargin = dp(4);
+        cfLp.bottomMargin = dp(10);
+        col.addView(enterCodeField, cfLp);
+
+        TextView lblPeer = label("对方设备 ID（在电脑设置 → 本机信息中查看）", 12, cOnSurfaceVariant, false);
+        col.addView(lblPeer, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        enterPeerField = modalInput("粘贴 64 位设备 ID 或 ferry:// 链接");
+        enterPeerField.setTypeface(Typeface.MONOSPACE);
+        enterPeerField.setTextSize(12);
+        LinearLayout.LayoutParams pfLp = new LinearLayout.LayoutParams(MATCH, dp(42));
+        pfLp.topMargin = dp(4);
+        pfLp.bottomMargin = dp(8);
+        col.addView(enterPeerField, pfLp);
+
+        enterStatusView = label("", 12, cError, false);
+        enterStatusView.setVisibility(View.GONE);
+        LinearLayout.LayoutParams esLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        esLp.bottomMargin = dp(8);
+        col.addView(enterStatusView, esLp);
+
+        enterSubmitBtn = filledBtn("配对", cPrimaryPressed, cOnPrimary);
+        enterSubmitBtn.setOnClickListener(v -> submitManualPair());
+        LinearLayout.LayoutParams sbLp = new LinearLayout.LayoutParams(MATCH, dp(42));
+        sbLp.bottomMargin = dp(14);
+        col.addView(enterSubmitBtn, sbLp);
+
+        col.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
+
+        LinearLayout links = new LinearLayout(this);
+        links.setOrientation(LinearLayout.HORIZONTAL);
+        links.setPadding(0, dp(12), 0, 0);
+
+        TextView toScan = label("返回扫一扫", 12, cPrimary, true);
+        toScan.setOnClickListener(v -> switchPairMode(0));
+        links.addView(toScan, new LinearLayout.LayoutParams(0, WRAP, 1f));
+
+        TextView toShow = label("显示我的二维码", 12, cPrimary, true);
+        toShow.setGravity(Gravity.END);
+        toShow.setOnClickListener(v -> switchPairMode(1));
+        links.addView(toShow, new LinearLayout.LayoutParams(0, WRAP, 1f));
+        col.addView(links, new LinearLayout.LayoutParams(MATCH, WRAP));
+        return col;
+    }
+
+    private void switchPairMode(int mode) {
+        pairMode = mode;
+        modeScanWrap.setVisibility(mode == 0 ? View.VISIBLE : View.GONE);
+        modeShowWrap.setVisibility(mode == 1 ? View.VISIBLE : View.GONE);
+        modeEnterWrap.setVisibility(mode == 2 ? View.VISIBLE : View.GONE);
+
+        if (mode == 0) {
+            scanSucceeded.set(false);
+            if (scanStatusLabel != null) {
+                scanStatusLabel.setText("相机取景中");
+            }
+            if (hasCameraPerm()) {
+                scanPermOverlay.setVisibility(View.GONE);
+                startCameraIfReady();
+            } else {
+                scanPermOverlay.setVisibility(View.VISIBLE);
+                requestCameraPerm();
+            }
+        } else {
+            stopCamera();
+        }
+
+        if (mode == 1) {
+            refreshMyPairCode();
+        } else {
+            cancelCountdown();
+            pairShowSeq++;
+        }
+    }
+
+    private void closePairSheet() {
+        Dialog dlg = pairDialog;
+        pairDialog = null;
+        if (dlg != null && dlg.isShowing()) {
+            dlg.dismiss();
+        } else {
+            cleanupPairDialog();
+        }
+    }
+
+    private void cleanupPairDialog() {
+        pairDialog = null;
+        stopCamera();
+        cancelCountdown();
+        pairShowSeq++;
+    }
+
+    private void cancelCountdown() {
+        if (pairCountdown != null) {
+            pairCountdown.cancel();
+            pairCountdown = null;
+        }
+    }
+
+    private void refreshMyPairCode() {
+        cancelCountdown();
+        final int seq = ++pairShowSeq;
+        showExpiredMask.setVisibility(View.GONE);
+        showTtlText.setText("10 分钟内有效 · 剩余 10:00");
+        showTtlText.setTextColor(cOnSurfaceVariant);
+
+        final String code = Mobile.generatePairCode();
+        showCodeText.setText(code.length() == 6
+                ? code.substring(0, 3) + " " + code.substring(3)
+                : code);
+
+        ioPool.execute(() -> {
+            try {
+                String uri = Mobile.buildMyPairURI(keyFile().getAbsolutePath(), code, deviceName, PAIR_TTL_SEC);
+                byte[] png = Mobile.generateQRPNG(uri, 512);
+                final Bitmap bmp = BitmapFactory.decodeByteArray(png, 0, png.length);
+                ui.post(() -> {
+                    if (seq != pairShowSeq || pairDialog == null || !pairDialog.isShowing()) {
+                        return;
+                    }
+                    if (bmp != null) {
+                        showQrImage.setImageBitmap(bmp);
+                    }
+                    startShowCountdown(seq);
+                });
+            } catch (Exception e) {
+                Log.w(TAG, "buildMyPairURI/QR", e);
+                ui.post(() -> toast("生成二维码失败：" + e.getMessage()));
+            }
+        });
+
+        new Thread(() -> {
+            try {
+                Mobile.waitPairCode(SIGNAL_URL, keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(),
+                        code, PAIR_TTL_SEC * 1000L);
+                ui.post(() -> {
+                    if (seq != pairShowSeq || pairDialog == null || !pairDialog.isShowing()) {
+                        return;
+                    }
+                    toast("配对成功");
+                    loadPairedPeers();
+                    closePairSheet();
+                });
+            } catch (Exception e) {
+                Log.w(TAG, "waitPairCode", e);
+                ui.post(() -> {
+                    if (seq != pairShowSeq || pairDialog == null || !pairDialog.isShowing()) {
+                        return;
+                    }
+                    String msg = e.getMessage();
+                    if (msg != null && !msg.trim().isEmpty()) {
+                        showTtlText.setText(msg);
+                        showTtlText.setTextColor(cError);
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void startShowCountdown(final int seq) {
+        cancelCountdown();
+        pairCountdown = new CountDownTimer(PAIR_TTL_SEC * 1000L, 1000L) {
+            @Override
+            public void onTick(long msLeft) {
+                if (seq != pairShowSeq || pairDialog == null || !pairDialog.isShowing()) {
+                    cancel();
+                    return;
+                }
+                long sec = Math.max(0, msLeft / 1000L);
+                showTtlText.setText(String.format(Locale.US, "10 分钟内有效 · 剩余 %02d:%02d", sec / 60, sec % 60));
+            }
+
+            @Override
+            public void onFinish() {
+                if (seq != pairShowSeq || pairDialog == null || !pairDialog.isShowing()) {
+                    return;
+                }
+                showTtlText.setText("已过期（超过 10 分钟）");
+                showTtlText.setTextColor(cError);
+                showExpiredMask.setVisibility(View.VISIBLE);
+            }
+        }.start();
+    }
+
+    private void submitManualPair() {
+        String code = enterCodeField.getText().toString().trim();
+        String peer = enterPeerField.getText().toString().trim();
+        if (peer.startsWith("ferry://")) {
+            enterSubmitBtn.setEnabled(false);
+            enterStatusView.setVisibility(View.VISIBLE);
+            enterStatusView.setTextColor(cOnSurfaceVariant);
+            enterStatusView.setText("正在验证二维码链接并配对…");
+            new Thread(() -> {
+                try {
+                    Mobile.pairWithURI(SIGNAL_URL, keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(), peer);
+                    ui.post(() -> {
+                        if (pairDialog != null && pairDialog.isShowing()) {
+                            toast("配对成功");
+                            loadPairedPeers();
+                            closePairSheet();
+                        }
+                    });
+                } catch (Exception e) {
+                    ui.post(() -> {
+                        enterSubmitBtn.setEnabled(true);
+                        enterStatusView.setTextColor(cError);
+                        enterStatusView.setText("配对失败：" + e.getMessage());
+                    });
+                }
+            }).start();
+            return;
+        }
+        if (code.length() != 6) {
+            enterStatusView.setVisibility(View.VISIBLE);
+            enterStatusView.setTextColor(cError);
+            enterStatusView.setText("请输入 6 位数字配对码");
+            return;
+        }
+        if (peer.isEmpty()) {
+            enterStatusView.setVisibility(View.VISIBLE);
+            enterStatusView.setTextColor(cError);
+            enterStatusView.setText("请粘贴对方设备 ID（在电脑设置 → 本机信息查看），或直接使用扫一扫");
+            return;
+        }
+        enterSubmitBtn.setEnabled(false);
+        enterStatusView.setVisibility(View.VISIBLE);
+        enterStatusView.setTextColor(cOnSurfaceVariant);
+        enterStatusView.setText("正在协商信任密钥…");
+        new Thread(() -> {
+            try {
+                Mobile.pairWithCode(SIGNAL_URL, keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(), code, peer);
+                ui.post(() -> {
+                    if (pairDialog != null && pairDialog.isShowing()) {
+                        toast("配对成功");
+                        loadPairedPeers();
+                        closePairSheet();
+                    }
+                });
+            } catch (Exception e) {
+                ui.post(() -> {
+                    enterSubmitBtn.setEnabled(true);
+                    enterStatusView.setTextColor(cError);
+                    enterStatusView.setText("配对失败：" + e.getMessage());
+                });
+            }
+        }).start();
+    }
+
+    // ================= Camera2 QR Scanner =================
+
+    private boolean hasCameraPerm() {
+        if (Build.VERSION.SDK_INT < 23) {
+            return true;
+        }
+        return checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void requestCameraPerm() {
+        if (Build.VERSION.SDK_INT >= 23 && !hasCameraPerm()) {
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, REQ_CAMERA);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQ_CAMERA) {
+            boolean granted = grantResults != null && grantResults.length > 0
+                    && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            if (pairDialog != null && pairDialog.isShowing() && pairMode == 0) {
+                if (granted) {
+                    if (scanPermOverlay != null) {
+                        scanPermOverlay.setVisibility(View.GONE);
+                    }
+                    startCameraIfReady();
+                } else if (scanStatusLabel != null) {
+                    scanStatusLabel.setText("未授予定位/相机权限，请点授权相机");
+                }
+            }
+        }
+    }
+
+    private void startCameraIfReady() {
+        if (!hasCameraPerm() || scanTextureView == null || !scanTextureView.isAvailable()) {
+            return;
+        }
+        if (cameraWanted || cameraDevice != null) {
+            return;
+        }
+        cameraWanted = true;
+        if (scanStatusLabel != null) {
+            scanStatusLabel.setText("相机取景中");
+        }
+        camThread = new HandlerThread("qr-cam");
+        camThread.start();
+        camHandler = new Handler(camThread.getLooper());
+
+        try {
+            CameraManager cm = (CameraManager) getSystemService(CAMERA_SERVICE);
+            if (cm == null) {
+                stopCamera();
+                return;
+            }
+            String camId = chooseBackCamera(cm);
+            if (camId == null) {
+                if (scanStatusLabel != null) {
+                    scanStatusLabel.setText("未检测到可用相机");
+                }
+                stopCamera();
+                return;
+            }
+            CameraCharacteristics cc = cm.getCameraCharacteristics(camId);
+            StreamConfigurationMap map = cc.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+            previewSize = chooseScanSize(map);
+            configureCameraTransform(scanTextureView.getWidth(), scanTextureView.getHeight());
+
+            imageReader = ImageReader.newInstance(previewSize.getWidth(), previewSize.getHeight(),
+                    ImageFormat.YUV_420_888, 2);
+            imageReader.setOnImageAvailableListener(this::onCameraFrameAvailable, camHandler);
+
+            cm.openCamera(camId, new CameraDevice.StateCallback() {
+                @Override
+                public void onOpened(CameraDevice cam) {
+                    if (!cameraWanted || pairDialog == null || !pairDialog.isShowing() || pairMode != 0) {
+                        cam.close();
+                        return;
+                    }
+                    cameraDevice = cam;
+                    createScanSession(cam);
+                }
+
+                @Override
+                public void onDisconnected(CameraDevice cam) {
+                    cam.close();
+                    if (cameraDevice == cam) {
+                        cameraDevice = null;
+                    }
+                }
+
+                @Override
+                public void onError(CameraDevice cam, int error) {
+                    cam.close();
+                    if (cameraDevice == cam) {
+                        cameraDevice = null;
+                    }
+                    ui.post(() -> {
+                        if (scanStatusLabel != null) {
+                            scanStatusLabel.setText("相机打开失败 (" + error + ")");
+                        }
+                    });
+                }
+            }, camHandler);
+        } catch (SecurityException se) {
+            Log.w(TAG, "camera perm", se);
+            stopCamera();
+        } catch (Exception e) {
+            Log.e(TAG, "startCamera", e);
+            stopCamera();
+            if (scanStatusLabel != null) {
+                scanStatusLabel.setText("相机启动失败");
+            }
+        }
+    }
+
+    private void createScanSession(final CameraDevice cam) {
+        try {
+            SurfaceTexture st = scanTextureView.getSurfaceTexture();
+            if (st == null || imageReader == null) {
+                stopCamera();
+                return;
+            }
+            st.setDefaultBufferSize(previewSize.getWidth(), previewSize.getHeight());
+            final Surface previewSurface = new Surface(st);
+            final Surface readerSurface = imageReader.getSurface();
+            final CaptureRequest.Builder req = cam.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+            req.addTarget(previewSurface);
+            req.addTarget(readerSurface);
+            req.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+
+            cam.createCaptureSession(Arrays.asList(previewSurface, readerSurface),
+                    new CameraCaptureSession.StateCallback() {
+                        @Override
+                        public void onConfigured(CameraCaptureSession session) {
+                            if (!cameraWanted || cameraDevice != cam || pairDialog == null || !pairDialog.isShowing()) {
+                                try {
+                                    session.close();
+                                } catch (Exception ignored) {
+                                }
+                                return;
+                            }
+                            captureSession = session;
+                            try {
+                                session.setRepeatingRequest(req.build(), null, camHandler);
+                            } catch (Exception e) {
+                                Log.w(TAG, "repeatingRequest", e);
+                            }
+                        }
+
+                        @Override
+                        public void onConfigureFailed(CameraCaptureSession session) {
+                            ui.post(() -> {
+                                if (scanStatusLabel != null) {
+                                    scanStatusLabel.setText("相机预览配置失败");
+                                }
+                            });
+                        }
+                    }, camHandler);
+        } catch (Exception e) {
+            Log.e(TAG, "createScanSession", e);
+            stopCamera();
+        }
+    }
+
+    private void onCameraFrameAvailable(ImageReader reader) {
+        Image img = reader.acquireLatestImage();
+        if (img == null) {
+            return;
+        }
+        byte[] gray = null;
+        int w = 0;
+        int h = 0;
+        boolean acquired = false;
+        try {
+            if (!cameraWanted || scanSucceeded.get()) {
+                return;
+            }
+            long now = SystemClock.uptimeMillis();
+            if (now - lastScanTickMs < 350 || !decodingFrame.compareAndSet(false, true)) {
+                return;
+            }
+            acquired = true;
+            lastScanTickMs = now;
+            w = img.getWidth();
+            h = img.getHeight();
+            Image.Plane yPlane = img.getPlanes()[0];
+            int rowStride = yPlane.getRowStride();
+            int pixelStride = yPlane.getPixelStride();
+            ByteBuffer buf = yPlane.getBuffer();
+            gray = new byte[w * h];
+            if (pixelStride == 1 && rowStride == w) {
+                buf.get(gray, 0, w * h);
+            } else {
+                byte[] row = new byte[rowStride];
+                for (int r = 0; r < h; r++) {
+                    buf.position(r * rowStride);
+                    int rem = Math.min(rowStride, buf.remaining());
+                    buf.get(row, 0, rem);
+                    if (pixelStride == 1) {
+                        System.arraycopy(row, 0, gray, r * w, Math.min(w, rem));
+                    } else {
+                        for (int c = 0; c < w; c++) {
+                            int idx = c * pixelStride;
+                            gray[r * w + c] = idx < rem ? row[idx] : 0;
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "cam frame", e);
+            if (acquired) {
+                decodingFrame.set(false);
+            }
+            gray = null;
+        } finally {
+            img.close();
+        }
+        if (gray == null) {
+            return;
+        }
+        final byte[] frameGray = gray;
+        final int fw = w;
+        final int fh = h;
+        ioPool.execute(() -> {
+            try {
+                String text = Mobile.decodeQRGray(frameGray, fw, fh);
+                if (text != null) {
+                    final String payload = text.trim();
+                    if (!payload.isEmpty() && (payload.startsWith("ferry://") || payload.startsWith("ftpair://"))) {
+                        long now = SystemClock.uptimeMillis();
+                        if (payload.equals(lastRejectedQR) && now - lastRejectMs < 3000) {
+                            return;
+                        }
+                        if (scanSucceeded.compareAndSet(false, true)) {
+                            ui.post(() -> handleScannedQR(payload));
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "decodeQRGray", e);
+            } finally {
+                decodingFrame.set(false);
+            }
+        });
+    }
+
+    private void handleScannedQR(final String payload) {
+        stopCamera();
+        if (scanStatusLabel != null) {
+            scanStatusLabel.setText("已识别二维码，正在配对…");
+        }
+        new Thread(() -> {
+            try {
+                if (payload.startsWith("ftpair://")) {
+                    Mobile.pairImport(payload, pairedFile().getAbsolutePath());
+                } else {
+                    Mobile.pairWithURI(SIGNAL_URL, keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(), payload);
+                }
+                ui.post(() -> {
+                    if (pairDialog != null && pairDialog.isShowing()) {
+                        toast("配对成功");
+                        loadPairedPeers();
+                        closePairSheet();
+                    }
+                });
+            } catch (Exception e) {
+                ui.post(() -> {
+                    lastRejectedQR = payload;
+                    lastRejectMs = SystemClock.uptimeMillis();
+                    scanSucceeded.set(false);
+                    String errMsg = e.getMessage() == null ? "配对失败" : e.getMessage();
+                    if (scanStatusLabel != null) {
+                        scanStatusLabel.setText(errMsg);
+                    }
+                    toast(errMsg);
+                    if (pairDialog != null && pairDialog.isShowing() && pairMode == 0) {
+                        startCameraIfReady();
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void stopCamera() {
+        cameraWanted = false;
+        if (captureSession != null) {
+            try {
+                captureSession.close();
+            } catch (Exception ignored) {
+            }
+            captureSession = null;
+        }
+        if (cameraDevice != null) {
+            try {
+                cameraDevice.close();
+            } catch (Exception ignored) {
+            }
+            cameraDevice = null;
+        }
+        if (imageReader != null) {
+            try {
+                imageReader.close();
+            } catch (Exception ignored) {
+            }
+            imageReader = null;
+        }
+        if (camThread != null) {
+            camThread.quitSafely();
+            camThread = null;
+            camHandler = null;
+        }
+    }
+
+    private static String chooseBackCamera(CameraManager cm) throws Exception {
+        String[] ids = cm.getCameraIdList();
+        for (String id : ids) {
+            CameraCharacteristics cc = cm.getCameraCharacteristics(id);
+            Integer facing = cc.get(CameraCharacteristics.LENS_FACING);
+            if (facing != null && facing == CameraCharacteristics.LENS_FACING_BACK) {
+                return id;
+            }
+        }
+        return ids.length > 0 ? ids[0] : null;
+    }
+
+    private static Size chooseScanSize(StreamConfigurationMap map) {
+        if (map == null) {
+            return new Size(960, 720);
+        }
+        Size[] sizes = map.getOutputSizes(ImageFormat.YUV_420_888);
+        if (sizes == null || sizes.length == 0) {
+            return new Size(960, 720);
+        }
+        Size best = sizes[0];
+        int bestDiff = Integer.MAX_VALUE;
+        int targetArea = 960 * 720;
+        for (Size s : sizes) {
+            if (s.getWidth() > 1440 || s.getHeight() > 1080) {
+                continue;
+            }
+            int diff = Math.abs(s.getWidth() * s.getHeight() - targetArea);
+            if (diff < bestDiff) {
+                bestDiff = diff;
+                best = s;
+            }
+        }
+        return best;
+    }
+
+    private void configureCameraTransform(int viewW, int viewH) {
+        if (scanTextureView == null || viewW <= 0 || viewH <= 0) {
+            return;
+        }
+        int rotation = getWindowManager().getDefaultDisplay().getRotation();
+        float bw = previewSize.getHeight();
+        float bh = previewSize.getWidth();
+        if (rotation == Surface.ROTATION_90 || rotation == Surface.ROTATION_270) {
+            bw = previewSize.getWidth();
+            bh = previewSize.getHeight();
+        }
+        float scale = Math.max(viewW / bw, viewH / bh);
+        float sx = (bw * scale) / viewW;
+        float sy = (bh * scale) / viewH;
+        Matrix m = new Matrix();
+        float cx = viewW / 2f;
+        float cy = viewH / 2f;
+        m.setScale(sx, sy, cx, cy);
+        if (rotation == Surface.ROTATION_90) {
+            m.postRotate(270f, cx, cy);
+        } else if (rotation == Surface.ROTATION_270) {
+            m.postRotate(90f, cx, cy);
+        } else if (rotation == Surface.ROTATION_180) {
+            m.postRotate(180f, cx, cy);
+        }
+        scanTextureView.setTransform(m);
+    }
+
+    // ================= Receive & Web Share Controls =================
 
     private void toggleReceive() {
         if (recvRunning) {
+            getPreferences(MODE_PRIVATE).edit().putBoolean("recvAuto", false).apply();
             stopAllReceive();
         } else {
+            getPreferences(MODE_PRIVATE).edit().putBoolean("recvAuto", true).apply();
             startAllReceive();
         }
     }
 
     private void startAllReceive() {
-        recvToggleBtn.setEnabled(false);
-        final String name = currentName();
+        if (setRecvBtn != null) {
+            setRecvBtn.setEnabled(false);
+        }
+        final String name = deviceName;
         new Thread(() -> {
             String lanAddr = "";
             String autoErr = "";
             try {
-                File inbox = inboxDir();
-                lanAddr = Mobile.startReceiver(name, inbox.getAbsolutePath(), lanHint());
+                lanAddr = Mobile.startReceiver(name, inboxDir().getAbsolutePath(), lanHint());
             } catch (Exception e) {
                 Log.e(TAG, "startReceiver", e);
             }
             try {
-                File inbox = inboxDir();
-                Mobile.startAutoReceive(name, inbox.getAbsolutePath(), SIGNAL_URL,
+                Mobile.startAutoReceive(name, inboxDir().getAbsolutePath(), SIGNAL_URL,
                         keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(), lanHint(), "");
             } catch (Exception e) {
                 Log.e(TAG, "startAutoReceive", e);
@@ -897,17 +1906,19 @@ public class MainActivity extends Activity {
             final String addr = lanAddr;
             final String err = autoErr;
             ui.post(() -> {
-                recvToggleBtn.setEnabled(true);
-                if (addr.isEmpty() && !err.isEmpty()) {
-                    toast("启动接收失败：" + err);
+                if (setRecvBtn != null) {
+                    setRecvBtn.setEnabled(true);
+                }
+                if (addr.isEmpty() && err != null && !err.isEmpty()) {
+                    toast("开启接收失败：" + err);
                     return;
                 }
                 recvRunning = true;
-                recvEverStarted = true;
                 lanPort = extractPort(addr);
                 acquireMulticastLock();
                 startKeepAlive(lanPort.isEmpty() ? "正在等待接收文件" : "接收中 · 端口 " + lanPort);
                 refreshReceiveUi();
+                refreshSettingsInfo();
                 ui.removeCallbacks(pollTask);
                 ui.postDelayed(pollTask, 1000);
             });
@@ -915,7 +1926,9 @@ public class MainActivity extends Activity {
     }
 
     private void stopAllReceive() {
-        recvToggleBtn.setEnabled(false);
+        if (setRecvBtn != null) {
+            setRecvBtn.setEnabled(false);
+        }
         ui.removeCallbacks(pollTask);
         new Thread(() -> {
             try {
@@ -928,7 +1941,9 @@ public class MainActivity extends Activity {
             }
             pollReceivedOnce();
             ui.post(() -> {
-                recvToggleBtn.setEnabled(true);
+                if (setRecvBtn != null) {
+                    setRecvBtn.setEnabled(true);
+                }
                 recvRunning = false;
                 lanPort = "";
                 releaseMulticastLock();
@@ -936,14 +1951,17 @@ public class MainActivity extends Activity {
                     stopKeepAlive();
                 }
                 refreshReceiveUi();
-                toast("已停止接收");
+                refreshSettingsInfo();
+                toast("已关闭后台接收");
             });
         }).start();
     }
 
     private void toggleWebShare() {
+        if (setWebBtn != null) {
+            setWebBtn.setEnabled(false);
+        }
         if (webRunning) {
-            webToggleBtn.setEnabled(false);
             new Thread(() -> {
                 try {
                     Mobile.stopWebShare();
@@ -951,7 +1969,9 @@ public class MainActivity extends Activity {
                     Log.w(TAG, "stopWebShare", e);
                 }
                 ui.post(() -> {
-                    webToggleBtn.setEnabled(true);
+                    if (setWebBtn != null) {
+                        setWebBtn.setEnabled(true);
+                    }
                     webRunning = false;
                     webShareUrl = "";
                     if (!recvRunning) {
@@ -962,7 +1982,6 @@ public class MainActivity extends Activity {
             }).start();
             return;
         }
-        webToggleBtn.setEnabled(false);
         new Thread(() -> {
             try {
                 String info = Mobile.startWebShare(webShareDir().getAbsolutePath(), 0L, lanHint());
@@ -973,73 +1992,59 @@ public class MainActivity extends Activity {
                 }
                 final String shown = url;
                 ui.post(() -> {
-                    webToggleBtn.setEnabled(true);
+                    if (setWebBtn != null) {
+                        setWebBtn.setEnabled(true);
+                    }
                     webRunning = true;
                     webShareUrl = shown;
-                    startKeepAlive("网页分享中");
+                    startKeepAlive("网页快传中");
                     refreshReceiveUi();
                 });
             } catch (Exception e) {
                 Log.e(TAG, "startWebShare", e);
                 ui.post(() -> {
-                    webToggleBtn.setEnabled(true);
-                    toast("网页分享启动失败：" + e.getMessage());
+                    if (setWebBtn != null) {
+                        setWebBtn.setEnabled(true);
+                    }
+                    toast("网页快传启动失败：" + e.getMessage());
                 });
             }
         }).start();
     }
 
     private void refreshReceiveUi() {
-        boolean active = recvRunning || webRunning;
-        if (topStateText != null) {
-            topStateText.setText(recvRunning ? "接收中" : (webRunning ? "网页分享中" : (recvEverStarted ? "已暂停" : "未开启")));
-            topStateText.setTextColor(active ? cOnPrimaryContainer : cOnSurfaceVariant);
+        if (sendRecvStatusBtn != null) {
+            sendRecvStatusBtn.setText(recvRunning ? "已开启接收" : "未开启接收");
+            sendRecvStatusBtn.setTextColor(recvRunning ? cPrimary : cOnSurfaceVariant);
         }
-        if (topDot != null) {
-            topDot.setBackground(oval(active ? cPrimary : cOnSurfaceVariant));
+        if (recvPulseDot != null) {
+            recvPulseDot.setBackground(oval(recvRunning ? cPrimary : cOutline));
         }
-        if (topChip != null) {
-            topChip.setBackground(ripple(roundBox(active ? cPrimaryContainer : cSurfaceContainerHigh, 0, 99), 99));
-        }
-        if (active) {
+        if (recvRunning) {
             startDotPulse();
         } else {
             stopDotPulse();
         }
-
-        if (recvHeroCard != null) {
-            recvHeroCard.setBackground(roundBox(recvRunning ? cPrimaryContainer : cSurfaceContainerLow, 0, 24));
+        if (setRecvBtn != null) {
+            setRecvBtn.setText(recvRunning ? "已开启" : "已关闭");
+            setRecvBtn.setBackground(ripple(roundBox(
+                    recvRunning ? cPrimaryContainer : cSurface,
+                    recvRunning ? cPrimary : cBorder, 10), 10));
+            setRecvBtn.setTextColor(recvRunning ? cOnPrimaryContainer : cOnSurfaceVariant);
         }
-        if (recvHeroTitle != null) {
-            recvHeroTitle.setText(recvRunning ? "正在等待接收文件" : "准备接收文件");
-            recvHeroTitle.setTextColor(recvRunning ? cOnPrimaryContainer : cOnSurface);
+        if (setWebBtn != null) {
+            setWebBtn.setText(webRunning ? "已开启" : "开启");
+            setWebBtn.setBackground(ripple(roundBox(
+                    webRunning ? cPrimaryContainer : cSurface,
+                    webRunning ? cPrimary : cBorder, 10), 10));
+            setWebBtn.setTextColor(webRunning ? cOnPrimaryContainer : cOnSurface);
         }
-        if (recvHeroSub != null) {
-            if (recvRunning) {
-                String p = lanPort.isEmpty() ? "—" : lanPort;
-                recvHeroSub.setText("局域网端口 " + p + " · 远程自动选路已连接\n收到后自动存入系统「下载 / Ferry」");
-                recvHeroSub.setTextColor(cOnPrimaryContainer);
-            } else {
-                recvHeroSub.setText("点击下方按钮后同时开启局域网与远程自动选路，收到文件自动保存到系统「下载 / Ferry」");
-                recvHeroSub.setTextColor(cOnSurfaceVariant);
-            }
-        }
-        if (recvToggleBtn != null) {
-            recvToggleBtn.setText(recvRunning ? "停止接收" : "开启接收");
-            applyFilledStyle(recvToggleBtn, recvRunning ? cError : cPrimary, recvRunning ? cOnError : cOnPrimary);
-        }
-        if (webToggleBtn != null) {
-            webToggleBtn.setText(webRunning ? "关闭网页分享" : "开启网页分享");
-            applyFilledStyle(webToggleBtn,
-                    webRunning ? cErrorContainer : cSecondaryContainer,
-                    webRunning ? cOnErrorContainer : cOnSecondaryContainer);
-        }
-        if (webUrlView != null) {
+        if (setWebUrlView != null) {
             if (webRunning && !webShareUrl.isEmpty()) {
-                webUrlView.setText("点击复制（同一 Wi-Fi 浏览器打开）：\n" + webShareUrl);
-                webUrlView.setVisibility(View.VISIBLE);
+                setWebUrlView.setText("同一 Wi-Fi 浏览器打开（点击复制）：" + webShareUrl);
+                setWebUrlView.setVisibility(View.VISIBLE);
             } else {
-                webUrlView.setVisibility(View.GONE);
+                setWebUrlView.setVisibility(View.GONE);
             }
         }
     }
@@ -1052,7 +2057,7 @@ public class MainActivity extends Activity {
         return i >= 0 ? addr.substring(i + 1).trim() : "";
     }
 
-    // ================= Receive Poll -> Public Download/ft =================
+    // ================= Receive Poll -> Public Download/Ferry =================
 
     private void pollReceivedOnce() {
         ioPool.execute(() -> {
@@ -1084,7 +2089,6 @@ public class MainActivity extends Activity {
         });
     }
 
-    /** Moves any non-.ftpart files left in inboxDir after a process restart. */
     private void sweepLeftoverInbox() {
         ioPool.execute(() -> {
             File[] files = inboxDir().listFiles();
@@ -1108,16 +2112,10 @@ public class MainActivity extends Activity {
         if (!src.delete()) {
             Log.w(TAG, "could not delete staged file: " + src);
         }
-        final ReceivedEntry entry = new ReceivedEntry(fileName, savedUri, mime, via, bytes, ts);
+        final ReceivedEntry entry = new ReceivedEntry(fileName, savedUri, mime, via, bytes, ts, "recv", "");
         ui.post(() -> {
-            recentEntries.add(0, entry);
-            while (recentEntries.size() > 20) {
-                recentEntries.remove(recentEntries.size() - 1);
-            }
-            persistRecentState();
-            renderRecentList();
-            String viaTag = pathLabel(via);
-            toast("已保存到「下载/Ferry」" + (viaTag.isEmpty() ? "" : "（" + viaTag + "）") + "：" + fileName);
+            addRecentEntry(entry);
+            toast("已保存到「下载/Ferry」：" + fileName);
         });
     }
 
@@ -1207,6 +2205,17 @@ public class MainActivity extends Activity {
         }
     }
 
+    // ================= Recent Records State & Filtering =================
+
+    private void addRecentEntry(ReceivedEntry entry) {
+        recentEntries.add(0, entry);
+        while (recentEntries.size() > 30) {
+            recentEntries.remove(recentEntries.size() - 1);
+        }
+        persistRecentState();
+        renderRecentList();
+    }
+
     private void loadRecentState() {
         ioPool.execute(() -> {
             File rf = recentFile();
@@ -1226,7 +2235,9 @@ public class MainActivity extends Activity {
                             o.optString("mime", "application/octet-stream"),
                             o.optString("via", ""),
                             o.optLong("bytes", 0),
-                            o.optLong("ts", 0)));
+                            o.optLong("ts", 0),
+                            o.optString("dir", "recv"),
+                            o.optString("peer", "")));
                 }
                 ui.post(() -> {
                     recentEntries.clear();
@@ -1252,6 +2263,8 @@ public class MainActivity extends Activity {
                     o.put("via", r.via);
                     o.put("bytes", r.bytes);
                     o.put("ts", r.ts);
+                    o.put("dir", r.dir);
+                    o.put("peer", r.peer);
                     arr.put(o);
                 }
                 try (OutputStream out = new FileOutputStream(recentFile())) {
@@ -1263,54 +2276,81 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void renderFilterTabs() {
+        String[] fKeys = {"all", "recv", "send"};
+        for (int i = 0; i < 3; i++) {
+            TextView tv = filterTabs[i];
+            if (tv == null) {
+                continue;
+            }
+            boolean sel = fKeys[i].equals(activeFilter);
+            tv.setTextColor(sel ? cPrimary : cOnSurfaceVariant);
+            tv.setAlpha(sel ? 1f : 0.72f);
+        }
+    }
+
     private void renderRecentList() {
-        if (recentListView == null) {
+        if (recentListView == null || recentEmptyView == null) {
             return;
         }
         recentListView.removeAllViews();
-        if (recentEntries.isEmpty()) {
-            TextView empty = label("暂未收到文件。对方发送成功后，文件会自动保存在系统「下载 / Ferry」文件夹。",
-                    12, cOnSurfaceVariant, false);
-            recentListView.addView(empty, new LinearLayout.LayoutParams(MATCH, WRAP));
+        List<ReceivedEntry> visible = new ArrayList<>();
+        for (ReceivedEntry r : recentEntries) {
+            if ("all".equals(activeFilter) || activeFilter.equals(r.dir)) {
+                visible.add(r);
+            }
+        }
+        if (visible.isEmpty()) {
+            recentListView.setVisibility(View.GONE);
+            recentEmptyView.setVisibility(View.VISIBLE);
             return;
         }
-        SimpleDateFormat sdf = new SimpleDateFormat("HH:mm:ss", Locale.US);
-        for (int i = 0; i < recentEntries.size(); i++) {
-            final ReceivedEntry r = recentEntries.get(i);
+        recentListView.setVisibility(View.VISIBLE);
+        recentEmptyView.setVisibility(View.GONE);
+
+        SimpleDateFormat sdf = new SimpleDateFormat("HH:mm", Locale.US);
+        for (int i = 0; i < visible.size(); i++) {
+            final ReceivedEntry r = visible.get(i);
+            final boolean isSend = "send".equals(r.dir);
+
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(dp(12), dp(10), dp(12), dp(10));
-            row.setBackground(ripple(roundBox(cSurface, 0, 14), 14));
-            row.setOnClickListener(v -> openReceivedEntry(r));
+            row.setPadding(dp(2), dp(12), dp(2), dp(12));
+            row.setBackground(ripple(roundBox(Color.TRANSPARENT, 0, 10), 10));
+            if (!isSend && r.uri != null && !r.uri.isEmpty()) {
+                row.setOnClickListener(v -> openReceivedEntry(r));
+            } else if (isSend) {
+                row.setOnClickListener(v -> toast("已发送：" + r.name));
+            }
 
             LinearLayout col = new LinearLayout(this);
             col.setOrientation(LinearLayout.VERTICAL);
-            TextView nm = label(r.name, 14, cOnSurface, true);
+
+            TextView nm = label(r.name, 13, cOnSurface, true);
             nm.setSingleLine(true);
             nm.setEllipsize(TextUtils.TruncateAt.MIDDLE);
             col.addView(nm, new LinearLayout.LayoutParams(MATCH, WRAP));
 
-            String meta = fmtBytes(r.bytes) + (r.ts > 0 ? " · " + sdf.format(new Date(r.ts)) : "");
-            TextView mt = label(meta, 11, cOnSurfaceVariant, false);
-            LinearLayout.LayoutParams mtLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+            String dirPrefix = isSend
+                    ? (r.peer == null || r.peer.isEmpty() ? "已发出" : "发往 " + r.peer)
+                    : (r.peer == null || r.peer.isEmpty() ? "已收到" : "来自 " + r.peer);
+            String timeStr = r.ts > 0 ? " · " + sdf.format(new Date(r.ts)) : "";
+            TextView mt = label(dirPrefix + " · " + fmtBytes(r.bytes) + timeStr, 12, cOnSurfaceVariant, false);
+            LinearLayout.LayoutParams mtLp = new LinearLayout.LayoutParams(MATCH, WRAP);
             mtLp.topMargin = dp(2);
             col.addView(mt, mtLp);
             row.addView(col, new LinearLayout.LayoutParams(0, WRAP, 1f));
 
-            String vLbl = pathLabel(r.via);
-            if (!vLbl.isEmpty()) {
-                TextView badge = pathBadgeView(r.via);
-                LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(WRAP, WRAP);
-                bLp.leftMargin = dp(8);
-                row.addView(badge, bLp);
-            }
+            TextView actionHint = label(isSend ? "已发" : "打开", 12, isSend ? cOnSurfaceVariant : cPrimary, false);
+            LinearLayout.LayoutParams ahLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+            ahLp.leftMargin = dp(12);
+            row.addView(actionHint, ahLp);
 
-            LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-            if (i > 0) {
-                rowLp.topMargin = dp(6);
+            recentListView.addView(row, new LinearLayout.LayoutParams(MATCH, WRAP));
+            if (i < visible.size() - 1) {
+                recentListView.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
             }
-            recentListView.addView(row, rowLp);
         }
     }
 
@@ -1347,27 +2387,28 @@ public class MainActivity extends Activity {
             return;
         }
         sharedUris = uris;
-        selectTab(0);
+        showPage(0);
         if (shareBannerView != null) {
-            shareBannerView.setText("已从其他应用带入 " + uris.size() + " 个文件 · 点上方按钮直接发送");
+            shareBannerView.setText("已从其他应用带入 " + uris.size() + " 个文件 · 点「发文件 / 照片」发送");
             shareBannerView.setVisibility(View.VISIBLE);
         }
     }
 
     private void pickFiles() {
-        final String target = currentTarget();
+        final String target = selectedTarget;
         if (!isAutoTarget(target) && !isLanTarget(target)) {
-            toast("请先选择接收设备，或填写 64 位设备 ID / IP:端口");
+            toast("请先选择或配对接收设备");
             return;
         }
         saveLastPeer(target);
+        final String targetName = resolveTargetName(target);
         if (sharedUris != null && !sharedUris.isEmpty()) {
             List<Uri> uris = sharedUris;
             sharedUris = null;
             if (shareBannerView != null) {
                 shareBannerView.setVisibility(View.GONE);
             }
-            sendUriBatch(uris, currentName(), target);
+            sendUriBatch(uris, deviceName, target, targetName);
             return;
         }
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -1378,9 +2419,9 @@ public class MainActivity extends Activity {
     }
 
     private void sendClipboard() {
-        final String target = currentTarget();
+        final String target = selectedTarget;
         if (!isAutoTarget(target) && !isLanTarget(target)) {
-            toast("请先选择接收设备，或填写 64 位设备 ID / IP:端口");
+            toast("请先选择或配对接收设备");
             return;
         }
         ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
@@ -1396,9 +2437,10 @@ public class MainActivity extends Activity {
             return;
         }
         saveLastPeer(target);
-        final String name = currentName();
+        final String name = deviceName;
+        final String targetName = resolveTargetName(target);
         final boolean auto = isAutoTarget(target);
-        setSendBusy(true, auto ? "正在发送剪贴板文本（自动选路）…" : "正在通过局域网发送剪贴板文本…");
+        setSendBusy(true, "正在发送剪贴板文本…");
         new Thread(() -> {
             File dir = new File(getCacheDir(), "clip-" + System.nanoTime());
             dir.mkdirs();
@@ -1408,7 +2450,7 @@ public class MainActivity extends Activity {
                 out.write(text.getBytes("UTF-8"));
                 List<File> list = new ArrayList<>();
                 list.add(f);
-                sendPreparedFiles(list, dir, name, target, auto);
+                sendPreparedFiles(list, dir, name, target, targetName, auto);
             } catch (Exception e) {
                 Log.e(TAG, "sendClipboard", e);
                 deleteTree(f, dir);
@@ -1417,11 +2459,9 @@ public class MainActivity extends Activity {
         }).start();
     }
 
-    private void sendUriBatch(final List<Uri> uris, final String name, final String target) {
+    private void sendUriBatch(final List<Uri> uris, final String name, final String target, final String targetName) {
         final boolean auto = isAutoTarget(target);
-        setSendBusy(true, auto
-                ? "正在发送 " + uris.size() + " 个文件（LAN / 打洞 / 中继自动竞速）…"
-                : "正在通过局域网发送 " + uris.size() + " 个文件…");
+        setSendBusy(true, "正在发送 " + uris.size() + " 个文件…");
         new Thread(() -> {
             File batchDir = new File(new File(getCacheDir(), "outgoing"), String.valueOf(System.nanoTime()));
             List<File> tempFiles = new ArrayList<>();
@@ -1429,7 +2469,7 @@ public class MainActivity extends Activity {
                 for (int i = 0; i < uris.size(); i++) {
                     tempFiles.add(copyToCache(uris.get(i), new File(batchDir, String.valueOf(i))));
                 }
-                sendPreparedFiles(tempFiles, batchDir, name, target, auto);
+                sendPreparedFiles(tempFiles, batchDir, name, target, targetName, auto);
             } catch (Exception e) {
                 Log.e(TAG, "sendUriBatch", e);
                 for (File tf : tempFiles) {
@@ -1443,7 +2483,8 @@ public class MainActivity extends Activity {
         }).start();
     }
 
-    private void sendPreparedFiles(List<File> files, File rootTmp, String name, String target, boolean auto) {
+    private void sendPreparedFiles(List<File> files, File rootTmp, String name, String target,
+                                   String targetName, boolean auto) {
         try {
             JSONArray paths = new JSONArray();
             for (File f : files) {
@@ -1453,7 +2494,7 @@ public class MainActivity extends Activity {
                     ? Mobile.sendAuto(SIGNAL_URL, keyFile().getAbsolutePath(),
                             pairedFile().getAbsolutePath(), target, name, paths.toString(), lanHint(), "")
                     : Mobile.sendFiles(target, name, paths.toString());
-            onSendSucceeded(summary);
+            onSendSucceeded(summary, targetName);
         } catch (Exception e) {
             Log.e(TAG, auto ? "sendAuto" : "sendLan", e);
             onSendFailed(e.getMessage());
@@ -1470,11 +2511,13 @@ public class MainActivity extends Activity {
     }
 
     private void setSendBusy(boolean busy, String msg) {
-        if (sendPickBtn != null) {
-            sendPickBtn.setEnabled(!busy);
+        if (sendPickTile != null) {
+            sendPickTile.setEnabled(!busy);
+            sendPickTile.setAlpha(busy ? 0.6f : 1f);
         }
-        if (sendClipBtn != null) {
-            sendClipBtn.setEnabled(!busy);
+        if (sendClipTile != null) {
+            sendClipTile.setEnabled(!busy);
+            sendClipTile.setAlpha(busy ? 0.6f : 1f);
         }
         if (busy) {
             startKeepAlive(msg);
@@ -1482,11 +2525,11 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void onSendSucceeded(final String raw) {
+    private void onSendSucceeded(final String raw, final String targetName) {
         ui.post(() -> {
             setSendBusy(false, "");
             if (recvRunning || webRunning) {
-                startKeepAlive(recvRunning ? "接收中" : "网页分享中");
+                startKeepAlive(recvRunning ? "接收中" : "网页快传中");
             } else {
                 stopKeepAlive();
             }
@@ -1500,9 +2543,11 @@ public class MainActivity extends Activity {
                 JSONArray files = o.optJSONArray("files");
                 int n = files != null ? files.length() : 0;
                 long bytes = o.optLong("bytes", 0);
-                long ms = o.optLong("duration_ms", 0);
-                String text = "发送完成 · " + n + " 个文件 · " + fmtBytes(bytes) + " · " + ms + " ms";
-                showSendBanner(path, text, false);
+                String first = n > 0 ? files.optString(0, "已发送文件") : "已发送文件";
+                String recTitle = n > 1 ? first + " 等 " + n + " 个文件" : first;
+                addRecentEntry(new ReceivedEntry(recTitle, "", "", path, bytes,
+                        System.currentTimeMillis(), "send", targetName));
+                showSendBanner(path, "已发送 · " + recTitle + " (" + fmtBytes(bytes) + ")", false);
             } catch (Exception e) {
                 showSendBanner("", raw, false);
             }
@@ -1513,7 +2558,7 @@ public class MainActivity extends Activity {
         ui.post(() -> {
             setSendBusy(false, "");
             if (recvRunning || webRunning) {
-                startKeepAlive(recvRunning ? "接收中" : "网页分享中");
+                startKeepAlive(recvRunning ? "接收中" : "网页快传中");
             } else {
                 stopKeepAlive();
             }
@@ -1526,7 +2571,7 @@ public class MainActivity extends Activity {
             return;
         }
         sendResultCard.setVisibility(View.VISIBLE);
-        sendResultCard.setBackground(roundBox(isError ? cErrorContainer : cSurfaceContainerHigh, 0, 14));
+        sendResultCard.setBackground(roundBox(isError ? cErrorContainer : cSurfaceAlt, 0, 10));
         sendResultText.setText(msg);
         sendResultText.setTextColor(isError ? cOnErrorContainer : cOnSurface);
 
@@ -1570,26 +2615,20 @@ public class MainActivity extends Activity {
             uris.add(data.getData());
         }
         if (!uris.isEmpty()) {
-            sendUriBatch(uris, currentName(), currentTarget());
+            sendUriBatch(uris, deviceName, selectedTarget, resolveTargetName(selectedTarget));
         }
     }
 
-    // ================= Devices, Discovery & Pairing =================
+    // ================= Devices, Discovery & Legacy Import =================
 
     private void loadDeviceId() {
         ioPool.execute(() -> {
             try {
                 String id = Mobile.deviceIDFor(keyFile().getAbsolutePath());
                 final String full = id == null ? "" : id;
-                final String shown = full.length() > 12 ? full.substring(0, 12) : full;
                 ui.post(() -> {
                     fullDeviceId = full;
-                    if (topIdChip != null && !shown.isEmpty()) {
-                        topIdChip.setText("ID " + shown);
-                    }
-                    if (pairFullIdView != null && !full.isEmpty()) {
-                        pairFullIdView.setText(full);
-                    }
+                    refreshSettingsInfo();
                 });
             } catch (Exception e) {
                 Log.w(TAG, "loadDeviceId", e);
@@ -1611,21 +2650,17 @@ public class MainActivity extends Activity {
                     }
                     String name = o.optString("name", "").trim();
                     if (name.isEmpty()) {
-                        name = "已配对设备";
+                        name = "设备 " + (id.length() > 6 ? id.substring(0, 6) : id);
                     }
-                    String shortId = id.length() > 12 ? id.substring(0, 12) + "…" : id;
-                    entries.add(new PeerEntry(name, "已配对 · 自动选路 · " + shortId, id));
+                    entries.add(new PeerEntry(name, id));
                 }
                 ui.post(() -> {
                     pairedEntries.clear();
                     pairedEntries.addAll(entries);
-                    if (peerField != null && currentTarget().isEmpty() && !entries.isEmpty()) {
-                        peerField.setText(entries.get(0).value);
+                    if (selectedTarget.isEmpty() && !entries.isEmpty()) {
+                        selectedTarget = entries.get(0).value;
                     }
-                    if (deviceList != null) {
-                        deviceList.render(pairedEntries, lanEntries, lanNote);
-                    }
-                    updateTargetSummary();
+                    renderPeerSection();
                 });
             } catch (Exception e) {
                 Log.w(TAG, "loadPairedPeers", e);
@@ -1634,10 +2669,12 @@ public class MainActivity extends Activity {
     }
 
     private void discover() {
-        discoverBtn.setEnabled(false);
-        lanNote = "正在搜索同一局域网设备…";
-        deviceList.render(pairedEntries, lanEntries, lanNote);
-        final String name = currentName();
+        if (lanSearching) {
+            return;
+        }
+        lanSearching = true;
+        renderPeerSection();
+        final String name = deviceName;
         new Thread(() -> {
             try {
                 String json = Mobile.discover(name, 3000, lanHint());
@@ -1651,50 +2688,103 @@ public class MainActivity extends Activity {
                     }
                     String dn = o.optString("Name", "").trim();
                     if (dn.isEmpty()) {
-                        dn = "局域网设备";
+                        dn = addr;
                     }
-                    found.add(new PeerEntry(dn, "局域网直连 · " + addr, addr));
+                    found.add(new PeerEntry(dn + " (LAN)", addr));
                 }
                 ui.post(() -> {
+                    lanSearching = false;
                     lanEntries.clear();
                     lanEntries.addAll(found);
-                    lanNote = found.isEmpty() ? "未发现局域网在线设备，可直接使用已配对设备。" : "";
-                    if (!found.isEmpty() && currentTarget().isEmpty()) {
-                        peerField.setText(found.get(0).value);
+                    if (!found.isEmpty() && selectedTarget.isEmpty()) {
+                        selectedTarget = found.get(0).value;
+                    } else if (found.isEmpty()) {
+                        toast("同一局域网暂无可直连设备");
                     }
-                    deviceList.render(pairedEntries, lanEntries, lanNote);
-                    updateTargetSummary();
-                    discoverBtn.setEnabled(true);
+                    renderPeerSection();
                 });
             } catch (Exception e) {
                 ui.post(() -> {
-                    lanNote = "搜索失败：" + e.getMessage();
-                    deviceList.render(pairedEntries, lanEntries, lanNote);
-                    discoverBtn.setEnabled(true);
+                    lanSearching = false;
+                    renderPeerSection();
+                    toast("局域网发现失败：" + e.getMessage());
                 });
             }
         }).start();
     }
 
-    private void showAndCopyPairUri() {
-        try {
-            String uri = Mobile.pairURIFor(currentName(), keyFile().getAbsolutePath());
-            if (pairUriField != null) {
-                pairUriField.setText(uri);
-            }
-            copyText("配对 URI", uri, "已复制本机配对 URI");
-        } catch (Exception e) {
-            toast("生成配对 URI 失败：" + e.getMessage());
-        }
-    }
-
-    private void importPairUri() {
-        String uri = pairUriField.getText().toString().trim();
-        if (uri.isEmpty()) {
-            toast("先粘贴对方 ftpair:// URI");
+    private void renderPeerSection() {
+        if (peerChipRow == null || sendCard == null || unpairedCard == null) {
             return;
         }
-        confirmImportPairUri(uri);
+        List<PeerEntry> combined = new ArrayList<>();
+        combined.addAll(pairedEntries);
+        combined.addAll(lanEntries);
+
+        boolean hasAny = !combined.isEmpty() || !selectedTarget.isEmpty();
+        peerScroll.setVisibility(hasAny ? View.VISIBLE : View.GONE);
+        sendCard.setVisibility(hasAny ? View.VISIBLE : View.GONE);
+        unpairedCard.setVisibility(hasAny ? View.GONE : View.VISIBLE);
+
+        if (selectedTarget.isEmpty() && !combined.isEmpty()) {
+            selectedTarget = combined.get(0).value;
+        }
+        if (sendTargetTitle != null) {
+            sendTargetTitle.setText("发往 " + resolveTargetName(selectedTarget));
+        }
+
+        peerChipRow.removeAllViews();
+        for (int i = 0; i < combined.size(); i++) {
+            final PeerEntry entry = combined.get(i);
+            final boolean sel = entry.value.equals(selectedTarget);
+
+            TextView chip = label(entry.name, 13, sel ? cOnPrimary : cOnSurface, true);
+            chip.setPadding(dp(14), dp(8), dp(14), dp(8));
+            chip.setSingleLine(true);
+            chip.setBackground(ripple(roundBox(
+                    sel ? cPrimaryPressed : cCard,
+                    sel ? cPrimaryPressed : cBorder, 99), 99));
+            chip.setOnClickListener(v -> {
+                selectedTarget = entry.value;
+                saveLastPeer(selectedTarget);
+                renderPeerSection();
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(WRAP, WRAP);
+            lp.rightMargin = dp(8);
+            peerChipRow.addView(chip, lp);
+        }
+
+        TextView addBtn = label("+", 17, cOnSurface, true);
+        addBtn.setGravity(Gravity.CENTER);
+        addBtn.setBackground(ripple(roundBox(cCard, cBorder, 99), 99));
+        addBtn.setContentDescription("添加设备");
+        addBtn.setOnClickListener(v -> openPairSheet(0));
+        LinearLayout.LayoutParams addLp = new LinearLayout.LayoutParams(dp(34), dp(34));
+        addLp.rightMargin = dp(8);
+        peerChipRow.addView(addBtn, addLp);
+
+        TextView lanBtn = label(lanSearching ? "搜索中…" : "局域网", 12, cOnSurfaceVariant, false);
+        lanBtn.setPadding(dp(11), dp(7), dp(11), dp(7));
+        lanBtn.setBackground(ripple(roundBox(cCard, cBorder, 99), 99));
+        lanBtn.setOnClickListener(v -> discover());
+        peerChipRow.addView(lanBtn, new LinearLayout.LayoutParams(WRAP, WRAP));
+    }
+
+    private String resolveTargetName(String target) {
+        if (target == null || target.isEmpty()) {
+            return "未选择设备";
+        }
+        for (PeerEntry e : pairedEntries) {
+            if (e.value.equals(target)) {
+                return e.name;
+            }
+        }
+        for (PeerEntry e : lanEntries) {
+            if (e.value.equals(target)) {
+                return e.name;
+            }
+        }
+        return target.length() > 12 ? "设备 " + target.substring(0, 12) : target;
     }
 
     private void pickPairFile() {
@@ -1722,91 +2812,27 @@ public class MainActivity extends Activity {
                     }
                 }
             }
-            String text = buf.toString("UTF-8").trim();
+            final String text = buf.toString("UTF-8").trim();
             if (text.isEmpty()) {
                 toast("配对文件为空");
                 return;
             }
-            confirmImportPairUri(text);
+            new AlertDialog.Builder(this)
+                    .setTitle("信任这台设备？")
+                    .setMessage("设备 ID：" + shortPeerId(text) + "\n\n导入后该设备可向你发送文件。")
+                    .setNegativeButton("取消", null)
+                    .setPositiveButton("导入并信任", (d, w) -> {
+                        try {
+                            Mobile.pairImport(text, pairedFile().getAbsolutePath());
+                            toast("已导入配对设备");
+                            loadPairedPeers();
+                        } catch (Exception e) {
+                            toast("导入失败：" + e.getMessage());
+                        }
+                    })
+                    .show();
         } catch (Exception e) {
             toast("读取配对文件失败：" + e.getMessage());
-        }
-    }
-
-    private void confirmImportPairUri(final String uri) {
-        new AlertDialog.Builder(this)
-                .setTitle("信任这台设备？")
-                .setMessage("设备 ID：" + shortPeerId(uri) + "\n\n导入后该设备可向你发送文件。")
-                .setNegativeButton("取消", null)
-                .setPositiveButton("导入并信任", (d, w) -> {
-                    try {
-                        Mobile.pairImport(uri, pairedFile().getAbsolutePath());
-                        toast("已导入配对设备");
-                        loadPairedPeers();
-                    } catch (Exception e) {
-                        toast("导入失败：" + e.getMessage());
-                    }
-                })
-                .show();
-    }
-
-    private void startPake(boolean wait) {
-        String code = pakeCodeField.getText().toString().trim();
-        if (code.length() != 6) {
-            toast("请输入 6 位数字配对码");
-            return;
-        }
-        String peer = pakePeerField.getText().toString().trim();
-        if (!wait && peer.isEmpty()) {
-            toast("请输入对方设备 ID，或点“等待配对”");
-            return;
-        }
-        pakeInfoView.setText(wait ? "正在等待对方输入相同配对码…" : "正在协商信任密钥…");
-        new Thread(() -> {
-            try {
-                String res = wait
-                        ? Mobile.waitPairCode("", keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(), code, 90000)
-                        : Mobile.pairWithCode("", keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(), code, peer);
-                ui.post(() -> {
-                    pakeInfoView.setText("配对成功：" + res);
-                    loadPairedPeers();
-                });
-            } catch (Exception e) {
-                ui.post(() -> pakeInfoView.setText("配对失败：" + e.getMessage()));
-            }
-        }).start();
-    }
-
-    private void updateTargetSummary() {
-        if (targetTitleView == null || targetSubView == null) {
-            return;
-        }
-        String t = currentTarget();
-        if (t.isEmpty()) {
-            targetTitleView.setText("尚未选择接收设备");
-            targetSubView.setText("在下方列表选一台设备，或手动填入 ID / IP:端口");
-            return;
-        }
-        for (PeerEntry e : pairedEntries) {
-            if (e.value.equals(t)) {
-                targetTitleView.setText(e.name);
-                targetSubView.setText(e.sub);
-                return;
-            }
-        }
-        for (PeerEntry e : lanEntries) {
-            if (e.value.equals(t)) {
-                targetTitleView.setText(e.name);
-                targetSubView.setText(e.sub);
-                return;
-            }
-        }
-        if (isAutoTarget(t)) {
-            targetTitleView.setText("设备 " + t.substring(0, 12) + "…");
-            targetSubView.setText("将尝试 局域网 / 打洞 / 中继 自动选路");
-        } else {
-            targetTitleView.setText(t);
-            targetSubView.setText(isLanTarget(t) ? "局域网直连地址" : "格式需为 64 位设备 ID 或 IP:端口");
         }
     }
 
@@ -1849,8 +2875,8 @@ public class MainActivity extends Activity {
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
             copyStream(in, bos);
             String id = bos.toString("UTF-8").trim();
-            if (!id.isEmpty() && peerField != null) {
-                peerField.setText(id);
+            if (!id.isEmpty()) {
+                selectedTarget = id;
             }
         } catch (Exception e) {
             Log.w(TAG, "applyDebugPeerId", e);
@@ -1859,18 +2885,13 @@ public class MainActivity extends Activity {
 
     private void prefillLastPeer() {
         String last = getPreferences(MODE_PRIVATE).getString("lastPeer", "");
-        if (!last.isEmpty() && peerField != null && currentTarget().isEmpty()) {
-            peerField.setText(last);
-            updateTargetSummary();
+        if (!last.isEmpty() && selectedTarget.isEmpty()) {
+            selectedTarget = last;
         }
     }
 
     private void saveLastPeer(String peer) {
         getPreferences(MODE_PRIVATE).edit().putString("lastPeer", peer).apply();
-    }
-
-    private String currentTarget() {
-        return peerField == null ? "" : peerField.getText().toString().trim();
     }
 
     private String loadSavedName() {
@@ -1891,24 +2912,14 @@ public class MainActivity extends Activity {
         return "android-" + s;
     }
 
-    private String currentName() {
-        if (nameField == null) {
-            return deviceName;
-        }
-        String n = nameField.getText().toString().trim();
-        return n.isEmpty() ? deviceName : n;
-    }
-
-    // ================= Device List View =================
+    // ================= Models & Custom Views =================
 
     private static class PeerEntry {
         final String name;
-        final String sub;
         final String value;
 
-        PeerEntry(String name, String sub, String value) {
+        PeerEntry(String name, String value) {
             this.name = name;
-            this.sub = sub;
             this.value = value;
         }
     }
@@ -1920,151 +2931,164 @@ public class MainActivity extends Activity {
         final String via;
         final long bytes;
         final long ts;
+        final String dir;  // "recv" | "send"
+        final String peer;
 
-        ReceivedEntry(String name, String uri, String mime, String via, long bytes, long ts) {
+        ReceivedEntry(String name, String uri, String mime, String via, long bytes, long ts,
+                      String dir, String peer) {
             this.name = name;
             this.uri = uri;
             this.mime = mime;
             this.via = via;
             this.bytes = bytes;
             this.ts = ts;
+            this.dir = (dir == null || dir.isEmpty()) ? "recv" : dir;
+            this.peer = peer == null ? "" : peer;
         }
     }
 
-    private class DeviceList extends LinearLayout {
-        private final List<RowItem> rows = new ArrayList<>();
-        private String selected = "";
+    private class FerryMarkDrawable extends Drawable {
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Path boat = new Path();
+        private final Path sail = new Path();
+        private final Path wave = new Path();
 
-        DeviceList() {
+        @Override
+        public void draw(Canvas canvas) {
+            android.graphics.Rect b = getBounds();
+            float w = b.width();
+            float h = b.height();
+            p.setStyle(Paint.Style.FILL);
+            p.setColor(0xFF0D9488);
+            canvas.drawRoundRect(0, 0, w, h, w * 0.22f, h * 0.22f, p);
+
+            p.setColor(Color.WHITE);
+            boat.reset();
+            boat.moveTo(w * 0.20f, h * 0.48f);
+            boat.lineTo(w * 0.80f, h * 0.37f);
+            boat.lineTo(w * 0.67f, h * 0.62f);
+            boat.lineTo(w * 0.30f, h * 0.62f);
+            boat.close();
+            canvas.drawPath(boat, p);
+
+            sail.reset();
+            sail.moveTo(w * 0.37f, h * 0.48f);
+            sail.lineTo(w * 0.50f, h * 0.26f);
+            sail.lineTo(w * 0.61f, h * 0.45f);
+            sail.close();
+            canvas.drawPath(sail, p);
+
+            p.setColor(0xFFCCFBF1);
+            wave.reset();
+            wave.moveTo(w * 0.22f, h * 0.70f);
+            wave.quadTo(w * 0.50f, h * 0.65f, w * 0.78f, h * 0.69f);
+            wave.quadTo(w * 0.52f, h * 0.76f, w * 0.22f, h * 0.70f);
+            wave.close();
+            canvas.drawPath(wave, p);
+        }
+
+        @Override public void setAlpha(int alpha) {}
+        @Override public void setColorFilter(ColorFilter cf) {}
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+    }
+
+    private class IconDrawable extends Drawable {
+        static final int SCAN = 0;
+        static final int SETTINGS = 1;
+        static final int BACK = 2;
+        static final int UPLOAD = 3;
+        static final int CLIP = 4;
+
+        private final int kind;
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        IconDrawable(int kind, int color) {
+            this.kind = kind;
+            paint.setColor(color);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(1.8f));
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeJoin(Paint.Join.ROUND);
+        }
+
+        @Override
+        public void draw(Canvas c) {
+            android.graphics.Rect b = getBounds();
+            float w = b.width();
+            float h = b.height();
+            Path p = new Path();
+            if (kind == BACK) {
+                p.moveTo(w * 0.62f, h * 0.25f);
+                p.lineTo(w * 0.36f, h * 0.50f);
+                p.lineTo(w * 0.62f, h * 0.75f);
+                c.drawPath(p, paint);
+            } else if (kind == SCAN) {
+                float d = w * 0.16f;
+                float l = w * 0.16f, t = h * 0.16f, r = w * 0.84f, bt = h * 0.84f;
+                p.moveTo(l, t + d); p.lineTo(l, t); p.lineTo(l + d, t);
+                p.moveTo(r - d, t); p.lineTo(r, t); p.lineTo(r, t + d);
+                p.moveTo(r, bt - d); p.lineTo(r, bt); p.lineTo(r - d, bt);
+                p.moveTo(l + d, bt); p.lineTo(l, bt); p.lineTo(l, bt - d);
+                p.moveTo(w * 0.25f, h * 0.50f); p.lineTo(w * 0.75f, h * 0.50f);
+                c.drawPath(p, paint);
+            } else if (kind == SETTINGS) {
+                c.drawCircle(w * 0.5f, h * 0.5f, w * 0.14f, paint);
+                for (int i = 0; i < 8; i++) {
+                    double a = i * Math.PI / 4.0;
+                    float x1 = w * 0.5f + (float) Math.cos(a) * w * 0.25f;
+                    float y1 = h * 0.5f + (float) Math.sin(a) * h * 0.25f;
+                    float x2 = w * 0.5f + (float) Math.cos(a) * w * 0.34f;
+                    float y2 = h * 0.5f + (float) Math.sin(a) * h * 0.34f;
+                    c.drawLine(x1, y1, x2, y2, paint);
+                }
+            } else if (kind == UPLOAD) {
+                p.moveTo(w * 0.5f, h * 0.62f); p.lineTo(w * 0.5f, h * 0.18f);
+                p.moveTo(w * 0.30f, h * 0.36f); p.lineTo(w * 0.5f, h * 0.17f); p.lineTo(w * 0.70f, h * 0.36f);
+                p.moveTo(w * 0.20f, h * 0.65f); p.lineTo(w * 0.20f, h * 0.80f);
+                p.lineTo(w * 0.80f, h * 0.80f); p.lineTo(w * 0.80f, h * 0.65f);
+                c.drawPath(p, paint);
+            } else { // CLIP
+                c.drawRoundRect(new RectF(w * 0.34f, h * 0.34f, w * 0.82f, h * 0.82f),
+                        w * 0.08f, h * 0.08f, paint);
+                p.moveTo(w * 0.28f, h * 0.62f); p.lineTo(w * 0.20f, h * 0.62f);
+                p.lineTo(w * 0.20f, h * 0.20f); p.lineTo(w * 0.62f, h * 0.20f);
+                p.lineTo(w * 0.62f, h * 0.28f);
+                c.drawPath(p, paint);
+            }
+        }
+
+        @Override public void setAlpha(int alpha) {}
+        @Override public void setColorFilter(ColorFilter cf) {}
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+    }
+
+    private class CornerBracketsView extends View {
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        CornerBracketsView() {
             super(MainActivity.this);
-            setOrientation(LinearLayout.VERTICAL);
+            p.setColor(Color.parseColor("#14B8A6"));
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(dp(2.5f));
+            p.setStrokeCap(Paint.Cap.ROUND);
         }
 
-        void render(List<PeerEntry> paired, List<PeerEntry> lan, String note) {
-            removeAllViews();
-            rows.clear();
-            boolean any = false;
-            if (paired != null) {
-                for (PeerEntry e : paired) {
-                    addRow(e.name, e.sub, e.value);
-                    any = true;
-                }
-            }
-            if (lan != null) {
-                for (PeerEntry e : lan) {
-                    addRow(e.name, e.sub, e.value);
-                    any = true;
-                }
-            }
-            if (note != null && !note.isEmpty()) {
-                addNote(note);
-                any = true;
-            }
-            if (!any) {
-                addNote("暂无设备 · 去「设备」页完成一次配对，或点右上角搜索局域网");
-            }
-            syncSelection();
-        }
-
-        void syncSelection() {
-            selected = currentTarget();
-            paint();
-        }
-
-        private void addRow(final String name, final String sub, final String value) {
-            LinearLayout row = new LinearLayout(MainActivity.this);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(dp(12), dp(10), dp(12), dp(10));
-
-            String initial = name.isEmpty() ? "?" : name.substring(0, 1).toUpperCase(Locale.US);
-            TextView avatar = label(initial, 15, cOnPrimaryContainer, true);
-            avatar.setGravity(Gravity.CENTER);
-            avatar.setBackground(oval(cPrimaryContainer));
-            row.addView(avatar, new LinearLayout.LayoutParams(dp(40), dp(40)));
-
-            LinearLayout col = new LinearLayout(MainActivity.this);
-            col.setOrientation(LinearLayout.VERTICAL);
-            TextView nm = label(name, 15, cOnSurface, true);
-            nm.setSingleLine(true);
-            nm.setEllipsize(TextUtils.TruncateAt.END);
-            col.addView(nm, new LinearLayout.LayoutParams(MATCH, WRAP));
-
-            TextView sb = label(sub, 11, cOnSurfaceVariant, false);
-            sb.setTypeface(Typeface.MONOSPACE);
-            sb.setSingleLine(true);
-            sb.setEllipsize(TextUtils.TruncateAt.END);
-            LinearLayout.LayoutParams sbLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-            sbLp.topMargin = dp(2);
-            col.addView(sb, sbLp);
-
-            LinearLayout.LayoutParams colLp = new LinearLayout.LayoutParams(0, WRAP, 1f);
-            colLp.leftMargin = dp(12);
-            row.addView(col, colLp);
-
-            TextView mark = label("已选", 11, cOnPrimary, true);
-            mark.setPadding(dp(8), dp(4), dp(8), dp(4));
-            mark.setBackground(roundBox(cPrimary, 0, 99));
-            mark.setVisibility(View.GONE);
-            LinearLayout.LayoutParams mkLp = new LinearLayout.LayoutParams(WRAP, WRAP);
-            mkLp.leftMargin = dp(8);
-            row.addView(mark, mkLp);
-
-            row.setOnClickListener(v -> {
-                selected = value;
-                if (peerField != null) {
-                    peerField.setText(value);
-                }
-                paint();
-                updateTargetSummary();
-            });
-
-            LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-            if (!rows.isEmpty()) {
-                rowLp.topMargin = dp(6);
-            }
-            addView(row, rowLp);
-            rows.add(new RowItem(value, row, mark));
-        }
-
-        private void addNote(String note) {
-            TextView t = label(note, 12, cOnSurfaceVariant, false);
-            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(MATCH, WRAP);
-            p.topMargin = dp(6);
-            addView(t, p);
-        }
-
-        private void paint() {
-            for (RowItem r : rows) {
-                boolean on = r.value.equals(selected) && !selected.isEmpty();
-                int bg = on ? cSecondaryContainer : cSurface;
-                r.row.setBackground(ripple(roundBox(bg, 0, 16), 16));
-                r.mark.setVisibility(on ? View.VISIBLE : View.GONE);
-            }
+        @Override
+        protected void onDraw(Canvas canvas) {
+            float w = getWidth();
+            float h = getHeight();
+            float arm = dp(20);
+            float pad = dp(2);
+            Path path = new Path();
+            path.moveTo(pad, pad + arm); path.lineTo(pad, pad); path.lineTo(pad + arm, pad);
+            path.moveTo(w - pad - arm, pad); path.lineTo(w - pad, pad); path.lineTo(w - pad, pad + arm);
+            path.moveTo(w - pad, h - pad - arm); path.lineTo(w - pad, h - pad); path.lineTo(w - pad - arm, h - pad);
+            path.moveTo(pad + arm, h - pad); path.lineTo(pad, h - pad); path.lineTo(pad, h - pad - arm);
+            canvas.drawPath(path, p);
         }
     }
 
-    private static class RowItem {
-        final String value;
-        final LinearLayout row;
-        final TextView mark;
-
-        RowItem(String value, LinearLayout row, TextView mark) {
-            this.value = value;
-            this.row = row;
-            this.mark = mark;
-        }
-    }
-
-    // ================= MD3 Component Builders =================
-
-    private LinearLayout md3Card(int bg, float radiusDp, int l, int t, int r, int b) {
-        LinearLayout c = new LinearLayout(this);
-        c.setOrientation(LinearLayout.VERTICAL);
-        c.setPadding(dp(l), dp(t), dp(r), dp(b));
-        c.setBackground(roundBox(bg, 0, radiusDp));
-        return c;
-    }
+    // ================= Widget & Style Helpers =================
 
     private TextView label(String text, float sp, int color, boolean medium) {
         TextView t = new TextView(this);
@@ -2076,7 +3100,7 @@ public class MainActivity extends Activity {
         return t;
     }
 
-    private EditText md3Input(String hint) {
+    private EditText modalInput(String hint) {
         EditText e = new EditText(this);
         e.setHint(hint);
         e.setHintTextColor(cOnSurfaceVariant);
@@ -2084,12 +3108,12 @@ public class MainActivity extends Activity {
         e.setTextSize(14);
         e.setSingleLine(true);
         e.setGravity(Gravity.CENTER_VERTICAL);
-        e.setPadding(dp(14), 0, dp(14), 0);
-        e.setBackground(roundBox(cSurface, cOutlineVariant, 14));
+        e.setPadding(dp(12), 0, dp(12), 0);
+        e.setBackground(roundBox(cSurface, cBorder, 10));
         return e;
     }
 
-    private Button basePillBtn(String text, float sp) {
+    private Button baseBtn(String text, float sp) {
         Button b = new Button(this);
         b.setText(text);
         b.setTextSize(sp);
@@ -2097,7 +3121,7 @@ public class MainActivity extends Activity {
         b.setIncludeFontPadding(false);
         b.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         b.setGravity(Gravity.CENTER);
-        b.setPadding(dp(16), 0, dp(16), 0);
+        b.setPadding(dp(14), 0, dp(14), 0);
         b.setMinHeight(0);
         b.setMinimumHeight(0);
         b.setMinWidth(0);
@@ -2107,30 +3131,28 @@ public class MainActivity extends Activity {
         return b;
     }
 
-    private Button pillFilledBtn(String text, int bg, int fg) {
-        Button b = basePillBtn(text, 14);
-        applyFilledStyle(b, bg, fg);
+    private Button filledBtn(String text, int bg, int fg) {
+        Button b = baseBtn(text, 13);
+        b.setBackground(ripple(roundBox(bg, 0, 12), 12));
+        b.setTextColor(fg);
         return b;
     }
 
-    private Button pillSmallBtn(String text, int bg, int fg) {
-        Button b = basePillBtn(text, 12);
+    private Button smallFilledBtn(String text, int bg, int fg, View.OnClickListener click) {
+        Button b = baseBtn(text, 12);
         b.setPadding(dp(12), 0, dp(12), 0);
-        applyFilledStyle(b, bg, fg);
+        b.setBackground(ripple(roundBox(bg, 0, 10), 10));
+        b.setTextColor(fg);
+        b.setOnClickListener(click);
         return b;
     }
 
-    private void applyFilledStyle(Button b, int bg, int fg) {
-        b.setBackground(ripple(roundBox(bg, 0, 99), 99));
-        b.setTextColor(new ColorStateList(
-                new int[][]{{-android.R.attr.state_enabled}, {}},
-                new int[]{cOutline, fg}));
-    }
-
-    private Button pillOutlineBtn(String text) {
-        Button b = basePillBtn(text, 13);
-        b.setBackground(ripple(roundBox(cSurface, cOutline, 99), 99));
-        b.setTextColor(cPrimary);
+    private Button smallOutlineBtn(String text, View.OnClickListener click) {
+        Button b = baseBtn(text, 12);
+        b.setPadding(dp(11), 0, dp(11), 0);
+        b.setBackground(ripple(roundBox(cSurface, cBorder, 10), 10));
+        b.setTextColor(cOnSurface);
+        b.setOnClickListener(click);
         return b;
     }
 
@@ -2157,16 +3179,8 @@ public class MainActivity extends Activity {
                 roundBox(Color.WHITE, 0, radiusDp));
     }
 
-    private TextView pathBadgeView(String via) {
-        TextView t = label(pathLabel(via), 11, cOnPrimaryContainer, true);
-        t.setPadding(dp(8), dp(3), dp(8), dp(3));
-        stylePathBadge(t, via);
-        return t;
-    }
-
     private void stylePathBadge(TextView t, String via) {
-        String label = pathLabel(via);
-        t.setText(label);
+        t.setText(pathLabel(via));
         if ("lan".equalsIgnoreCase(via)) {
             t.setTextColor(cOnPrimaryContainer);
             t.setBackground(roundBox(cPrimaryContainer, 0, 99));
@@ -2174,8 +3188,8 @@ public class MainActivity extends Activity {
             t.setTextColor(cWarn);
             t.setBackground(roundBox(cWarnContainer, 0, 99));
         } else {
-            t.setTextColor(cOnTertiaryContainer);
-            t.setBackground(roundBox(cTertiaryContainer, 0, 99));
+            t.setTextColor(cOnSurface);
+            t.setBackground(roundBox(cBorder, 0, 99));
         }
     }
 
@@ -2192,69 +3206,20 @@ public class MainActivity extends Activity {
         return path == null ? "" : path;
     }
 
-    /** Geometric nav icons drawn via Android Canvas so rendering is crisp at all DPIs. */
-    private class NavIcon extends Drawable {
-        private final int kind;
-        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-
-        NavIcon(int kind, int color) {
-            this.kind = kind;
-            paint.setColor(color);
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(dp(1.9f));
-            paint.setStrokeCap(Paint.Cap.ROUND);
-            paint.setStrokeJoin(Paint.Join.ROUND);
-        }
-
-        @Override
-        public void draw(Canvas canvas) {
-            android.graphics.Rect b = getBounds();
-            float w = b.width();
-            float h = b.height();
-            Path p = new Path();
-            if (kind == 0) { // Send: diagonal arrow up-right inside tray/open
-                p.moveTo(w * 0.22f, h * 0.78f);
-                p.lineTo(w * 0.78f, h * 0.22f);
-                p.moveTo(w * 0.36f, h * 0.22f);
-                p.lineTo(w * 0.78f, h * 0.22f);
-                p.lineTo(w * 0.78f, h * 0.64f);
-            } else if (kind == 1) { // Receive: downward arrow into tray
-                p.moveTo(w * 0.50f, h * 0.18f);
-                p.lineTo(w * 0.50f, h * 0.65f);
-                p.moveTo(w * 0.30f, h * 0.47f);
-                p.lineTo(w * 0.50f, h * 0.67f);
-                p.lineTo(w * 0.70f, h * 0.47f);
-                p.moveTo(w * 0.20f, h * 0.74f);
-                p.lineTo(w * 0.20f, h * 0.84f);
-                p.lineTo(w * 0.80f, h * 0.84f);
-                p.lineTo(w * 0.80f, h * 0.74f);
-            } else { // Devices / Pair: linked rounded squares
-                canvas.drawRoundRect(w * 0.16f, h * 0.26f, w * 0.58f, h * 0.74f, w * 0.10f, h * 0.10f, paint);
-                canvas.drawRoundRect(w * 0.42f, h * 0.26f, w * 0.84f, h * 0.74f, w * 0.10f, h * 0.10f, paint);
-                return;
-            }
-            canvas.drawPath(p, paint);
-        }
-
-        @Override public void setAlpha(int alpha) {}
-        @Override public void setColorFilter(ColorFilter cf) {}
-        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
-    }
-
     // ================= Platform & Utility Helpers =================
 
     private void startDotPulse() {
         if (dotAnimator != null) {
             dotAnimator.cancel();
         }
-        dotAnimator = ValueAnimator.ofFloat(1f, 0.45f);
-        dotAnimator.setDuration(800);
+        dotAnimator = ValueAnimator.ofFloat(1f, 0.4f);
+        dotAnimator.setDuration(900);
         dotAnimator.setRepeatMode(ValueAnimator.REVERSE);
         dotAnimator.setRepeatCount(ValueAnimator.INFINITE);
         dotAnimator.setInterpolator(new AccelerateDecelerateInterpolator());
         dotAnimator.addUpdateListener(a -> {
-            if (topDot != null) {
-                topDot.setAlpha((Float) a.getAnimatedValue());
+            if (recvPulseDot != null) {
+                recvPulseDot.setAlpha((Float) a.getAnimatedValue());
             }
         });
         dotAnimator.start();
@@ -2265,8 +3230,8 @@ public class MainActivity extends Activity {
             dotAnimator.cancel();
             dotAnimator = null;
         }
-        if (topDot != null) {
-            topDot.setAlpha(1f);
+        if (recvPulseDot != null) {
+            recvPulseDot.setAlpha(1f);
         }
     }
 
@@ -2361,10 +3326,13 @@ public class MainActivity extends Activity {
     }
 
     private static boolean isAutoTarget(String peer) {
-        return HEX64.matcher(peer).matches();
+        return peer != null && HEX64.matcher(peer).matches();
     }
 
     private static boolean isLanTarget(String peer) {
+        if (peer == null) {
+            return false;
+        }
         int i = peer.lastIndexOf(':');
         if (i <= 0 || i >= peer.length() - 1) {
             return false;

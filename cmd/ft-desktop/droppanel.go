@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -11,11 +12,10 @@ import (
 	"github.com/cwlindean/filetransfer/core/client"
 )
 
-// The drop panel is the "only while dragging" surface: it appears when the
-// shell starts dragging files (a SysDragImage window is created), shows one box
-// per paired device with the first one enlarged, lets the pointer highlight a
-// box, and sends to that box when the files are released on it. It never takes
-// focus (WS_EX_NOACTIVATE) so the drag itself is not disturbed.
+// The drop panel is the "only while dragging" surface: it appears in the
+// bottom-right corner when Explorer begins dragging files (SysDragImage), expands
+// on pointer hover to pick a target device, and sends on release without ever
+// taking focus (WS_EX_NOACTIVATE).
 
 var (
 	procSetTimer         = user32.NewProc("SetTimer")
@@ -41,21 +41,17 @@ const (
 	wmPanelShow = wmApp + 20
 	wmPanelHide = wmApp + 21
 
-	wsExNoActivate   = 0x08000000
-	swShowNoActivate = 4
-	swpNoActivate    = 0x0010
-	swpShowWindow    = 0x0040
-	hwndTopmost      = ^uintptr(0)
+	wsExNoActivate = 0x08000000
+	swpNoActivate  = 0x0010
+	swpShowWindow  = 0x0040
+	hwndTopmost    = ^uintptr(0)
 
-	// Design pixels at 96 dpi; scaled by the monitor DPI at creation time.
-	// The panel has two shapes: a small "drop here" window that appears when a
-	// drag starts, and the three-device picker it grows into once the pointer
-	// reaches it. Both are pinned to the bottom-right corner of the work area.
-	panelW    = 300
-	panelH    = 180
-	compactW  = 196
-	compactH  = 60
-	anchorGap = 24
+	// Design pixels at 96 dpi, scaled dynamically by monitor DPI.
+	compactW  = 192
+	compactH  = 54
+	panelW    = 304
+	panelH    = 192
+	anchorGap = 20
 
 	panelTimerID = 7
 )
@@ -65,9 +61,9 @@ type dropPanel struct {
 	app      *app
 	peers    []client.Peer
 	active   int
-	hover    int
 	shown    bool
 	expanded bool
+	acrylic  bool
 	outside  int
 	dragGone int
 	buttonUp int
@@ -84,12 +80,20 @@ var panelWndProcPtr uintptr
 var winEventPtr uintptr
 
 func newDropPanel(a *app) *dropPanel {
-	p := &dropPanel{app: a, active: 0, hover: -1}
+	p := &dropPanel{app: a, active: 0}
 	thePanel = p
 	return p
 }
 
-// ensure creates the panel window on first use.
+func (p *dropPanel) px(v int32) int32 {
+	dpi := p.dpi
+	if dpi == 0 {
+		dpi = 96
+	}
+	return int32(math.Round(float64(v) * float64(dpi) / 96.0))
+}
+
+// ensure creates the panel window on first use and enables Win11 Acrylic glass.
 func (p *dropPanel) ensure() error {
 	if p.hwnd != 0 {
 		return nil
@@ -109,8 +113,6 @@ func (p *dropPanel) ensure() error {
 	name := utf16Ptr(cls)
 	wc.lpszClassName = name
 	if r, _, err := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc))); r == 0 {
-		// Class may already be registered by a previous window; only fail on
-		// other errors.
 		if err != nil && err.Error() != "The operation completed successfully." {
 			return fmt.Errorf("注册面板窗口类失败: %v", err)
 		}
@@ -125,13 +127,13 @@ func (p *dropPanel) ensure() error {
 		return fmt.Errorf("创建面板窗口失败: %v", err)
 	}
 	p.hwnd = syscall.Handle(h)
+	_, dark := theme()
+	p.acrylic = enableAcrylicBackdrop(p.hwnd, dark)
 	p.applyDPI()
 	procDragAcceptFiles.Call(uintptr(p.hwnd), 1)
 	return nil
 }
 
-// applyDPI sizes the panel for the monitor it is on. The window's DPI is only
-// reliable once it has been shown at least once, so this runs again on show.
 func (p *dropPanel) applyDPI() {
 	dpi, _, _ := procGetDpiForWindow.Call(uintptr(p.hwnd))
 	if dpi == 0 {
@@ -149,25 +151,35 @@ func (p *dropPanel) applyDPI() {
 	p.applyRegion()
 }
 
-// applyRegion clips the window to a rounded rectangle matching its current
-// size. Both shapes are resized at runtime, so this must follow every resize
-// or the expanded panel gets cut off at the compact window's outline.
+// applyRegion clips corners on systems without native DWM rounded corners.
 func (p *dropPanel) applyRegion() {
-	rad := uintptr(float64(14) * float64(p.dpi) / 96.0)
+	if p.acrylic {
+		return
+	}
+	rad := uintptr(p.px(12))
 	r, _, _ := procCreateRoundRgn.Call(0, 0, uintptr(p.pw+1), uintptr(p.ph+1), rad, rad)
 	procSetWindowRgn.Call(uintptr(p.hwnd), r, 1)
 }
 
+func (p *dropPanel) freeFonts() {
+	for _, f := range []syscall.Handle{p.fontLg, p.fontNm, p.fontSm} {
+		if f != 0 {
+			procDeleteObject.Call(uintptr(f))
+		}
+	}
+	p.fontLg, p.fontNm, p.fontSm = 0, 0, 0
+}
+
 func (p *dropPanel) makeFonts() {
-	mk := func(size int32, weight int32, face string) syscall.Handle {
-		h, _, _ := procCreateFontW.Call(uintptr(size), 0, 0, 0, uintptr(weight), 0, 0, 0,
-			1, 0, 0, 5, 0, uintptr(unsafe.Pointer(utf16Ptr(face))))
+	p.freeFonts()
+	mk := func(size int32, weight int32) syscall.Handle {
+		h, _, _ := procCreateFontW.Call(uintptr(-p.px(size)), 0, 0, 0, uintptr(weight), 0, 0, 0,
+			1, 0, 0, 5, 0, uintptr(unsafe.Pointer(utf16Ptr("Microsoft YaHei UI"))))
 		return syscall.Handle(h)
 	}
-	sc := func(v int32) int32 { return int32(float64(v) * float64(p.dpi) / 96.0) }
-	p.fontLg = mk(-sc(16), 700, "Microsoft YaHei UI")
-	p.fontNm = mk(-sc(13), 600, "Microsoft YaHei UI")
-	p.fontSm = mk(-sc(11), 400, "Consolas")
+	p.fontLg = mk(14, 600)
+	p.fontNm = mk(13, 600)
+	p.fontSm = mk(12, 400)
 }
 
 func (p *dropPanel) reloadPeers() {
@@ -179,12 +191,12 @@ func (p *dropPanel) reloadPeers() {
 		peers = peers[:3]
 	}
 	p.peers = peers
-	if p.active >= len(peers) {
+	if p.active >= len(peers) || p.active < 0 {
 		p.active = 0
 	}
 }
 
-// show places the panel next to the cursor, clamped to the work area.
+// show anchors the panel at the bottom-right work-area corner.
 func (p *dropPanel) show() {
 	if p.shown {
 		return
@@ -223,30 +235,21 @@ func (p *dropPanel) hide() {
 	p.expanded = false
 }
 
-// size returns the panel size in physical pixels for the current shape.
 func (p *dropPanel) size() (int32, int32) {
 	w, h := int32(panelW), int32(panelH)
 	if !p.expanded {
 		w, h = compactW, compactH
 	}
-	dpi := p.dpi
-	if dpi == 0 {
-		dpi = 96
-	}
-	return int32(int64(w) * int64(dpi) / 96), int32(int64(h) * int64(dpi) / 96)
+	return p.px(w), p.px(h)
 }
 
-// place returns the top-left corner that pins the window to the bottom-right
-// of the work area, keeping that corner fixed when the shape changes.
 func (p *dropPanel) place(w, h int32) (int32, int32) {
 	var wa rectT
 	procSystemParametersInfoW.Call(uintptr(spiGetWorkArea), 0, uintptr(unsafe.Pointer(&wa)), 0)
-	gap := int32(int64(anchorGap) * int64(p.dpi) / 96)
+	gap := p.px(anchorGap)
 	return wa.right - w - gap, wa.bottom - h - gap
 }
 
-// setExpanded morphs between the drop hint and the device picker. The
-// bottom-right corner stays put, so the window grows up and to the left.
 func (p *dropPanel) setExpanded(v bool) {
 	if p.expanded == v {
 		return
@@ -263,46 +266,32 @@ func (p *dropPanel) setExpanded(v bool) {
 	p.app.event("desktop.panel_shape", map[string]any{"expanded": v})
 }
 
-// layout splits the client area into the title row, three device boxes and the
-// footer. The active box gets 2.35x the width of the others, matching the HTML
-// prototype the user approved.
-func (p *dropPanel) layout(w, h int32) (title rectT, boxes []rectT, foot rectT) {
-	pad := int32(12)
-	title = rectT{pad, pad, w - pad, pad + 18}
-	foot = rectT{pad, h - pad - 18, w - pad, h - pad}
-	top := title.bottom + 12
-	bottom := foot.top - 12
+func (p *dropPanel) layout(w, h int32) (title rectT, rows []rectT) {
+	pad := p.px(14)
+	title = rectT{pad, p.px(12), w - pad, p.px(36)}
 	n := len(p.peers)
 	if n == 0 {
 		return
 	}
-	gap := int32(8)
-	avail := w - 2*pad - gap*int32(n-1)
-	weights := make([]float64, n)
-	total := 0.0
-	for i := range p.peers {
-		weights[i] = 1
-		if i == p.active {
-			weights[i] = 2.0
-		}
-		total += weights[i]
+	top := title.bottom + p.px(6)
+	gap := p.px(6)
+	rowH := p.px(40)
+	avail := h - top - pad
+	if n > 0 && int32(n)*rowH+int32(n-1)*gap > avail {
+		rowH = (avail - int32(n-1)*gap) / int32(n)
 	}
-	x := pad
+	y := top
 	for i := 0; i < n; i++ {
-		wI := int32(float64(avail) * weights[i] / total)
-		if i == n-1 {
-			wI = w - pad - x
-		}
-		boxes = append(boxes, rectT{x, top, x + wI, bottom})
-		x += wI + gap
+		rows = append(rows, rectT{pad, y, w - pad, y + rowH})
+		y += rowH + gap
 	}
 	return
 }
 
 func (p *dropPanel) hit(x, y int32) int {
-	_, boxes, _ := p.layout(p.pw, p.ph)
-	for i, b := range boxes {
-		if ptIn(b, x, y) {
+	_, rows := p.layout(p.pw, p.ph)
+	for i, r := range rows {
+		if ptIn(r, x, y) {
 			return i
 		}
 	}
@@ -313,93 +302,100 @@ func (p *dropPanel) paint(hwnd syscall.Handle) {
 	var ps paintStruct
 	hdc, _, _ := procBeginPaint.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&ps)))
 	defer procEndPaint.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&ps)))
-	d := uintptr(hdc)
-	pal, _ := theme()
 
-	pen, _, _ := procCreatePen.Call(0, 1, uintptr(pal.line))
-	brush, _, _ := procCreateBrush.Call(uintptr(pal.paper))
-	oldPen, _, _ := procSelectObject.Call(d, pen)
-	oldBrush, _, _ := procSelectObject.Call(d, brush)
-	rad := uintptr(float64(14) * float64(p.dpi) / 96.0)
-	procRoundRect.Call(d, 0, 0, uintptr(p.pw+1), uintptr(p.ph+1), rad, rad)
-	procSelectObject.Call(d, oldPen)
-	procSelectObject.Call(d, oldBrush)
-	procDeleteObject.Call(pen)
-	procDeleteObject.Call(brush)
-
-	procSetBkMode.Call(d, bkTransparent)
-	if !p.expanded {
-		// Small landing pad: dashed accent frame with one line of text.
-		inset := int32(9)
-		if sc := int32(float64(9) * float64(p.dpi) / 96.0); sc > inset {
-			inset = sc
-		}
-		dotPen, _, _ := procCreatePen.Call(2, 1, uintptr(pal.accent)) // PS_DOT
-		old, _, _ := procSelectObject.Call(d, dotPen)
-		procRectangle.Call(d, uintptr(inset), uintptr(inset), uintptr(p.pw-inset), uintptr(p.ph-inset))
-		procSelectObject.Call(d, old)
-		procDeleteObject.Call(dotPen)
-		drawText(d, p.fontNm, "拖到此处 · 轻渡快传",
-			rectT{inset + 6, inset + 4, p.pw - inset - 6, p.ph - inset - 4},
-			dtSingleLine|dtVCenter|dtCenter, pal.ink2)
+	pal, dark := theme()
+	cv := newGlassCanvas(hdc, p.pw, p.ph)
+	if cv == nil {
+		fillRect(hdc, rectT{0, 0, p.pw, p.ph}, pal.paper)
 		return
 	}
-	title, boxes, foot := p.layout(p.pw, p.ph)
-	drawText(d, p.fontLg, "发送到设备", title, dtSingleLine|dtVCenter, pal.ink)
 
-	for i, b := range boxes {
-		active := i == p.active
-		fill := uintptr(pal.paper)
-		edge := uintptr(pal.line)
-		if active {
-			fill = uintptr(pal.accentSoft)
-			edge = uintptr(pal.accent)
+	full := rectT{0, 0, p.pw, p.ph}
+	if p.acrylic {
+		// Semi-transparent frost over DWM Acrylic blur + hairline edge when non-acrylic
+		tintAlpha := byte(175)
+		if dark {
+			tintAlpha = 190
 		}
-		bp, _, _ := procCreateBrush.Call(fill)
-		ep, _, _ := procCreatePen.Call(0, 1, edge)
-		op, _, _ := procSelectObject.Call(d, ep)
-		ob, _, _ := procSelectObject.Call(d, bp)
-		procRoundRect.Call(d, uintptr(b.left), uintptr(b.top), uintptr(b.right), uintptr(b.bottom), 12, 12)
-		procSelectObject.Call(d, op)
-		procSelectObject.Call(d, ob)
-		procDeleteObject.Call(bp)
-		procDeleteObject.Call(ep)
-
-		name := p.peers[i].Name
-		if name == "" {
-			name = "未命名设备"
-		}
-		narrow := b.right-b.left < 150
-		if narrow {
-			// A narrow box only has room for the name, wrapped over two lines.
-			nm := rectT{b.left + 3, b.top + 8, b.right - 3, b.bottom - 8}
-			drawText(d, p.fontSm, name, nm, dtSingleLine|dtVCenter|dtCenter|dtEndEllipsis, pal.ink)
-		} else {
-			nm := rectT{b.left + 6, b.top + 10, b.right - 6, b.top + 32}
-			drawText(d, p.fontNm, name, nm, dtSingleLine|dtVCenter|dtCenter|dtEndEllipsis, pal.ink)
-			id := rectT{b.left + 6, b.top + 34, b.right - 6, b.top + 50}
-			drawText(d, p.fontSm, shortID(p.peers[i].ID), id, dtSingleLine|dtCenter, pal.ink2)
-		}
-		if active {
-			tag := rectT{b.left + 6, b.bottom - 24, b.right - 6, b.bottom - 8}
-			drawText(d, p.fontSm, "松手发送", tag, dtSingleLine|dtCenter, pal.accent)
-		}
+		cv.fillColorAlpha(full, pal.paper, tintAlpha)
+	} else {
+		cv.fillColorAlpha(full, pal.paper, 255)
+		cv.drawAlphaRoundRect(full, float64(p.px(12)), 0, 0, pal.line, 255, 1.0)
 	}
+
+	if !p.expanded {
+		// Compact floating pill: small paper-boat dot mark + single clear label.
+		markSz := p.px(10)
+		cy := p.ph / 2
+		label := "拖到这里发送"
+		tw := textWidth(cv.memDC, p.fontNm, label)
+		totalW := markSz + p.px(8) + tw
+		startX := (p.pw - totalW) / 2
+		if startX < p.px(10) {
+			startX = p.px(10)
+		}
+		markR := rectT{startX, cy - markSz/2, startX + markSz, cy + markSz/2}
+		cv.drawAlphaRoundRect(markR, float64(markSz)/2, pal.accent, 255, 0, 0, 0)
+		textR := rectT{markR.right + p.px(8), 0, p.pw - p.px(10), p.ph}
+		cv.drawAlphaText(p.fontNm, label, textR, dtSingleLine|dtVCenter, pal.ink)
+		cv.finishBlit(hdc)
+		return
+	}
+
+	title, rows := p.layout(p.pw, p.ph)
+	cv.drawAlphaText(p.fontLg, "发给", title, dtSingleLine|dtVCenter, pal.ink2)
+
 	if len(p.peers) == 0 {
-		drawText(d, p.fontSm, "尚未配对设备 · 松手打开主界面配对", rectT{12, p.ph / 2, p.pw - 12, p.ph/2 + 20},
-			dtSingleLine|dtCenter, pal.ink2)
+		box := rectT{p.px(14), title.bottom + p.px(12), p.pw - p.px(14), p.ph - p.px(18)}
+		boxFill := pal.paper
+		boxA := byte(225)
+		if !p.acrylic {
+			boxA = 255
+		}
+		cv.drawAlphaRoundRect(box, float64(p.px(10)), boxFill, boxA, pal.line, 255, 1.0)
+		cv.drawAlphaText(p.fontSm, "还没有已配对设备\n松手后打开配对窗口",
+			rectT{box.left + p.px(10), box.top + p.px(14), box.right - p.px(10), box.bottom - p.px(10)},
+			dtCenter|dtWordBreak, pal.ink2)
+		cv.finishBlit(hdc)
+		return
 	}
-	drawText(d, p.fontSm, "拖动时出现，松手后自动隐藏", foot, dtSingleLine|dtVCenter|dtCenter, pal.ink2)
+
+	for i, r := range rows {
+		active := i == p.active
+		fill := pal.paper
+		fillA := byte(215)
+		edge := pal.line
+		borderW := 1.0
+		if active {
+			fill = pal.accentSoft
+			fillA = 240
+			edge = pal.accent
+			borderW = float64(p.px(2))
+			if borderW < 1.5 {
+				borderW = 1.5
+			}
+		}
+		if !p.acrylic {
+			fillA = 255
+		}
+		cv.drawAlphaRoundRect(r, float64(p.px(10)), fill, fillA, edge, 255, borderW)
+
+		name := peerLabel(p.peers[i])
+		rightPad := p.px(12)
+		if active {
+			hintW := textWidth(cv.memDC, p.fontSm, "松手发送") + p.px(16)
+			hintR := rectT{r.right - hintW, r.top, r.right - p.px(12), r.bottom}
+			cv.drawAlphaText(p.fontSm, "松手发送", hintR, dtSingleLine|dtVCenter|dtRight, pal.accent)
+			rightPad = hintW + p.px(4)
+		}
+		nmR := rectT{r.left + p.px(12), r.top, r.right - rightPad, r.bottom}
+		cv.drawAlphaText(p.fontNm, name, nmR, dtSingleLine|dtVCenter|dtEndEllipsis, pal.ink)
+	}
+
+	cv.finishBlit(hdc)
 }
 
-func shortID(id string) string {
-	if len(id) > 12 {
-		return id[:12]
-	}
-	return id
-}
-
-// onDrop is called with the WM_DROPFILES package while the panel is visible.
+// onDrop handles WM_DROPFILES while the panel is visible.
 func (p *dropPanel) onDrop(hdrop syscall.Handle) {
 	files := dragQueryFiles(hdrop)
 	var pt pointT
@@ -407,7 +403,6 @@ func (p *dropPanel) onDrop(hdrop syscall.Handle) {
 	procDragFinish.Call(uintptr(hdrop))
 	idx := p.active
 	if !p.expanded {
-		// Dropped straight onto the small window: send to the first device.
 		idx = 0
 		ok = 0
 	}
@@ -422,8 +417,9 @@ func (p *dropPanel) onDrop(hdrop syscall.Handle) {
 	}
 	if len(p.peers) == 0 {
 		openMainWindow(p.app)
+		openPairWindow(existingMainWindow(), p.app)
 		if trayHandle != nil {
-			trayHandle.balloon("尚未配对设备", "请先配对手机或其他设备后再拖放发送")
+			trayHandle.balloon("尚未配对设备", "请先扫码或输入 6 位码配对后再拖放发送")
 		}
 		return
 	}
@@ -435,12 +431,20 @@ func (p *dropPanel) onDrop(hdrop syscall.Handle) {
 		res, err := sendToPeer(p.app, files, peer)
 		if err != nil {
 			p.app.event("desktop.panel_send_error", map[string]any{"error": err.Error(), "peer": peer.Name})
+			if trayHandle != nil {
+				trayHandle.balloon("发送失败", err.Error())
+			}
 			return
 		}
 		p.app.event("desktop.panel_sent", map[string]any{
 			"peer": peer.Name, "files": len(res.Files), "bytes": res.Bytes,
 		})
-		p.app.note(fmt.Sprintf("发送 → %s · %d 个文件 · %d B", peer.Name, len(res.Files), res.Bytes))
+		if trayHandle != nil {
+			trayHandle.balloon("发送完成", fmt.Sprintf("已发送给 %s（%s）", peerLabel(peer), summarizeFiles(res.Files)))
+		}
+		if h := existingMainWindow(); h != 0 {
+			procPostMessageW.Call(uintptr(h), wmAppPaint, 0, 0)
+		}
 	}()
 }
 
@@ -454,6 +458,8 @@ func panelWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintp
 	case wmCreate:
 		p.hwnd = hwnd
 		return 0
+	case wmEraseBkgnd:
+		return 1
 	case wmPaint:
 		p.paint(hwnd)
 		return 0
@@ -461,11 +467,6 @@ func panelWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintp
 		if !p.shown {
 			return 0
 		}
-		// A drag is one continuous button-down gesture. The shell creates and
-		// tears down its drag-image window repeatedly while the pointer crosses
-		// windows, so visibility follows the mouse button instead: hide a few
-		// ticks after the left button comes up. This is what keeps the panel
-		// from blinking while the drag passes over other windows.
 		ksL, _, _ := procGetAsyncKeyState.Call(1) // VK_LBUTTON
 		ksR, _, _ := procGetAsyncKeyState.Call(2) // VK_RBUTTON
 		btnDown := int32(ksL)&0x8000 != 0 || int32(ksR)&0x8000 != 0
@@ -485,13 +486,10 @@ func panelWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintp
 		var wr rectT
 		procGetWindowRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&wr)))
 		inside := cursor.x >= wr.left && cursor.x < wr.right && cursor.y >= wr.top && cursor.y < wr.bottom
-		pad := int32(float64(16) * float64(p.dpi) / 96.0)
+		pad := p.px(16)
 		insideLoose := cursor.x >= wr.left-pad && cursor.x < wr.right+pad && cursor.y >= wr.top-pad && cursor.y < wr.bottom+pad
 
 		dragMu.Lock()
-		// Also drop entries whose window no longer exists: when a drag ends the
-		// shell may tear the image window down without us seeing that exact
-		// destroy event (and hwnd reuse would otherwise pin it forever).
 		for h := range dragWins {
 			if r, _, _ := procIsWindow.Call(h); r == 0 {
 				delete(dragWins, h)
@@ -509,10 +507,7 @@ func panelWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintp
 		}
 		live := len(dragWins)
 		dragMu.Unlock()
-		// Explorer hides SysDragImage whenever the pointer rests over a
-		// WM_DROPFILES window; hiding on live==0 while the mouse button is
-		// still held over the panel would expose Explorer, re-show
-		// SysDragImage, and loop between compact and expanded.
+		// Explorer hides SysDragImage while dragging over a WM_DROPFILES target.
 		if live == 0 && !(btnDown && insideLoose) {
 			p.dragGone++
 			if p.dragGone*60 >= 300 {
@@ -524,8 +519,6 @@ func panelWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintp
 			p.dragGone = 0
 		}
 		if !p.expanded {
-			// The small "drop here" window turns into the picker as soon as
-			// the dragged file reaches it.
 			if inside {
 				p.setExpanded(true)
 			}
@@ -565,9 +558,6 @@ func panelWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintp
 	return r
 }
 
-// winEventProc turns the shell's drag image into panel visibility. The shell
-// creates a window of class SysDragImage when a drag starts and destroys it on
-// drop or cancel, which is the only public signal available for both cases.
 func winEventProc(hook uintptr, event uint32, hwnd uintptr, idObject, idChild int32, idThread, ms uint32) uintptr {
 	const (
 		eventObjectCreate  = 0x8000
@@ -575,7 +565,7 @@ func winEventProc(hook uintptr, event uint32, hwnd uintptr, idObject, idChild in
 		eventObjectShow    = 0x8002
 		eventObjectHide    = 0x8003
 	)
-	if hwnd == 0 || idObject != 0 { // OBJID_WINDOW
+	if hwnd == 0 || idObject != 0 {
 		return 0
 	}
 	var buf [64]uint16
@@ -590,8 +580,6 @@ func winEventProc(hook uintptr, event uint32, hwnd uintptr, idObject, idChild in
 	if thePanel == nil || thePanel.hwnd == 0 {
 		return 0
 	}
-	// The shell may reuse or cycle helper drag-image windows while one drag is
-	// in flight, so watch Create/Show and Destroy/Hide transitions uniformly.
 	dragMu.Lock()
 	switch event {
 	case eventObjectCreate, eventObjectShow:
@@ -612,9 +600,6 @@ var (
 	dragWins = map[uintptr]bool{}
 )
 
-// startDragWatch installs the WinEvent hook on the calling thread, which must
-// be the thread that pumps messages (the tray thread). Out-of-context WinEvents
-// are delivered through that message loop.
 func startDragWatch() uintptr {
 	const (
 		eventObjectCreate = 0x8000
@@ -637,13 +622,15 @@ func dragQueryFiles(hdrop syscall.Handle) []string {
 	if count <= 0 {
 		return nil
 	}
-	files := make([]string, 0, count)
+	out := make([]string, 0, count)
 	for i := 0; i < count; i++ {
-		buf := make([]uint16, 32768)
-		n := int(dragQueryFile(hdrop, uint32(i), &buf[0], uint32(len(buf))))
-		if n > 0 {
-			files = append(files, syscall.UTF16ToString(buf[:n]))
+		need := int(dragQueryFile(hdrop, uint32(i), nil, 0))
+		if need <= 0 {
+			continue
 		}
+		buf := make([]uint16, need+2)
+		dragQueryFile(hdrop, uint32(i), &buf[0], uint32(len(buf)))
+		out = append(out, syscall.UTF16ToString(buf))
 	}
-	return files
+	return out
 }

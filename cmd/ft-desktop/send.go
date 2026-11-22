@@ -5,6 +5,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 	"unsafe"
@@ -66,8 +69,42 @@ func sendViaRelay(a *app, files []string) (client.Result, client.Peer, error) {
 	return res, peers[0], err
 }
 
+// expandSendPaths flattens any dropped/selected directories into their regular
+// file paths because client.SendFiles transfers flat file entries.
+func expandSendPaths(paths []string) []string {
+	var out []string
+	for _, p := range paths {
+		st, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		if !st.IsDir() {
+			out = append(out, p)
+			continue
+		}
+		_ = filepath.WalkDir(p, func(sub string, d fs.DirEntry, werr error) error {
+			if werr == nil && !d.IsDir() {
+				out = append(out, sub)
+			}
+			return nil
+		})
+	}
+	return out
+}
+
+func summarizeFiles(files []string) string {
+	if len(files) == 1 {
+		return sanitizeLedgerText(filepath.Base(files[0]))
+	}
+	return fmt.Sprintf("%d 个文件", len(files))
+}
+
 // sendToPeer pushes files to one paired device and logs the outcome.
 func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error) {
+	files = expandSendPaths(files)
+	if len(files) == 0 {
+		return client.Result{}, fmt.Errorf("所选文件夹内没有可发送的文件")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	res, err := client.SendFiles(ctx, client.Options{
@@ -78,15 +115,15 @@ func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error)
 	}, peer.ID, files)
 	if err != nil {
 		a.event("desktop.send_error", map[string]any{"to": truncID(peer.ID), "error": err.Error()})
-		a.note(fmt.Sprintf("%s  → %s · %d 个文件 · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), len(files)))
+		a.note(fmt.Sprintf("%s  → %s · %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeFiles(files)))
 		return client.Result{}, err
 	}
 	a.event("desktop.send_done", map[string]any{
 		"to": truncID(peer.ID), "bytes": res.Bytes, "chunks": res.Chunks,
 		"duration_ms": res.Duration.Milliseconds(), "transfer_id": res.TransferID,
 	})
-	a.note(fmt.Sprintf("%s  → %s · %d 个文件 · %s · %s · 中继",
-		time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), len(res.Files), humanBytes(res.Bytes), fmtDur(res.Duration)))
+	a.note(fmt.Sprintf("%s  → %s · %s · %s · %s · 中继",
+		time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeFiles(files), humanBytes(res.Bytes), fmtDur(res.Duration)))
 	return res, nil
 }
 

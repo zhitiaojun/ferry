@@ -330,8 +330,8 @@ func (t *tray) handle(nc net.Conn) {
 	t.app.event("desktop.transfer_done", map[string]any{
 		"peer": peer, "files": res.Files, "bytes": res.Bytes,
 	})
-	t.app.note(fmt.Sprintf("%s  ← %s · %d 个文件 · %s · %s · LAN",
-		time.Now().Format("15:04"), sanitizeLedgerText(peerName), len(res.Files), humanBytes(res.Bytes), fmtDur(time.Since(start))))
+	t.app.note(fmt.Sprintf("%s  ← %s · %s · %s · %s · LAN",
+		time.Now().Format("15:04"), sanitizeLedgerText(peerName), summarizeFiles(res.Files), humanBytes(res.Bytes), fmtDur(time.Since(start))))
 	if h := existingMainWindow(); h != 0 {
 		procPostMessageW.Call(uintptr(h), wmAppPaint, 0, 0)
 	}

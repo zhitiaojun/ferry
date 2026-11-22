@@ -4,12 +4,62 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/pairing"
 	"github.com/cwlindean/filetransfer/core/signaling"
 )
+
+// GeneratePairCode returns a random 6-digit one-time pairing code.
+func GeneratePairCode() string {
+	return pairing.GenerateCode()
+}
+
+// BuildMyPairURI builds a ferry://pair?... QR payload valid for ttlSec seconds
+// (default 600 = 10 minutes).
+func BuildMyPairURI(keyPath, code, name string, ttlSec int) (string, error) {
+	if ttlSec <= 0 {
+		ttlSec = int(pairing.DefaultTTL / time.Second)
+	}
+	key, err := identity.LoadOrCreateKey(keyPath)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(name) == "" {
+		if h, herr := os.Hostname(); herr == nil {
+			name = h
+		}
+	}
+	exp := time.Now().UTC().Add(time.Duration(ttlSec) * time.Second)
+	return pairing.BuildPairURI(key.IDHex(), code, name, exp), nil
+}
+
+// PairWithURI validates an incoming ferry://pair?... QR URI against its 10-minute
+// expiration and runs SPAKE2 pairing against the peer.
+func PairWithURI(signalURL, keyPath, pairedPath, rawURI string) (string, error) {
+	u, err := pairing.ParsePairURI(rawURI, time.Now().UTC())
+	if err != nil {
+		return "", err
+	}
+	res, err := PairWithCode(signalURL, keyPath, pairedPath, u.Code, u.DeviceID)
+	if err != nil {
+		return "", err
+	}
+	if u.Name != "" {
+		if store, lerr := identity.LoadPaired(pairedPath); lerr == nil {
+			if dev, ok := store.Get(u.DeviceID); ok && dev.Name == "" {
+				dev.Name = u.Name
+				if aerr := store.Add(dev); aerr == nil {
+					_ = store.Save()
+				}
+			}
+		}
+	}
+	return res, nil
+}
 
 // PairWithCode runs the initiator side of one-time-code pairing against peerID.
 // The 6-digit code never leaves the device; both sides prove knowledge of it
@@ -47,13 +97,13 @@ func PairWithCode(signalURL, keyPath, pairedPath, code, peerID string) (string, 
 }
 
 // WaitPairCode runs the responder side: it waits for someone who typed the same
-// code and then trusts them.
+// code and then trusts them (default timeout 10 minutes).
 func WaitPairCode(signalURL, keyPath, pairedPath, code string, timeoutMS int) (string, error) {
 	if signalURL == "" {
 		signalURL = DefaultSignalURL
 	}
 	if timeoutMS <= 0 {
-		timeoutMS = 90000
+		timeoutMS = int(pairing.DefaultTTL / time.Millisecond)
 	}
 	key, err := identity.LoadOrCreateKey(keyPath)
 	if err != nil {

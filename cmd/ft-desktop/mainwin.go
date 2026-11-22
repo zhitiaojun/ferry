@@ -1,30 +1,21 @@
 //go:build windows
 
-// The main window is deliberately a plain Win32 window drawn with GDI: the
-// desktop app is a small always-running utility, so a browser engine (WebView2
-// or an Edge --app window) would cost 100-250 MB of resident memory for a
-// screen with one list and three buttons. Everything here is owner-drawn from
-// layout(), which both WM_PAINT and hit testing share so the two can never
-// disagree about where a row or button is.
-//
-// The look follows design/tokens.md (plan A, "instrument ledger"): paper and
-// ink neutrals, a serif title, tabular mono digits, hairline rules, and path
-// stamps that encode LAN / punch / relay / failure as colour + border + text.
-// The only animation in the whole window is the dot that breathes while
-// receiving, driven by the window's own WM_TIMER.
 package main
 
 import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/cwlindean/filetransfer/core/client"
+	"github.com/cwlindean/filetransfer/core/identity"
 )
 
 const (
@@ -46,46 +37,55 @@ const (
 	dtRight       = 0x0002
 	dtWordBreak   = 0x0010
 
-	// Layout baseline from design/tokens.md §5, in design pixels at 96 dpi.
-	// Everything is multiplied by the monitor DPI at draw time.
 	designW    = 880
-	designH    = 520
+	designH    = 540
 	designMinW = 720
-	designMinH = 420
+	designMinH = 440
 
-	headerH    = 32
-	sideW      = 206
-	contentPad = 14
-	peerRowH   = 34
-	ledgerRowH = 28
-	barH       = 46
-	stampH     = 18
-	btnH       = 28
+	railW      = 64
+	sendColW   = 312
+	contentPad = 24
 
-	// The receiving dot breathes over 1.6 s; 40 ms per frame is smooth enough
-	// for a 3 px disc and costs one small invalidation per frame.
 	mainTimerID = 8
-	breathMs    = 1600
-	breathStep  = 40
+	breathStep  = 100
 
 	tmeLeave = 0x00000002
 	srcCopy  = 0x00CC0020
 	htClient = 1
 	idcHand  = 32649
 
-	stockNullBrush = 5 // GetStockObject(NULL_BRUSH)
-	psSolid        = 0
-	psDash         = 1
+	psSolid = 0
 
-	// Hover targets. Device rows carry their index in hoverIdx; the rest are
-	// the constants below.
+	pageHome     = 0
+	pageDevices  = 1
+	pageSettings = 2
+
+	fltAll  = 0
+	fltSend = 1
+	fltRecv = 2
+
 	hoverNone = iota
-	hoverPeer
-	hoverZone
-	hoverFile
-	hoverOpen
-	hoverPause
-	hoverEmpty
+	hoverNavHome
+	hoverNavDevices
+	hoverNavSettings
+	hoverTileFiles
+	hoverTileFolder
+	hoverQueueClear
+	hoverAddDevice
+	hoverPeerPicker
+	hoverSendBtn
+	hoverSendClip
+	hoverFltAll
+	hoverFltSend
+	hoverFltRecv
+	hoverOpenDir
+	hoverLedgerRow
+	hoverDevAddBtn
+	hoverDevSendBtn
+	hoverSetRecv
+	hoverSetOpenDir
+	hoverSetAuto
+	hoverSetCopyID
 )
 
 var (
@@ -141,18 +141,11 @@ type openFileNameW struct {
 }
 
 const (
-	ofnReadOnly      = 0x00000001
-	ofnOverwrite     = 0x00000002
 	ofnNoChangeDir   = 0x00000008
 	ofnAllowMulti    = 0x00000200
 	ofnFileMustExist = 0x00001000
 	ofnExplorer      = 0x00080000
 )
-
-// ---------------------------------------------------------------------------
-// Palette: exactly the token values from design/tokens.md §1.
-// COLORREF is 0x00BBGGRR, hence col() taking r, g, b in that order.
-// ---------------------------------------------------------------------------
 
 type palette struct {
 	paper, paper2, paper3         uint32
@@ -165,37 +158,37 @@ type palette struct {
 func col(r, g, b uint32) uint32 { return b<<16 | g<<8 | r }
 
 var palLight = palette{
-	paper:      col(0xF7, 0xF6, 0xF0),
-	paper2:     col(0xF0, 0xEE, 0xE7),
-	paper3:     col(0xE6, 0xE4, 0xDB),
-	ink:        col(0x16, 0x21, 0x1C),
-	ink2:       col(0x50, 0x59, 0x55),
-	ink3:       col(0x7E, 0x87, 0x83),
-	line:       col(0xD6, 0xD4, 0xCC),
-	lineSoft:   col(0xE1, 0xE0, 0xD8),
-	accent:     col(0x2C, 0x5C, 0x49),
-	accentInk:  col(0xFB, 0xFA, 0xF7),
-	accentSoft: col(0xD6, 0xED, 0xE2),
-	danger:     col(0xB6, 0x40, 0x36),
-	amber:      col(0x91, 0x5C, 0x08),
-	violet:     col(0x66, 0x51, 0x89),
+	paper:      col(0xFF, 0xFF, 0xFF),
+	paper2:     col(0xFA, 0xFA, 0xFA),
+	paper3:     col(0xF3, 0xF4, 0xF6),
+	ink:        col(0x11, 0x18, 0x27),
+	ink2:       col(0x4B, 0x55, 0x63),
+	ink3:       col(0x9C, 0xA3, 0xAF),
+	line:       col(0xE5, 0xE7, 0xEB),
+	lineSoft:   col(0xF3, 0xF4, 0xF6),
+	accent:     col(0x0D, 0x94, 0x88),
+	accentInk:  col(0xFF, 0xFF, 0xFF),
+	accentSoft: col(0xF0, 0xFD, 0xFA),
+	danger:     col(0xDC, 0x26, 0x26),
+	amber:      col(0xD9, 0x77, 0x06),
+	violet:     col(0x7C, 0x3A, 0xED),
 }
 
 var palDark = palette{
-	paper:      col(0x0E, 0x14, 0x11),
-	paper2:     col(0x16, 0x1E, 0x1A),
-	paper3:     col(0x1E, 0x28, 0x23),
-	ink:        col(0xE8, 0xE6, 0xDF),
-	ink2:       col(0xAB, 0xA9, 0xA1),
-	ink3:       col(0x7E, 0x7C, 0x74),
-	line:       col(0x2B, 0x34, 0x30),
-	lineSoft:   col(0x22, 0x2A, 0x26),
-	accent:     col(0x89, 0xC7, 0xAB),
-	accentInk:  col(0x11, 0x19, 0x16),
-	accentSoft: col(0x1B, 0x2F, 0x26),
-	danger:     col(0xED, 0x81, 0x74),
-	amber:      col(0xE3, 0xB6, 0x67),
-	violet:     col(0xBE, 0xA3, 0xDF),
+	paper:      col(0x11, 0x18, 0x27),
+	paper2:     col(0x18, 0x22, 0x30),
+	paper3:     col(0x1F, 0x29, 0x37),
+	ink:        col(0xF3, 0xF4, 0xF6),
+	ink2:       col(0x9C, 0xA3, 0xAF),
+	ink3:       col(0x6B, 0x72, 0x80),
+	line:       col(0x27, 0x32, 0x44),
+	lineSoft:   col(0x1F, 0x29, 0x37),
+	accent:     col(0x14, 0xB8, 0xA6),
+	accentInk:  col(0xFF, 0xFF, 0xFF),
+	accentSoft: col(0x13, 0x35, 0x33),
+	danger:     col(0xF8, 0x71, 0x71),
+	amber:      col(0xFB, 0xBF, 0x24),
+	violet:     col(0xA7, 0x8B, 0xFA),
 }
 
 var (
@@ -204,8 +197,6 @@ var (
 	darkMode bool
 )
 
-// theme reads HKCU\...\Themes\Personalize\AppsUseLightTheme once per process:
-// the window does not track live theme switches, a restart picks them up.
 func theme() (palette, bool) {
 	palOnce.Do(func() {
 		darkMode = appsUseDarkTheme()
@@ -222,28 +213,16 @@ func appsUseDarkTheme() bool {
 		rrfRtRegDword = 0x00000010
 		errorSuccess  = 0
 	)
-	// HKEY_CURRENT_USER is the sign-extended pseudo handle on 64-bit Windows.
-	hkey := ^uintptr(0x7ffffffe) // 0xFFFFFFFF80000001
+	hkey := ^uintptr(0x7ffffffe)
 	key := utf16Ptr(`Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`)
 	name := utf16Ptr("AppsUseLightTheme")
 	var v, cb uint32 = 1, 4
 	r, _, _ := procRegGetValue.Call(hkey, uintptr(unsafe.Pointer(key)), uintptr(unsafe.Pointer(name)),
 		rrfRtRegDword, 0, uintptr(unsafe.Pointer(&v)), uintptr(unsafe.Pointer(&cb)))
 	if r != errorSuccess {
-		return false // value missing: Windows default is the light theme
+		return false
 	}
 	return v == 0
-}
-
-// ---------------------------------------------------------------------------
-// Window state
-// ---------------------------------------------------------------------------
-
-// row is one hit-testable line of the window.
-type row struct {
-	rect rectT
-	kind int // 0 device
-	idx  int
 }
 
 type mainWin struct {
@@ -251,38 +230,58 @@ type mainWin struct {
 	hwnd     syscall.Handle
 	peers    []client.Peer
 	sel      int
+	page     int
+	filter   int
+	queued   []string
 	status   string
-	devID    string
-	rows     []row
-	rowsTop  int32
+	hostName string
+	fullID   string
 	pal      palette
 	dark     bool
+	acrylic  bool
 	dpi      int32
 	hover    int
 	hoverIdx int
 	tracking bool
 	timer    uintptr
 
-	// Rects from layout(); shared by painting and hit testing.
-	hdrR        rectT
-	sideR       rectT
-	barR        rectT
-	zone        rectT
-	pill        rectT
-	statusR     rectT
-	ledgerLabel rectT
-	ledgerHdr   rectT
-	ledgerT     rectT
-	btnFile     rectT
-	btnOpen     rectT
-	btnPause    rectT
-	btnEmpty    rectT
+	// Hit-test rectangles updated on every layout() pass.
+	railR       rectT
+	navHomeR    rectT
+	navDevicesR rectT
+	navSetR     rectT
 
-	fontWin   syscall.Handle
-	fontSerif syscall.Handle
-	fontBody  syscall.Handle
-	fontSm    syscall.Handle
-	fontMono  syscall.Handle
+	sendColR    rectT
+	sendCardR   rectT
+	tileFilesR  rectT
+	tileFolderR rectT
+	queueBoxR   rectT
+	queueClearR rectT
+	addDevLinkR rectT
+	peerPickerR rectT
+	sendBtnR    rectT
+	sendClipR   rectT
+
+	fltAllR     rectT
+	fltSendR    rectT
+	fltRecvR    rectT
+	openDirR    rectT
+	ledgerRowsR []rectT
+
+	devAddBtnR   rectT
+	devSendBtnsR []rectT
+
+	setRecvBtnR   rectT
+	setOpenDirR   rectT
+	setAutoBtnR   rectT
+	setCopyIDRowR rectT
+
+	fontH1   syscall.Handle
+	fontH2   syscall.Handle
+	fontBody syscall.Handle
+	fontBold syscall.Handle
+	fontSm   syscall.Handle
+	fontMono syscall.Handle
 }
 
 var (
@@ -290,20 +289,13 @@ var (
 	mainWinH syscall.Handle
 )
 
-// recvEnabled is sampled by the tray accept loop; false closes new sessions at
-// once instead of dropping the listening socket (so the port stays reserved).
 var recvEnabled atomic.Bool
 
 func init() { recvEnabled.Store(true) }
 
-// trayApp is set by runTray so the main window can reach the shared state.
 var trayApp *app
 
-// openMainWindow shows the main window, creating it on first use. It must be
-// called on the tray's UI thread.
 func openMainWindow(a *app) {
-	// Do not hold mainMu across CreateWindowExW: WM_CREATE arrives on this same
-	// thread and currentWin() takes the same mutex, which would deadlock.
 	if h := existingMainWindow(); h != 0 {
 		if iconic, _, _ := procIsIconic.Call(uintptr(h)); iconic != 0 {
 			procShowWindow.Call(uintptr(h), swRestore)
@@ -327,8 +319,6 @@ func openMainWindow(a *app) {
 	cursor, _, _ := procLoadCursorW.Call(0, idcArrow)
 	icon := loadAppIcon(0)
 	smallIcon := loadAppIcon(16)
-	// The class background is the paper colour so the first frame does not
-	// flash the system window colour; every pixel is drawn again in WM_PAINT.
 	bg, _, _ := procCreateBrush.Call(uintptr(pal.paper))
 	wc := wndClassExW{
 		cbSize:        uint32(unsafe.Sizeof(wndClassExW{})),
@@ -342,10 +332,9 @@ func openMainWindow(a *app) {
 	}
 	if r, _, _ := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc))); r == 0 && a != nil {
 		a.event("desktop.main_class_exists", nil)
-		// Already registered by a previous window: reuse it.
 	}
 	h, _, _ := procCreateWindowExW.Call(
-		wsExAppWindow, uintptr(unsafe.Pointer(cls)), uintptr(unsafe.Pointer(utf16Ptr("轻渡 · Ferry"))),
+		wsExAppWindow, uintptr(unsafe.Pointer(cls)), uintptr(unsafe.Pointer(utf16Ptr("轻渡"))),
 		wsOverlappedWindow, 0x80000000, 0x80000000, uintptr(ww), uintptr(wh),
 		0, 0, uintptr(hInst), 0)
 	hwnd := syscall.Handle(h)
@@ -370,7 +359,6 @@ func openMainWindow(a *app) {
 	procUpdateWindow.Call(uintptr(hwnd))
 }
 
-// mainWins is the handle -> state map: Win32 only carries the handle around.
 var mainWins = map[syscall.Handle]*mainWin{}
 
 func existingMainWindow() syscall.Handle {
@@ -390,17 +378,13 @@ func mainWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintpt
 	switch msg {
 	case wmCreate:
 		pal, dark := theme()
-		mw := &mainWin{app: trayApp, pal: pal, dark: dark, sel: 0, hover: hoverNone}
+		mw := &mainWin{app: trayApp, pal: pal, dark: dark, sel: 0, page: pageHome, filter: fltAll}
 		mw.hwnd = hwnd
 		mw.dpi = windowDPI(hwnd)
+		mw.acrylic = enableAcrylicBackdrop(hwnd, dark)
 		mw.makeFonts()
 		mw.loadPeers()
-		mw.refreshDeviceID()
-		// The bar starts quiet and states where files land; transient action
-		// feedback replaces it later.
-		if mw.app != nil {
-			mw.status = "接收目录 " + mw.app.dir
-		}
+		mw.refreshLocalMeta()
 		mainMu.Lock()
 		mainWins[hwnd] = mw
 		mainMu.Unlock()
@@ -413,7 +397,7 @@ func mainWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintpt
 		}
 		return 0
 	case wmEraseBkgnd:
-		return 1 // every pixel is painted from layout(); no flicker
+		return 1
 	case wmSizeMsg:
 		procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 		return 0
@@ -424,14 +408,6 @@ func mainWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintpt
 			} else if w.timer != 0 {
 				procKillTimer.Call(uintptr(hwnd), mainTimerID)
 				w.timer = 0
-			}
-		}
-		return 0
-	case wmTimer:
-		if w != nil && wParam == mainTimerID {
-			// Only the pill breathes, so only that strip is repainted.
-			if r := w.pill; r.right > r.left {
-				procInvalidateRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&r)), 0)
 			}
 		}
 		return 0
@@ -485,8 +461,6 @@ func mainWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintpt
 		}
 		return 0
 	case wmPrint, wmPrintClient:
-		// PrintWindow and screen readers ask for the content without generating
-		// WM_PAINT; drawing into the supplied DC keeps both paths identical.
 		if w != nil {
 			w.paintDC(uintptr(wParam), hwnd)
 		}
@@ -519,8 +493,6 @@ func mainWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintpt
 	return r
 }
 
-// minMaxInfo keeps the window from being resized below 720×420 design pixels,
-// window frame included.
 func (w *mainWin) minMaxInfo(hwnd syscall.Handle, lParam uintptr) {
 	type mmi struct {
 		reserved     pointT
@@ -539,11 +511,6 @@ func (w *mainWin) minMaxInfo(hwnd syscall.Handle, lParam uintptr) {
 	m.minTrack = pointT{w.px(designMinW) + frameW, w.px(designMinH) + frameH}
 }
 
-// ptrAt turns a pointer Windows handed us as an integer back into a pointer
-// (WM_GETMINMAXINFO and WM_DPICHANGED carry struct pointers in lParam). The
-// provenance vet's unsafeptr check wants cannot be expressed here because the
-// integer arrives through the message loop, so the value goes through memory,
-// which is the round trip package unsafe documents.
 func ptrAt(u uintptr) unsafe.Pointer {
 	var p unsafe.Pointer
 	*(*uintptr)(unsafe.Pointer(&p)) = u
@@ -551,14 +518,13 @@ func ptrAt(u uintptr) unsafe.Pointer {
 }
 
 // ---------------------------------------------------------------------------
-// Fonts
+// Fonts (ClearType Microsoft YaHei UI for all Chinese/UI copy; Consolas only for hex IDs)
 // ---------------------------------------------------------------------------
 
 var (
-	faceOnce  sync.Once
-	serifFace string
-	sansFace  string
-	monoFace  string
+	faceOnce sync.Once
+	sansFace string
+	monoFace string
 )
 
 func pickFaces() {
@@ -570,14 +536,10 @@ func pickFaces() {
 		}
 		return cands[len(cands)-1]
 	}
-	serifFace = pick([]string{"Songti SC", "SimSun", "宋体", "Microsoft YaHei UI"})
 	sansFace = pick([]string{"Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI"})
 	monoFace = pick([]string{"Consolas", "Cascadia Mono", "Courier New"})
 }
 
-// faceExists asks GDI which face it actually realized: CreateFontW happily
-// returns a font for a missing name and silently substitutes, so the realized
-// name is the only honest answer.
 func faceExists(name string) bool {
 	h, _, _ := procCreateFontW.Call(uintptr(0xFFFFFFF4), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0,
 		uintptr(unsafe.Pointer(utf16Ptr(name))))
@@ -610,41 +572,47 @@ func (w *mainWin) makeFonts() {
 			1, 0, 0, 5, 0, uintptr(unsafe.Pointer(utf16Ptr(face))))
 		return syscall.Handle(h)
 	}
-	w.fontWin = mk(13, 400, serifFace)   // window title, serif 13
-	w.fontSerif = mk(17, 400, serifFace) // drop-zone headline, serif 17
-	w.fontBody = mk(13, 400, sansFace)   // body 13
-	w.fontSm = mk(12, 400, sansFace)     // secondary 12
-	w.fontMono = mk(11, 400, monoFace)   // labels, ids, numbers, stamps 11
+	w.fontH1 = mk(19, 700, sansFace)
+	w.fontH2 = mk(15, 600, sansFace)
+	w.fontBody = mk(13, 400, sansFace)
+	w.fontBold = mk(13, 600, sansFace)
+	w.fontSm = mk(12, 400, sansFace)
+	w.fontMono = mk(12, 400, monoFace)
 }
 
 func (w *mainWin) freeFonts() {
-	for _, f := range []syscall.Handle{w.fontWin, w.fontSerif, w.fontBody, w.fontSm, w.fontMono} {
+	for _, f := range []syscall.Handle{w.fontH1, w.fontH2, w.fontBody, w.fontBold, w.fontSm, w.fontMono} {
 		if f != 0 {
 			procDeleteObject.Call(uintptr(f))
 		}
 	}
-	w.fontWin, w.fontSerif, w.fontBody, w.fontSm, w.fontMono = 0, 0, 0, 0, 0
+	w.fontH1, w.fontH2, w.fontBody, w.fontBold, w.fontSm, w.fontMono = 0, 0, 0, 0, 0, 0
 }
 
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
 
-func (w *mainWin) refreshDeviceID() {
-	w.devID = ""
-	if w.app != nil {
-		w.devID = w.app.deviceID()
+func (w *mainWin) refreshLocalMeta() {
+	w.hostName, _ = os.Hostname()
+	if w.hostName == "" {
+		w.hostName = "Windows"
+	}
+	w.fullID = ""
+	if w.app != nil && w.app.keyPath != "" {
+		if k, err := identity.LoadOrCreateKey(w.app.keyPath); err == nil {
+			w.fullID = k.IDHex()
+		}
 	}
 }
 
-// loadPeers refreshes the paired device list from disk.
 func (w *mainWin) loadPeers() {
 	if w.app == nil {
 		return
 	}
 	peers, err := client.Peers(w.app.pairedPath)
 	if err != nil {
-		w.status = "读取配对表失败"
+		w.status = "读取配对列表失败"
 		return
 	}
 	w.peers = peers
@@ -657,13 +625,7 @@ func (w *mainWin) loadPeers() {
 }
 
 func (w *mainWin) syncTimer(hwnd syscall.Handle) {
-	if recvEnabled.Load() {
-		if w.timer == 0 {
-			t, _, _ := procSetTimer.Call(uintptr(hwnd), mainTimerID, breathStep, 0)
-			w.timer = t
-		}
-		return
-	}
+	// Keep timer off when idle in v2; redraws happen on user/network events.
 	if w.timer != 0 {
 		procKillTimer.Call(uintptr(hwnd), mainTimerID)
 		w.timer = 0
@@ -683,57 +645,125 @@ func (w *mainWin) activePeer() (client.Peer, bool) {
 }
 
 // ---------------------------------------------------------------------------
-// Layout — one pass, shared by painting and hit testing
+// Layout — shared by painting and hit testing
 // ---------------------------------------------------------------------------
 
 func (w *mainWin) layout(cw, ch int32) {
 	p := w.px
-	header := p(headerH)
-	bar := p(barH)
-	pad := p(contentPad)
-	side := p(sideW)
+	rw := p(railW)
+	w.railR = rectT{0, 0, rw, ch}
 
-	w.hdrR = rectT{0, 0, cw, header}
-	w.barR = rectT{0, ch - bar, cw, ch}
-	if w.barR.top < header+p(150) { // very small window: keep a usable body
-		w.barR.top = header + p(150)
-	}
-	w.sideR = rectT{0, header, side, w.barR.top}
+	navX := p(8)
+	navW := rw - p(16)
+	navH := p(50)
+	w.navHomeR = rectT{navX, p(16), navX + navW, p(16) + navH}
+	w.navDevicesR = rectT{navX, w.navHomeR.bottom + p(6), navX + navW, w.navHomeR.bottom + p(6) + navH}
+	w.navSetR = rectT{navX, w.navDevicesR.bottom + p(6), navX + navW, w.navDevicesR.bottom + p(6) + navH}
 
-	w.rowsTop = header + pad + p(22)
-	w.rows = w.rows[:0]
-	for i := range w.peers {
-		y := w.rowsTop + int32(i)*p(peerRowH)
-		if y+p(peerRowH) > w.barR.top-p(34) {
-			break
+	// Reset page-specific rects
+	w.tileFilesR, w.tileFolderR, w.queueBoxR, w.queueClearR = rectT{}, rectT{}, rectT{}, rectT{}
+	w.addDevLinkR, w.peerPickerR, w.sendBtnR, w.sendClipR = rectT{}, rectT{}, rectT{}, rectT{}
+	w.fltAllR, w.fltSendR, w.fltRecvR, w.openDirR = rectT{}, rectT{}, rectT{}, rectT{}
+	w.ledgerRowsR = w.ledgerRowsR[:0]
+	w.devAddBtnR = rectT{}
+	w.devSendBtnsR = w.devSendBtnsR[:0]
+	w.setRecvBtnR, w.setOpenDirR, w.setAutoBtnR, w.setCopyIDRowR = rectT{}, rectT{}, rectT{}, rectT{}
+
+	switch w.page {
+	case pageHome:
+		colW := p(sendColW)
+		if colW > (cw-rw)/2 {
+			colW = (cw - rw) / 2
 		}
-		w.rows = append(w.rows, row{rect: rectT{0, y, side, y + p(peerRowH)}, idx: i})
+		w.sendColR = rectT{rw, 0, rw + colW, ch}
+		pad := p(22)
+		cardW := colW - pad*2
+		cardH := p(252)
+		if len(w.queued) > 0 {
+			cardH = p(292)
+		}
+		cy := (ch - cardH) / 2
+		if cy < p(24) {
+			cy = p(24)
+		}
+		w.sendCardR = rectT{rw + pad, cy, rw + pad + cardW, cy + cardH}
+
+		inPad := p(16)
+		inL := w.sendCardR.left + inPad
+		inR := w.sendCardR.right - inPad
+		gap := p(10)
+		tileW := (inR - inL - gap) / 2
+		tileTop := w.sendCardR.top + inPad
+		tileH := p(76)
+		w.tileFilesR = rectT{inL, tileTop, inL + tileW, tileTop + tileH}
+		w.tileFolderR = rectT{w.tileFilesR.right + gap, tileTop, inR, tileTop + tileH}
+
+		y := w.tileFilesR.bottom + p(12)
+		if len(w.queued) > 0 {
+			w.queueBoxR = rectT{inL, y, inR, y + p(32)}
+			w.queueClearR = rectT{inR - p(42), y, inR, y + p(32)}
+			y = w.queueBoxR.bottom + p(12)
+		}
+		w.addDevLinkR = rectT{inR - p(64), y, inR, y + p(22)}
+		y += p(24)
+		w.peerPickerR = rectT{inL, y, inR, y + p(34)}
+		y = w.peerPickerR.bottom + p(14)
+		w.sendBtnR = rectT{inL, y, inR, y + p(38)}
+		w.sendClipR = rectT{inL, w.sendCardR.bottom + p(10), inL + p(86), w.sendCardR.bottom + p(32)}
+
+		// Right transfers pane
+		rPad := p(28)
+		paneL := w.sendColR.right + rPad
+		paneR := cw - rPad
+		tabY := p(66)
+		w.fltAllR = rectT{paneL, tabY, paneL + p(42), tabY + p(28)}
+		w.fltSendR = rectT{w.fltAllR.right + p(16), tabY, w.fltAllR.right + p(68), tabY + p(28)}
+		w.fltRecvR = rectT{w.fltSendR.right + p(16), tabY, w.fltSendR.right + p(68), tabY + p(28)}
+		w.openDirR = rectT{paneR - p(104), tabY, paneR, tabY + p(28)}
+
+		ry := w.fltAllR.bottom + p(8)
+		rowH := p(54)
+		for range w.filteredLedger() {
+			if ry+rowH > ch-p(36) {
+				break
+			}
+			w.ledgerRowsR = append(w.ledgerRowsR, rectT{paneL, ry, paneR, ry + rowH})
+			ry += rowH
+		}
+
+	case pageDevices:
+		pad := p(28)
+		paneR := cw - pad
+		w.devAddBtnR = rectT{paneR - p(96), p(28), paneR, p(62)}
+		y := p(98)
+		rowH := p(58)
+		for range w.peers {
+			if y+rowH > ch-pad {
+				break
+			}
+			w.devSendBtnsR = append(w.devSendBtnsR, rectT{paneR - p(88), y + p(13), paneR - p(16), y + rowH - p(13)})
+			y += rowH
+		}
+
+	case pageSettings:
+		pad := p(28)
+		paneL := rw + pad
+		paneR := cw - pad
+		rowH := p(58)
+		y := p(90)
+		w.setRecvBtnR = rectT{paneR - p(88), y + p(13), paneR - p(16), y + rowH - p(13)}
+		y += rowH
+		w.setOpenDirR = rectT{paneR - p(88), y + p(13), paneR - p(16), y + rowH - p(13)}
+		y += rowH
+		w.setAutoBtnR = rectT{paneR - p(88), y + p(13), paneR - p(16), y + rowH - p(13)}
+		_ = paneL
+		infoY := y + rowH + p(50) + p(42)
+		w.setCopyIDRowR = rectT{paneL, infoY, paneR, infoY + p(42)}
 	}
-	w.btnEmpty = rectT{pad, w.rowsTop + p(78), pad + p(150), w.rowsTop + p(78) + p(26)}
-
-	paneL := side + 1
-	paneR := cw - pad
-	labelTop := header + pad
-	w.zone = rectT{paneL, labelTop + p(22), paneR, labelTop + p(22) + p(72)}
-
-	labTop := w.zone.bottom + p(14)
-	w.ledgerLabel = rectT{paneL, labTop, paneR, labTop + p(18)}
-	w.ledgerHdr = rectT{paneL, labTop + p(24), paneR, labTop + p(24) + p(20)}
-	w.ledgerT = rectT{paneL, w.ledgerHdr.bottom, paneR, w.barR.top - p(6)}
-
-	bh := p(btnH)
-	by := w.barR.top + (bar-bh)/2
-	w.btnPause = rectT{paneR - p(88), by, paneR, by + bh}
-	w.btnOpen = rectT{w.btnPause.left - p(8) - p(100), by, w.btnPause.left - p(8), by + bh}
-	w.btnFile = rectT{w.btnOpen.left - p(8) - p(94), by, w.btnOpen.left - p(8), by + bh}
-
-	ph := p(22)
-	w.pill = rectT{pad, w.barR.top + (bar-ph)/2, pad + p(132), w.barR.top + (bar-ph)/2 + ph}
-	w.statusR = rectT{w.pill.right + p(14), w.barR.top, w.btnFile.left - p(12), w.barR.bottom}
 }
 
 // ---------------------------------------------------------------------------
-// Painting
+// Painting (Acrylic Glass Rail + Opaque Crisp Surfaces)
 // ---------------------------------------------------------------------------
 
 func (w *mainWin) paint(hwnd syscall.Handle) {
@@ -751,276 +781,503 @@ func (w *mainWin) paintDC(hdc uintptr, hwnd syscall.Handle) {
 	}
 	w.layout(cr.right, cr.bottom)
 
-	memDC, _, _ := procCompatDC.Call(hdc)
-	if memDC != 0 {
-		bmp, _, _ := procCompatBmp.Call(hdc, uintptr(cr.right), uintptr(cr.bottom))
-		if bmp != 0 {
-			oldBmp, _, _ := procSelectObject.Call(memDC, bmp)
-			w.drawScene(memDC, cr)
-			procBitBlt.Call(hdc, 0, 0, uintptr(cr.right), uintptr(cr.bottom), memDC, 0, 0, srcCopy)
-			procSelectObject.Call(memDC, oldBmp)
-			procDeleteObject.Call(bmp)
-			procDeleteDC.Call(memDC)
-			return
-		}
-		procDeleteDC.Call(memDC)
+	cv := newGlassCanvas(hdc, cr.right, cr.bottom)
+	if cv == nil {
+		fillRect(hdc, cr, w.pal.paper)
+		return
 	}
-	w.drawScene(hdc, cr)
+	w.drawScene(cv, cr)
+	cv.finishBlit(hdc)
 }
 
-func (w *mainWin) drawScene(dc uintptr, cr rectT) {
-	procSetBkMode.Call(dc, bkTransparent)
-	fillRect(dc, cr, w.pal.paper)
-	w.drawHeader(dc, cr)
-	w.drawSide(dc, cr)
-	w.drawPane(dc, cr)
-	w.drawBar(dc, cr)
+func (w *mainWin) drawScene(cv *glassCanvas, cr rectT) {
+	// 1. Left navigation rail (Win11 Acrylic frosted glass when available).
+	if w.acrylic {
+		railAlpha := byte(175)
+		if w.dark {
+			railAlpha = 185
+		}
+		cv.fillColorAlpha(w.railR, w.pal.paper2, railAlpha)
+	} else {
+		cv.fillColorAlpha(w.railR, w.pal.paper, 255)
+	}
+	// Hairline divider between rail and workspace.
+	cv.fillColorAlpha(rectT{w.railR.right - 1, 0, w.railR.right, cr.bottom}, w.pal.line, 255)
+	w.drawRail(cv)
+
+	// 2. Right workspace (crisp opaque surfaces for comfortable daily reading).
+	rightR := rectT{w.railR.right, 0, cr.right, cr.bottom}
+	cv.fillColorAlpha(rightR, w.pal.paper, 255)
+
+	switch w.page {
+	case pageHome:
+		w.drawHome(cv, cr)
+	case pageDevices:
+		w.drawDevices(cv, cr)
+	case pageSettings:
+		w.drawSettings(cv, cr)
+	}
 }
 
-func (w *mainWin) drawHeader(dc uintptr, cr rectT) {
+func (w *mainWin) drawRail(cv *glassCanvas) {
+	items := []struct {
+		r     rectT
+		page  int
+		hover int
+		label string
+		kind  int
+	}{
+		{w.navHomeR, pageHome, hoverNavHome, "传输", 0},
+		{w.navDevicesR, pageDevices, hoverNavDevices, "设备", 1},
+		{w.navSetR, pageSettings, hoverNavSettings, "设置", 2},
+	}
+	for _, it := range items {
+		active := w.page == it.page
+		fg := w.pal.ink2
+		if active {
+			fg = w.pal.accent
+			fillA := byte(230)
+			if !w.acrylic {
+				fillA = 255
+			}
+			cv.drawAlphaRoundRect(it.r, float64(w.px(8)), w.pal.accentSoft, fillA, 0, 0, 0)
+		} else if w.hover == it.hover {
+			fg = w.pal.ink
+			cv.drawAlphaRoundRect(it.r, float64(w.px(8)), w.pal.paper3, 180, 0, 0, 0)
+		}
+		iconR := rectT{it.r.left + w.px(16), it.r.top + w.px(7), it.r.right - w.px(16), it.r.top + w.px(25)}
+		w.drawNavIcon(cv, iconR, it.kind, fg)
+		lblR := rectT{it.r.left, it.r.top + w.px(26), it.r.right, it.r.bottom - w.px(4)}
+		cv.drawAlphaText(w.fontSm, it.label, lblR, dtCenter|dtSingleLine|dtVCenter, fg)
+	}
+}
+
+func (w *mainWin) drawNavIcon(cv *glassCanvas, r rectT, kind int, color uint32) {
+	cv.drawAlphaGraphic(r, color, func(dc uintptr, rw, rh int32) {
+		penW := int32(math.Max(1.4, float64(w.px(2))*0.8))
+		pen, _, _ := procCreatePen.Call(psSolid, uintptr(penW), uintptr(col(255, 255, 255)))
+		oldPen, _, _ := procSelectObject.Call(dc, pen)
+		nullBr, _, _ := procStock.Call(5) // NULL_BRUSH
+		oldBr, _, _ := procSelectObject.Call(dc, nullBr)
+		defer func() {
+			procSelectObject.Call(dc, oldBr)
+			procSelectObject.Call(dc, oldPen)
+			procDeleteObject.Call(pen)
+		}()
+		move := func(x, y int32) { procMoveToEx.Call(dc, uintptr(x), uintptr(y), 0) }
+		line := func(x, y int32) { procLineTo.Call(dc, uintptr(x), uintptr(y)) }
+
+		switch kind {
+		case 0: // Send arrow
+			move(rw*2/10, rh*8/10)
+			line(rw*8/10, rh*2/10)
+			move(rw*38/100, rh*2/10)
+			line(rw*8/10, rh*2/10)
+			line(rw*8/10, rh*62/100)
+		case 1: // Devices
+			procRoundRect.Call(dc, uintptr(rw*12/100), uintptr(rh*16/100), uintptr(rw*66/100), uintptr(rh*66/100), 3, 3)
+			move(rw*28/100, rh*82/100)
+			line(rw*50/100, rh*82/100)
+			procRoundRect.Call(dc, uintptr(rw*54/100), uintptr(rh*38/100), uintptr(rw*88/100), uintptr(rh*88/100), 3, 3)
+		case 2: // Settings circle + center dot
+			procEllipse.Call(dc, uintptr(rw*18/100), uintptr(rh*18/100), uintptr(rw*82/100), uintptr(rh*82/100))
+			procEllipse.Call(dc, uintptr(rw*40/100), uintptr(rh*40/100), uintptr(rw*60/100), uintptr(rh*60/100))
+		}
+	})
+}
+
+func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 	p := w.px
-	fillRect(dc, w.hdrR, w.pal.paper2)
-	w.hline(dc, 0, cr.right, w.hdrR.bottom-1, w.pal.lineSoft)
+	// Left send card gutter
+	cv.fillColorAlpha(w.sendColR, w.pal.paper2, 255)
+	cv.fillColorAlpha(rectT{w.sendColR.right - 1, 0, w.sendColR.right, cr.bottom}, w.pal.line, 255)
 
-	x := p(contentPad)
-	bot := w.hdrR.bottom
-	ftW := textWidth(dc, w.fontWin, "轻渡")
-	drawText(dc, w.fontWin, "轻渡", rectT{x, 0, x + ftW + p(2), bot}, dtSingleLine|dtVCenter, w.pal.ink)
-	drawText(dc, w.fontWin, "· Ferry", rectT{x + ftW + p(4), 0, x + ftW + p(110), bot},
+	// Compact Send Card
+	cv.drawAlphaRoundRect(w.sendCardR, float64(p(12)), w.pal.paper, 255, w.pal.line, 255, 1.0)
+
+	// Dual tiles: 添加文件 / 添加文件夹
+	fEdge := w.pal.line
+	if w.hover == hoverTileFiles {
+		fEdge = w.pal.accent
+	}
+	cv.drawAlphaRoundRect(w.tileFilesR, float64(p(8)), w.pal.paper, 255, fEdge, 255, 1.0)
+	plusR := rectT{(w.tileFilesR.left+w.tileFilesR.right)/2 - p(13), w.tileFilesR.top + p(12),
+		(w.tileFilesR.left+w.tileFilesR.right)/2 + p(13), w.tileFilesR.top + p(38)}
+	cv.drawAlphaRoundRect(plusR, float64(p(13)), w.pal.accent, 255, 0, 0, 0)
+	cv.drawAlphaText(w.fontH2, "+", plusR, dtCenter|dtSingleLine|dtVCenter, w.pal.accentInk)
+	cv.drawAlphaText(w.fontSm, "添加文件",
+		rectT{w.tileFilesR.left, plusR.bottom + p(4), w.tileFilesR.right, w.tileFilesR.bottom - p(6)},
+		dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
+
+	dEdge := w.pal.line
+	if w.hover == hoverTileFolder {
+		dEdge = w.pal.accent
+	}
+	cv.drawAlphaRoundRect(w.tileFolderR, float64(p(8)), w.pal.paper, 255, dEdge, 255, 1.0)
+	fldIconR := rectT{(w.tileFolderR.left+w.tileFolderR.right)/2 - p(13), w.tileFolderR.top + p(12),
+		(w.tileFolderR.left+w.tileFolderR.right)/2 + p(13), w.tileFolderR.top + p(38)}
+	cv.drawAlphaRoundRect(fldIconR, float64(p(13)), w.pal.paper, 255, w.pal.line, 255, 1.0)
+	w.drawFolderGlyph(cv, fldIconR, w.pal.ink2)
+	cv.drawAlphaText(w.fontSm, "添加文件夹",
+		rectT{w.tileFolderR.left, fldIconR.bottom + p(4), w.tileFolderR.right, w.tileFolderR.bottom - p(6)},
+		dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
+
+	// Queued summary row
+	if len(w.queued) > 0 {
+		cv.drawAlphaRoundRect(w.queueBoxR, float64(p(6)), w.pal.paper2, 255, w.pal.line, 255, 1.0)
+		label := fmt.Sprintf("已选 %s", summarizeFiles(w.queued))
+		cv.drawAlphaText(w.fontSm, label,
+			rectT{w.queueBoxR.left + p(8), w.queueBoxR.top, w.queueClearR.left - p(4), w.queueBoxR.bottom},
+			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink)
+		cv.drawAlphaText(w.fontSm, "清除", w.queueClearR, dtCenter|dtSingleLine|dtVCenter, w.pal.ink2)
+	}
+
+	// Recipient row
+	lblTop := w.addDevLinkR.top
+	cv.drawAlphaText(w.fontSm, "发给", rectT{w.tileFilesR.left, lblTop, w.addDevLinkR.left, w.addDevLinkR.bottom},
+		dtSingleLine|dtVCenter, w.pal.ink2)
+	cv.drawAlphaText(w.fontSm, "添加设备", w.addDevLinkR, dtRight|dtSingleLine|dtVCenter, w.pal.accent)
+
+	pEdge := w.pal.line
+	if w.hover == hoverPeerPicker {
+		pEdge = w.pal.accent
+	}
+	cv.drawAlphaRoundRect(w.peerPickerR, float64(p(8)), w.pal.paper, 255, pEdge, 255, 1.0)
+	if peer, ok := w.activePeer(); ok {
+		txt := peerLabel(peer)
+		if len(w.peers) > 1 {
+			txt += "  ▾"
+		}
+		cv.drawAlphaText(w.fontBold, txt,
+			rectT{w.peerPickerR.left + p(10), w.peerPickerR.top, w.peerPickerR.right - p(10), w.peerPickerR.bottom},
+			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink)
+	} else {
+		cv.drawAlphaText(w.fontSm, "尚未配对设备，点此扫码添加",
+			rectT{w.peerPickerR.left + p(10), w.peerPickerR.top, w.peerPickerR.right - p(10), w.peerPickerR.bottom},
+			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
+	}
+
+	// Primary Send button
+	btnFill := w.pal.accent
+	if w.hover == hoverSendBtn {
+		btnFill = shade(btnFill, w.dark, 0.12)
+	}
+	cv.drawAlphaRoundRect(w.sendBtnR, float64(p(8)), btnFill, 255, btnFill, 255, 0)
+	btnLbl := "发送"
+	if len(w.queued) == 0 && w.hasPeers() {
+		btnLbl = "选择文件并发送"
+	} else if !w.hasPeers() {
+		btnLbl = "扫码配对设备"
+	}
+	cv.drawAlphaText(w.fontBold, btnLbl, w.sendBtnR, dtCenter|dtSingleLine|dtVCenter, w.pal.accentInk)
+
+	// Footer links under Send Card
+	clipColor := w.pal.ink2
+	if w.hover == hoverSendClip {
+		clipColor = w.pal.accent
+	}
+	cv.drawAlphaText(w.fontSm, "发送剪贴板", w.sendClipR, dtSingleLine|dtVCenter, clipColor)
+	cv.drawAlphaText(w.fontSm, "支持直接拖入文件",
+		rectT{w.sendClipR.right, w.sendClipR.top, w.sendCardR.right, w.sendClipR.bottom},
+		dtRight|dtSingleLine|dtVCenter, w.pal.ink3)
+
+	// Right Transfers Pane
+	paneL := w.sendColR.right + p(28)
+	paneR := cr.right - p(28)
+	cv.drawAlphaText(w.fontH1, "传输记录", rectT{paneL, p(24), paneR, p(58)}, dtSingleLine|dtVCenter, w.pal.ink)
+
+	// Underlined filter tabs
+	tabItems := []struct {
+		r     rectT
+		flt   int
+		label string
+	}{
+		{w.fltAllR, fltAll, "全部"},
+		{w.fltSendR, fltSend, "已发出"},
+		{w.fltRecvR, fltRecv, "已收到"},
+	}
+	cv.fillColorAlpha(rectT{paneL, w.fltAllR.bottom, paneR, w.fltAllR.bottom + 1}, w.pal.line, 255)
+	for _, tb := range tabItems {
+		c := w.pal.ink2
+		if w.filter == tb.flt {
+			c = w.pal.ink
+			cv.fillColorAlpha(rectT{tb.r.left, tb.r.bottom - p(2), tb.r.right, tb.r.bottom}, w.pal.accent, 255)
+		}
+		cv.drawAlphaText(w.fontBold, tb.label, tb.r, dtSingleLine|dtVCenter, c)
+	}
+	openClr := w.pal.ink2
+	if w.hover == hoverOpenDir {
+		openClr = w.pal.accent
+	}
+	cv.drawAlphaText(w.fontSm, "打开接收文件夹", w.openDirR, dtRight|dtSingleLine|dtVCenter, openClr)
+
+	rows := w.filteredLedger()
+	if len(rows) == 0 {
+		midY := (w.fltAllR.bottom + cr.bottom) / 2
+		cv.drawAlphaText(w.fontBold, "还没有传输记录", rectT{paneL, midY - p(24), paneR, midY},
+			dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
+		cv.drawAlphaText(w.fontSm, "收发完成后，文件会出现在这里。", rectT{paneL, midY + p(2), paneR, midY + p(26)},
+			dtCenter|dtSingleLine|dtVCenter, w.pal.ink2)
+	} else {
+		for i, rr := range w.ledgerRowsR {
+			if i >= len(rows) {
+				break
+			}
+			r := rows[i]
+			if w.hover == hoverLedgerRow && w.hoverIdx == i {
+				cv.fillColorAlpha(rr, w.pal.paper2, 255)
+			}
+			title := r.files
+			if title == "" {
+				title = r.peer
+			}
+			dirWord := "来自 "
+			if r.dir == "发" {
+				dirWord = "发给 "
+			}
+			subParts := []string{dirWord + dashIfEmpty(r.peer)}
+			if r.size != "" {
+				subParts = append(subParts, r.size)
+			}
+			if r.time != "" {
+				subParts = append(subParts, r.time)
+			}
+			if r.path == "失败" {
+				subParts = append(subParts, "失败")
+			}
+			sub := strings.Join(subParts, " · ")
+
+			rightActionW := p(72)
+			cv.drawAlphaText(w.fontBold, title,
+				rectT{rr.left + p(4), rr.top + p(6), rr.right - rightActionW, rr.top + p(28)},
+				dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink)
+			cv.drawAlphaText(w.fontSm, sub,
+				rectT{rr.left + p(4), rr.top + p(28), rr.right - rightActionW, rr.bottom - p(6)},
+				dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
+			if w.hover == hoverLedgerRow && w.hoverIdx == i {
+				cv.drawAlphaText(w.fontSm, "打开位置",
+					rectT{rr.right - rightActionW, rr.top, rr.right - p(4), rr.bottom},
+					dtRight|dtSingleLine|dtVCenter, w.pal.accent)
+			}
+			cv.fillColorAlpha(rectT{rr.left, rr.bottom - 1, rr.right, rr.bottom}, w.pal.lineSoft, 255)
+		}
+	}
+
+	if w.status != "" {
+		cv.drawAlphaText(w.fontSm, w.status,
+			rectT{paneL, cr.bottom - p(32), paneR, cr.bottom - p(8)},
+			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
+	}
+}
+
+func (w *mainWin) drawFolderGlyph(cv *glassCanvas, r rectT, color uint32) {
+	cv.drawAlphaGraphic(r, color, func(dc uintptr, rw, rh int32) {
+		pen, _, _ := procCreatePen.Call(psSolid, 1, uintptr(col(255, 255, 255)))
+		oldPen, _, _ := procSelectObject.Call(dc, pen)
+		nullBr, _, _ := procStock.Call(5)
+		oldBr, _, _ := procSelectObject.Call(dc, nullBr)
+		defer func() {
+			procSelectObject.Call(dc, oldBr)
+			procSelectObject.Call(dc, oldPen)
+			procDeleteObject.Call(pen)
+		}()
+		procMoveToEx.Call(dc, uintptr(rw*22/100), uintptr(rh*32/100), 0)
+		procLineTo.Call(dc, uintptr(rw*44/100), uintptr(rh*32/100))
+		procLineTo.Call(dc, uintptr(rw*52/100), uintptr(rh*40/100))
+		procLineTo.Call(dc, uintptr(rw*78/100), uintptr(rh*40/100))
+		procLineTo.Call(dc, uintptr(rw*78/100), uintptr(rh*72/100))
+		procLineTo.Call(dc, uintptr(rw*22/100), uintptr(rh*72/100))
+		procLineTo.Call(dc, uintptr(rw*22/100), uintptr(rh*32/100))
+	})
+}
+
+func (w *mainWin) drawDevices(cv *glassCanvas, cr rectT) {
+	p := w.px
+	pad := p(28)
+	paneL := w.railR.right + pad
+	paneR := cr.right - pad
+
+	cv.drawAlphaText(w.fontH1, "设备", rectT{paneL, p(24), paneR - p(110), p(56)}, dtSingleLine|dtVCenter, w.pal.ink)
+	cv.drawAlphaText(w.fontSm, "已配对的设备可直接互相收发文件。", rectT{paneL, p(58), paneR - p(110), p(80)},
 		dtSingleLine|dtVCenter, w.pal.ink2)
 
-	if sub := w.localSummary(); sub != "" {
-		drawText(dc, w.fontMono, sub, rectT{x + p(150), 0, cr.right - p(contentPad), bot},
-			dtSingleLine|dtVCenter|dtRight|dtEndEllipsis, w.pal.ink3)
+	addFill := w.pal.accent
+	if w.hover == hoverDevAddBtn {
+		addFill = shade(addFill, w.dark, 0.12)
 	}
-}
-
-func (w *mainWin) localSummary() string {
-	var parts []string
-	if name, err := os.Hostname(); err == nil && name != "" {
-		parts = append(parts, name)
-	}
-	if w.devID != "" {
-		parts = append(parts, shortID(w.devID))
-	}
-	if w.app != nil {
-		parts = append(parts, fmt.Sprintf(":%d", w.app.port))
-	}
-	return strings.Join(parts, " · ")
-}
-
-func (w *mainWin) drawSide(dc uintptr, cr rectT) {
-	p := w.px
-	w.vline(dc, w.sideR.right-1, w.sideR.top, w.sideR.bottom, w.pal.lineSoft)
-
-	x := p(contentPad)
-	lab := rectT{x, w.sideR.top + p(contentPad) - p(3), w.sideR.right - x, w.sideR.top + p(contentPad) + p(15)}
-	drawTextSpaced(dc, w.fontMono, "设备", lab, dtSingleLine|dtVCenter, w.pal.ink3, p(1))
-	drawText(dc, w.fontMono, fmt.Sprintf("%02d", len(w.peers)), lab,
-		dtSingleLine|dtVCenter|dtRight, w.pal.accent)
+	cv.drawAlphaRoundRect(w.devAddBtnR, float64(p(8)), addFill, 255, addFill, 255, 0)
+	cv.drawAlphaText(w.fontBold, "添加设备", w.devAddBtnR, dtCenter|dtSingleLine|dtVCenter, w.pal.accentInk)
 
 	if len(w.peers) == 0 {
-		w.drawEmptyPeers(dc)
-	} else {
-		for _, r := range w.rows {
-			w.drawPeerRow(dc, r)
-		}
-	}
-
-	// Footer: paired count on the left, route policy on the right.
-	fy := w.sideR.bottom - p(30)
-	w.hline(dc, x, w.sideR.right-p(1), fy, w.pal.lineSoft)
-	fr := rectT{x, fy + p(1), w.sideR.right - x, w.sideR.bottom}
-	drawText(dc, w.fontMono, fmt.Sprintf("已配对 %d", len(w.peers)), fr,
-		dtSingleLine|dtVCenter, w.pal.ink3)
-	drawText(dc, w.fontMono, "LAN·打洞·中继", fr, dtSingleLine|dtVCenter|dtRight, w.pal.ink3)
-}
-
-func (w *mainWin) drawPeerRow(dc uintptr, r row) {
-	p := w.px
-	peer := w.peers[r.idx]
-	sel := r.idx == w.sel
-	switch {
-	case sel:
-		fillRect(dc, r.rect, w.pal.accentSoft)
-		fillRect(dc, rectT{r.rect.left, r.rect.top, r.rect.left + p(2), r.rect.bottom}, w.pal.accent)
-	case w.hover == hoverPeer && w.hoverIdx == r.idx:
-		fillRect(dc, r.rect, w.pal.paper2)
-	}
-	name := peer.Name
-	if name == "" {
-		name = "未命名设备"
-	}
-	nameR := rectT{r.rect.left + p(14), r.rect.top + p(1), r.rect.right - p(12), r.rect.top + p(19)}
-	drawText(dc, w.fontBody, name, nameR, dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink)
-	idR := rectT{nameR.left, r.rect.top + p(17), r.rect.right - p(12), r.rect.top + p(32)}
-	drawText(dc, w.fontMono, shortID(peer.ID), idR, dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink3)
-}
-
-func (w *mainWin) drawEmptyPeers(dc uintptr) {
-	p := w.px
-	x := p(contentPad)
-	right := w.sideR.right - x
-	top := w.rowsTop
-	drawText(dc, w.fontBody, "还没有配对设备",
-		rectT{x, top, right, top + p(20)}, dtSingleLine|dtVCenter, w.pal.ink)
-	drawText(dc, w.fontSm, "在另一台设备上用 6 位码配对，配对后会出现在这里。",
-		rectT{x, top + p(24), right, top + p(74)}, dtWordBreak, w.pal.ink3)
-	w.btn(dc, w.btnEmpty, "刷新设备列表", true, w.hover == hoverEmpty)
-}
-
-func (w *mainWin) drawPane(dc uintptr, cr rectT) {
-	p := w.px
-	top := w.hdrR.bottom + p(contentPad)
-	drawTextSpaced(dc, w.fontMono, "发送",
-		rectT{w.zone.left, top, w.zone.right, top + p(16)}, dtSingleLine|dtVCenter, w.pal.ink3, p(1))
-	if peer, ok := w.activePeer(); ok {
-		drawText(dc, w.fontMono, "→ "+peerLabel(peer),
-			rectT{w.zone.left, top, w.zone.right, top + p(16)},
-			dtSingleLine|dtVCenter|dtRight|dtEndEllipsis, w.pal.ink3)
-	}
-
-	// Drop zone: paper-2 fill, 1px dashed line border, centred hint.
-	zoneFill, zoneEdge := w.pal.paper2, w.pal.line
-	if w.hover == hoverZone {
-		zoneFill, zoneEdge = w.pal.accentSoft, w.pal.accent
-	}
-	roundBox(dc, w.zone, p(7), zoneFill, zoneFill)
-	dashedBox(dc, w.zone, p(7), zoneEdge)
-	cy := (w.zone.top + w.zone.bottom) / 2
-	big := "拖文件到这里"
-	if !w.hasPeers() {
-		big = "先配对一台设备"
-	}
-	drawText(dc, w.fontSerif, big,
-		rectT{w.zone.left, cy - p(22), w.zone.right, cy + p(1)},
-		dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
-	drawText(dc, w.fontSm, "或点下方「选择文件…」发送给左侧选中的设备",
-		rectT{w.zone.left + p(10), cy + p(1), w.zone.right - p(10), cy + p(21)},
-		dtCenter|dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
-
-	w.drawLedger(dc)
-}
-
-func (w *mainWin) drawLedger(dc uintptr) {
-	p := w.px
-	rows := w.ledgerRows()
-	c := w.columns()
-
-	drawTextSpaced(dc, w.fontMono, "最近传输", w.ledgerLabel,
-		dtSingleLine|dtVCenter, w.pal.ink3, p(1))
-	drawText(dc, w.fontMono, fmt.Sprintf("%02d", len(rows)), w.ledgerLabel,
-		dtSingleLine|dtVCenter|dtRight, w.pal.accent)
-
-	w.hline(dc, w.ledgerLabel.left, w.ledgerLabel.right, w.ledgerLabel.bottom+p(3), w.pal.line)
-
-	hc := w.ledgerHdr
-	stamp := w.stampCol()
-	head := func(r rectT, s string, right bool) {
-		flags := uint32(dtSingleLine | dtVCenter)
-		if right {
-			flags |= dtRight
-		}
-		drawText(dc, w.fontMono, s, rectT{r.left, hc.top, r.right, hc.bottom}, flags, w.pal.ink3)
-	}
-	head(c.time, "时间", true)
-	head(c.dir, "方向", false)
-	head(c.peer, "对端", false)
-	head(c.files, "文件", false)
-	head(c.size, "大小", true)
-	head(c.dur, "用时", true)
-	head(stamp, "路径", true)
-
-	if len(rows) == 0 || w.ledgerT.bottom <= w.ledgerHdr.bottom+p(ledgerRowH)/2 {
-		drawText(dc, w.fontSm, "还没有传输记录。收发完成后，这里按时间倒序列出最近几条。",
-			rectT{c.peer.left, hc.bottom + p(4), w.ledgerT.right, hc.bottom + p(44)},
-			dtWordBreak, w.pal.ink3)
+		box := rectT{paneL, p(98), paneR, p(228)}
+		cv.drawAlphaRoundRect(box, float64(p(12)), w.pal.paper2, 255, w.pal.line, 255, 1.0)
+		cv.drawAlphaText(w.fontBold, "还没有已配对设备", rectT{paneL, p(134), paneR, p(162)},
+			dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
+		cv.drawAlphaText(w.fontSm, "点击右上角「添加设备」，用手机轻渡扫码或输入 6 位配对码即可绑定。",
+			rectT{paneL + p(20), p(164), paneR - p(20), p(198)}, dtCenter|dtSingleLine|dtVCenter, w.pal.ink2)
 		return
 	}
 
-	y := w.ledgerHdr.bottom
-	for _, r := range rows {
-		h := p(ledgerRowH)
-		if y+h > w.ledgerT.bottom {
-			break
+	rowH := p(58)
+	top := p(98)
+	box := rectT{paneL, top, paneR, top + int32(len(w.devSendBtnsR))*rowH}
+	cv.drawAlphaRoundRect(box, float64(p(12)), w.pal.paper, 255, w.pal.line, 255, 1.0)
+	for i, br := range w.devSendBtnsR {
+		ry := top + int32(i)*rowH
+		peer := w.peers[i]
+		cv.drawAlphaText(w.fontBold, peerLabel(peer),
+			rectT{paneL + p(16), ry + p(8), br.left - p(12), ry + p(30)},
+			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink)
+		cv.drawAlphaText(w.fontSm, "设备 ID "+truncID(peer.ID),
+			rectT{paneL + p(16), ry + p(30), br.left - p(12), ry + p(50)},
+			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
+
+		bFill := w.pal.paper2
+		if w.hover == hoverDevSendBtn && w.hoverIdx == i {
+			bFill = w.pal.paper3
 		}
-		line := rectT{w.ledgerT.left, y, w.ledgerT.right, y + h}
-		val := func(c rectT, s string, right bool, font syscall.Handle, color uint32) {
-			flags := uint32(dtSingleLine | dtVCenter)
-			if right {
-				flags |= dtRight
-			}
-			drawText(dc, font, s, rectT{c.left, line.top, c.right, line.bottom}, flags, color)
+		cv.drawAlphaRoundRect(br, float64(p(6)), bFill, 255, w.pal.line, 255, 1.0)
+		cv.drawAlphaText(w.fontSm, "发送文件", br, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
+		if i+1 < len(w.devSendBtnsR) {
+			cv.fillColorAlpha(rectT{paneL + p(16), ry + rowH - 1, paneR - p(16), ry + rowH}, w.pal.lineSoft, 255)
 		}
-		val(c.time, dashIfEmpty(r.time), true, w.fontMono, w.pal.ink3)
-		val(c.dir, dashIfEmpty(r.dir), false, w.fontMono, w.pal.ink2)
-		val(c.peer, dashIfEmpty(r.peer), false, w.fontBody, w.pal.ink)
-		val(c.files, dashIfEmpty(r.files), false, w.fontSm, w.pal.ink2)
-		val(c.size, dashIfEmpty(r.size), true, w.fontMono, w.pal.ink)
-		val(c.dur, dashIfEmpty(r.dur), true, w.fontMono, w.pal.ink2)
-		if r.path != "" {
-			label, color := pathStamp(r.path, w.pal)
-			w.stamp(dc, w.ledgerT.right, (line.top+line.bottom)/2, label, color)
-		} else {
-			drawText(dc, w.fontMono, "—", rectT{stamp.left, line.top, stamp.right, line.bottom},
-				dtSingleLine|dtVCenter|dtRight, w.pal.ink3)
-		}
-		w.hline(dc, line.left, line.right, line.bottom-1, w.pal.lineSoft)
-		y += h
 	}
 }
 
-func dashIfEmpty(s string) string {
-	if s == "" {
-		return "—"
+func (w *mainWin) drawSettings(cv *glassCanvas, cr rectT) {
+	p := w.px
+	pad := p(28)
+	paneL := w.railR.right + pad
+	paneR := cr.right - pad
+
+	cv.drawAlphaText(w.fontH1, "设置", rectT{paneL, p(24), paneR, p(56)}, dtSingleLine|dtVCenter, w.pal.ink)
+	cv.drawAlphaText(w.fontSm, "常规接收选项与本机技术信息。", rectT{paneL, p(58), paneR, p(80)},
+		dtSingleLine|dtVCenter, w.pal.ink2)
+
+	rowH := p(58)
+	top := p(90)
+	g1 := rectT{paneL, top, paneR, top + rowH*3}
+	cv.drawAlphaRoundRect(g1, float64(p(12)), w.pal.paper, 255, w.pal.line, 255, 1.0)
+
+	recvTxt := "已暂停"
+	if recvEnabled.Load() {
+		recvTxt = "已开启"
 	}
-	return s
+	autoTxt := "未开启"
+	if autostartEnabled() {
+		autoTxt = "已开启"
+	}
+	dirText := ""
+	portText := "18800"
+	if w.app != nil {
+		dirText = w.app.dir
+		portText = fmt.Sprintf("%d", w.app.port)
+	}
+
+	g1Rows := []struct {
+		title, sub, btn string
+		btnR            rectT
+		hoverID         int
+	}{
+		{"后台接收文件", "关闭后其他设备暂时无法向此电脑发送", recvTxt, w.setRecvBtnR, hoverSetRecv},
+		{"接收文件保存位置", dirText, "打开", w.setOpenDirR, hoverSetOpenDir},
+		{"开机自动启动", "登录后自动缩至右下角托盘接收", autoTxt, w.setAutoBtnR, hoverSetAuto},
+	}
+	for i, r := range g1Rows {
+		ry := top + int32(i)*rowH
+		cv.drawAlphaText(w.fontBold, r.title,
+			rectT{paneL + p(16), ry + p(8), r.btnR.left - p(12), ry + p(30)},
+			dtSingleLine|dtVCenter, w.pal.ink)
+		cv.drawAlphaText(w.fontSm, r.sub,
+			rectT{paneL + p(16), ry + p(30), r.btnR.left - p(12), ry + p(50)},
+			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
+
+		bFill := w.pal.paper2
+		if w.hover == r.hoverID {
+			bFill = w.pal.paper3
+		}
+		cv.drawAlphaRoundRect(r.btnR, float64(p(6)), bFill, 255, w.pal.line, 255, 1.0)
+		cv.drawAlphaText(w.fontSm, r.btn, r.btnR, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
+		if i+1 < len(g1Rows) {
+			cv.fillColorAlpha(rectT{paneL + p(16), ry + rowH - 1, paneR - p(16), ry + rowH}, w.pal.lineSoft, 255)
+		}
+	}
+
+	// Quiet technical info section
+	lblY := g1.bottom + p(24)
+	cv.drawAlphaText(w.fontBold, "本机信息", rectT{paneL + p(4), lblY, paneR, lblY + p(22)},
+		dtSingleLine|dtVCenter, w.pal.ink2)
+
+	infoRowH := p(42)
+	infoTop := lblY + p(26)
+	g2 := rectT{paneL, infoTop, paneR, infoTop + infoRowH*3}
+	cv.drawAlphaRoundRect(g2, float64(p(12)), w.pal.paper, 255, w.pal.line, 255, 1.0)
+
+	idShow := truncID(w.fullID) + "（点击复制）"
+	if w.fullID == "" {
+		idShow = "未生成"
+	}
+	g2Rows := []struct {
+		k, v string
+		font syscall.Handle
+	}{
+		{"设备名称", w.hostName, w.fontSm},
+		{"设备 ID", idShow, w.fontMono},
+		{"本地监听端口", portText, w.fontMono},
+	}
+	for i, r := range g2Rows {
+		ry := infoTop + int32(i)*infoRowH
+		if i == 1 && w.hover == hoverSetCopyID {
+			cv.fillColorAlpha(rectT{paneL + 1, ry + 1, paneR - 1, ry + infoRowH - 1}, w.pal.paper2, 255)
+		}
+		cv.drawAlphaText(w.fontSm, r.k, rectT{paneL + p(16), ry, paneL + p(140), ry + infoRowH},
+			dtSingleLine|dtVCenter, w.pal.ink2)
+		cv.drawAlphaText(r.font, r.v, rectT{paneL + p(140), ry, paneR - p(16), ry + infoRowH},
+			dtRight|dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink)
+		if i+1 < len(g2Rows) {
+			cv.fillColorAlpha(rectT{paneL + p(16), ry + infoRowH - 1, paneR - p(16), ry + infoRowH}, w.pal.lineSoft, 255)
+		}
+	}
+
+	if w.status != "" {
+		cv.drawAlphaText(w.fontSm, w.status,
+			rectT{paneL, g2.bottom + p(12), paneR, cr.bottom - p(12)},
+			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
+	}
 }
 
-type ledgerCols struct {
-	time, dir, peer, files, size, dur rectT
-}
+// ---------------------------------------------------------------------------
+// Ledger parsing & filtering (compatible with cmd/ft-desktop/mainwin_test.go)
+// ---------------------------------------------------------------------------
 
-// columns splits the ledger horizontally: time and the three number columns are
-// right-aligned mono, the peer name takes whatever is left.
-func (w *mainWin) columns() ledgerCols {
-	p := w.px
-	l, r := w.ledgerT.left, w.ledgerT.right
-	timeW, dirW, filesW, sizeW, durW, stampW := p(44), p(24), p(64), p(62), p(52), p(54)
-	var c ledgerCols
-	c.time = rectT{l, 0, l + timeW, 0}
-	c.dir = rectT{c.time.right + p(8), 0, c.time.right + p(8) + dirW, 0}
-	c.size = rectT{r - stampW - p(8) - durW - p(8) - sizeW, 0, r - stampW - p(8) - durW - p(8), 0}
-	c.dur = rectT{c.size.right + p(8), 0, c.size.right + p(8) + durW, 0}
-	c.files = rectT{c.size.left - p(10) - filesW, 0, c.size.left - p(10), 0}
-	c.peer = rectT{c.dir.right + p(10), 0, c.files.left - p(8), 0}
-	return c
-}
-
-func (w *mainWin) stampCol() rectT {
-	p := w.px
-	r := w.ledgerT.right
-	return rectT{r - p(54), 0, r, 0}
-}
-
-// ledgerRow is one parsed line of app.recent ("15:04  → Name  2 个文件 · 2.1 MB").
-// That text is the only record the desktop keeps (the fields are shared with
-// the tray and the drop panel), so the ledger parses it back into columns
-// instead of inventing a parallel data structure.
 type ledgerRow struct {
 	time, dir, peer, files, size, dur, path string
 }
 
-func (w *mainWin) ledgerRows() []ledgerRow {
+func (w *mainWin) filteredLedger() []ledgerRow {
 	if w.app == nil {
 		return nil
 	}
-	lines := w.app.recentLines(8)
+	lines := w.app.recentLines(12)
 	out := make([]ledgerRow, 0, len(lines))
 	for _, l := range lines {
-		out = append(out, parseLedgerLine(l))
+		r := parseLedgerLine(l)
+		if w.filter == fltSend && r.dir != "发" {
+			continue
+		}
+		if w.filter == fltRecv && r.dir != "收" {
+			continue
+		}
+		out = append(out, r)
 	}
 	return out
+}
+
+func dashIfEmpty(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 func parseLedgerLine(line string) ledgerRow {
@@ -1038,7 +1295,6 @@ func parseLedgerLine(line string) ledgerRow {
 	}
 	segs := strings.Split(s, "·")
 	head := strings.TrimSpace(segs[0])
-	// "Name  2 个文件" keeps the peer and the file count in one segment.
 	if j := strings.Index(head, "  "); j >= 0 {
 		r.peer = strings.TrimSpace(head[:j])
 		r.files = strings.TrimSpace(head[j:])
@@ -1113,116 +1369,12 @@ func isPathToken(s string) bool {
 	return false
 }
 
-// pathStamp maps a path word to its stamp label and token colour: LAN is the
-// accent (it is the good case), punch is amber, relay is violet, failures are
-// danger. Colour never carries the meaning alone — the label spells it out.
-func pathStamp(word string, pal palette) (string, uint32) {
-	switch strings.ToLower(word) {
-	case "lan":
-		return "LAN", pal.accent
-	case "打洞", "punch":
-		return "打洞", pal.amber
-	case "中继", "relay":
-		return "中继", pal.violet
-	}
-	return "失败", pal.danger
-}
-
-func (w *mainWin) drawBar(dc uintptr, cr rectT) {
-	fillRect(dc, w.barR, w.pal.paper2)
-	w.hline(dc, 0, cr.right, w.barR.top, w.pal.lineSoft)
-
-	on := recvEnabled.Load()
-	w.drawPill(dc, w.pill, on)
-	if w.status != "" {
-		drawText(dc, w.fontSm, w.status, w.statusR, dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink3)
-	}
-	w.btn(dc, w.btnFile, "选择文件…", true, w.hover == hoverFile)
-	w.btn(dc, w.btnOpen, "打开接收目录", false, w.hover == hoverOpen)
-	if on {
-		w.btn(dc, w.btnPause, "暂停接收", false, w.hover == hoverPause)
-	} else {
-		w.btn(dc, w.btnPause, "恢复接收", true, w.hover == hoverPause)
-	}
-}
-
-// drawPill is the receiving indicator: a breathing accent dot plus the port.
-func (w *mainWin) drawPill(dc uintptr, r rectT, on bool) {
-	p := w.px
-	if r.right <= r.left {
-		return
-	}
-	roundBox(dc, r, (r.bottom-r.top)/2, w.pal.paper, w.pal.line)
-
-	cx := r.left + p(13)
-	cy := (r.top + r.bottom) / 2
-	color := w.pal.ink3
-	if on {
-		color = blend(w.pal.paper, w.pal.accent, breathAlpha())
-	}
-	disc(dc, cx, cy, p(3), color)
-
-	port := 0
-	if w.app != nil {
-		port = w.app.port
-	}
-	label := fmt.Sprintf("接收中 · :%d", port)
-	if !on {
-		label = fmt.Sprintf("已暂停 · :%d", port)
-	}
-	drawText(dc, w.fontMono, label, rectT{cx + p(9), r.top, r.right - p(10), r.bottom},
-		dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
-}
-
-// breathAlpha runs 0.55 -> 1 -> 0.55 over breathMs: the only animation here.
-func breathAlpha() float64 {
-	t, _, _ := procGetTickCount.Call()
-	phase := float64(uint32(t)%breathMs) / float64(breathMs)
-	return 0.55 + 0.45*(0.5+0.5*math.Sin(2*math.Pi*phase-math.Pi/2))
-}
-
-// btn draws one button: the primary style is accent-filled, the secondary is
-// outlined. Both use the 6 px radius from the tokens.
-func (w *mainWin) btn(dc uintptr, r rectT, label string, primary, hover bool) {
-	p := w.px
-	if primary {
-		fill := w.pal.accent
-		if hover {
-			fill = shade(w.pal.accent, w.dark, 0.12)
-		}
-		roundBox(dc, r, p(6), fill, fill)
-		drawText(dc, w.fontSm, label, r, dtCenter|dtSingleLine|dtVCenter, w.pal.accentInk)
-		return
-	}
-	fill := w.pal.paper
-	if hover {
-		fill = w.pal.paper3
-	}
-	roundBox(dc, r, p(6), fill, w.pal.line)
-	drawText(dc, w.fontSm, label, r, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
-}
-
-// stamp draws the path badge: 1px border, mono 11 text, 18 px tall.
-func (w *mainWin) stamp(dc uintptr, right, cy int32, label string, color uint32) {
-	p := w.px
-	half := p(stampH) / 2
-	padX := p(6)
-	tw := textWidth(dc, w.fontMono, label) + p(1)
-	r := rectT{right - tw - padX*2, cy - half, right, cy + half}
-	roundBox(dc, r, p(3), w.pal.paper, color)
-	drawTextSpaced(dc, w.fontMono, label, r, dtCenter|dtSingleLine|dtVCenter, color, p(1))
-}
-
 // ---------------------------------------------------------------------------
 // Interaction
 // ---------------------------------------------------------------------------
 
 func (w *mainWin) cursorIsHand() bool {
-	switch w.hover {
-	case hoverFile, hoverOpen, hoverPause, hoverEmpty, hoverZone, hoverPeer:
-		return true
-	}
-	return false
+	return w.hover != hoverNone
 }
 
 func (w *mainWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
@@ -1232,21 +1384,58 @@ func (w *mainWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
 
 	kind, idx := hoverNone, 0
 	switch {
-	case ptIn(w.btnFile, x, y):
-		kind = hoverFile
-	case ptIn(w.btnOpen, x, y):
-		kind = hoverOpen
-	case ptIn(w.btnPause, x, y):
-		kind = hoverPause
-	case !w.hasPeers() && ptIn(w.btnEmpty, x, y):
-		kind = hoverEmpty
-	case ptIn(w.zone, x, y):
-		kind = hoverZone
+	case ptIn(w.navHomeR, x, y):
+		kind = hoverNavHome
+	case ptIn(w.navDevicesR, x, y):
+		kind = hoverNavDevices
+	case ptIn(w.navSetR, x, y):
+		kind = hoverNavSettings
+	case w.page == pageHome && ptIn(w.tileFilesR, x, y):
+		kind = hoverTileFiles
+	case w.page == pageHome && ptIn(w.tileFolderR, x, y):
+		kind = hoverTileFolder
+	case w.page == pageHome && len(w.queued) > 0 && ptIn(w.queueClearR, x, y):
+		kind = hoverQueueClear
+	case w.page == pageHome && ptIn(w.addDevLinkR, x, y):
+		kind = hoverAddDevice
+	case w.page == pageHome && ptIn(w.peerPickerR, x, y):
+		kind = hoverPeerPicker
+	case w.page == pageHome && ptIn(w.sendBtnR, x, y):
+		kind = hoverSendBtn
+	case w.page == pageHome && ptIn(w.sendClipR, x, y):
+		kind = hoverSendClip
+	case w.page == pageHome && ptIn(w.fltAllR, x, y):
+		kind = hoverFltAll
+	case w.page == pageHome && ptIn(w.fltSendR, x, y):
+		kind = hoverFltSend
+	case w.page == pageHome && ptIn(w.fltRecvR, x, y):
+		kind = hoverFltRecv
+	case w.page == pageHome && ptIn(w.openDirR, x, y):
+		kind = hoverOpenDir
+	case w.page == pageDevices && ptIn(w.devAddBtnR, x, y):
+		kind = hoverDevAddBtn
+	case w.page == pageSettings && ptIn(w.setRecvBtnR, x, y):
+		kind = hoverSetRecv
+	case w.page == pageSettings && ptIn(w.setOpenDirR, x, y):
+		kind = hoverSetOpenDir
+	case w.page == pageSettings && ptIn(w.setAutoBtnR, x, y):
+		kind = hoverSetAuto
+	case w.page == pageSettings && ptIn(w.setCopyIDRowR, x, y):
+		kind = hoverSetCopyID
 	default:
-		for _, r := range w.rows {
-			if ptIn(r.rect, x, y) {
-				kind, idx = hoverPeer, r.idx
-				break
+		if w.page == pageHome {
+			for i, rr := range w.ledgerRowsR {
+				if ptIn(rr, x, y) {
+					kind, idx = hoverLedgerRow, i
+					break
+				}
+			}
+		} else if w.page == pageDevices {
+			for i, br := range w.devSendBtnsR {
+				if ptIn(br, x, y) {
+					kind, idx = hoverDevSendBtn, i
+					break
+				}
 			}
 		}
 	}
@@ -1275,49 +1464,175 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 	w.layout(cr.right, cr.bottom)
 
 	switch {
-	case ptIn(w.btnFile, x, y):
-		w.pickAndSend(hwnd)
-		return
-	case ptIn(w.btnOpen, x, y):
-		if w.app != nil {
-			shellOpen(w.app.dir)
-		}
-		return
-	case ptIn(w.btnPause, x, y):
-		on := !recvEnabled.Load()
-		recvEnabled.Store(on)
-		w.status = "接收已暂停"
-		if on {
-			w.status = "接收已恢复"
-		}
-		w.syncTimer(hwnd)
+	case ptIn(w.navHomeR, x, y):
+		w.page = pageHome
+		w.status = ""
 		procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 		return
-	case !w.hasPeers() && ptIn(w.btnEmpty, x, y):
+	case ptIn(w.navDevicesR, x, y):
+		w.page = pageDevices
+		w.status = ""
 		w.loadPeers()
-		w.status = fmt.Sprintf("已读取 %d 台配对设备", len(w.peers))
-		if len(w.peers) == 0 {
-			w.status = "还没有配对设备"
-		}
+		procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+		return
+	case ptIn(w.navSetR, x, y):
+		w.page = pageSettings
+		w.status = ""
+		w.refreshLocalMeta()
 		procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 		return
 	}
-	for _, r := range w.rows {
-		if ptIn(r.rect, x, y) {
-			w.sel = r.idx
+
+	switch w.page {
+	case pageHome:
+		switch {
+		case ptIn(w.tileFilesR, x, y):
+			if files := openFileDialog(uintptr(hwnd)); len(files) > 0 {
+				w.queued = files
+				w.status = ""
+				procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+			}
+		case ptIn(w.tileFolderR, x, y):
+			if dir := browseFolderDialog(hwnd, "选择要发送的文件夹"); dir != "" {
+				files := expandSendPaths([]string{dir})
+				if len(files) == 0 {
+					w.status = "所选文件夹内没有文件"
+				} else {
+					w.queued = files
+					w.status = ""
+				}
+				procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+			}
+		case len(w.queued) > 0 && ptIn(w.queueClearR, x, y):
+			w.queued = nil
 			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+		case ptIn(w.addDevLinkR, x, y):
+			openPairWindow(hwnd, w.app)
+		case ptIn(w.peerPickerR, x, y):
+			if len(w.peers) == 0 {
+				openPairWindow(hwnd, w.app)
+			} else if len(w.peers) > 1 {
+				w.sel = (w.sel + 1) % len(w.peers)
+				procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+			}
+		case ptIn(w.sendBtnR, x, y):
+			peer, ok := w.activePeer()
+			if !ok {
+				openPairWindow(hwnd, w.app)
+				return
+			}
+			if len(w.queued) > 0 {
+				files := append([]string(nil), w.queued...)
+				w.queued = nil
+				w.sendAsync(hwnd, peer, files)
+			} else {
+				w.pickAndSend(hwnd)
+			}
+		case ptIn(w.sendClipR, x, y):
+			w.sendClipboard(hwnd)
+		case ptIn(w.fltAllR, x, y):
+			w.filter = fltAll
+			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+		case ptIn(w.fltSendR, x, y):
+			w.filter = fltSend
+			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+		case ptIn(w.fltRecvR, x, y):
+			w.filter = fltRecv
+			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+		case ptIn(w.openDirR, x, y):
+			if w.app != nil {
+				shellOpen(w.app.dir)
+			}
+		default:
+			for _, rr := range w.ledgerRowsR {
+				if ptIn(rr, x, y) && w.app != nil {
+					shellOpen(w.app.dir)
+					return
+				}
+			}
+		}
+
+	case pageDevices:
+		if ptIn(w.devAddBtnR, x, y) {
+			openPairWindow(hwnd, w.app)
 			return
 		}
+		for i, br := range w.devSendBtnsR {
+			if ptIn(br, x, y) && i < len(w.peers) {
+				w.sel = i
+				w.pickAndSend(hwnd)
+				return
+			}
+		}
+
+	case pageSettings:
+		switch {
+		case ptIn(w.setRecvBtnR, x, y):
+			on := !recvEnabled.Load()
+			recvEnabled.Store(on)
+			w.status = map[bool]string{true: "已开启后台接收", false: "已暂停接收"}[on]
+			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+		case ptIn(w.setOpenDirR, x, y):
+			if w.app != nil {
+				shellOpen(w.app.dir)
+			}
+		case ptIn(w.setAutoBtnR, x, y):
+			on := !autostartEnabled()
+			if err := setAutostart(on); err != nil {
+				w.status = "开机自启设置失败：" + err.Error()
+			} else {
+				w.status = map[bool]string{true: "已设置开机静默自启", false: "已取消开机自启"}[on]
+			}
+			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+		case ptIn(w.setCopyIDRowR, x, y):
+			if w.fullID != "" && copyToClipboard(hwnd, w.fullID) {
+				w.status = "已复制本机设备 ID"
+				procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+			}
+		}
 	}
-	if ptIn(w.zone, x, y) {
-		w.pickAndSend(hwnd)
+}
+
+func (w *mainWin) sendClipboard(hwnd syscall.Handle) {
+	peer, ok := w.activePeer()
+	if !ok {
+		openPairWindow(hwnd, w.app)
+		return
 	}
+	txt, ok := readClipboardText()
+	if !ok || strings.TrimSpace(txt) == "" {
+		w.status = "剪贴板中没有文本内容"
+		procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+		return
+	}
+	tmp := filepath.Join(os.TempDir(), fmt.Sprintf("clipboard-%s.txt", time.Now().Format("150405")))
+	if err := os.WriteFile(tmp, []byte(txt), 0o600); err != nil {
+		w.status = "读取剪贴板失败：" + err.Error()
+		procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+		return
+	}
+	w.status = fmt.Sprintf("正在将剪贴板发往 %s…", peerLabel(peer))
+	procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+	go func() {
+		defer os.Remove(tmp)
+		res, err := sendToPeer(w.app, []string{tmp}, peer)
+		msg := fmt.Sprintf("已将剪贴板发给 %s（%d 字节）", peerLabel(peer), res.Bytes)
+		if err != nil {
+			msg = "发送失败：" + err.Error()
+		}
+		mainMu.Lock()
+		if mw := mainWins[hwnd]; mw != nil {
+			mw.status = msg
+		}
+		mainMu.Unlock()
+		procPostMessageW.Call(uintptr(hwnd), wmAppPaint, 0, 0)
+	}()
 }
 
 func (w *mainWin) pickAndSend(hwnd syscall.Handle) {
 	peer, ok := w.activePeer()
 	if !ok {
-		messageBox("轻渡", "还没有配对设备：先用 ferry/ft pair 或 App 的 6 位码配对")
+		openPairWindow(hwnd, w.app)
 		return
 	}
 	files := openFileDialog(uintptr(hwnd))
@@ -1329,11 +1644,6 @@ func (w *mainWin) pickAndSend(hwnd syscall.Handle) {
 
 func (w *mainWin) onDrop(hwnd syscall.Handle, hdrop syscall.Handle) {
 	defer procDragFinish.Call(uintptr(hdrop))
-	peer, ok := w.activePeer()
-	if !ok {
-		messageBox("轻渡", "还没有配对设备：先用 ferry/ft pair 或 App 的 6 位码配对")
-		return
-	}
 	var files []string
 	count, _, _ := procDragQueryFileW.Call(uintptr(hdrop), 0xffffffff, 0, 0)
 	for i := uintptr(0); i < count; i++ {
@@ -1343,6 +1653,12 @@ func (w *mainWin) onDrop(hwnd syscall.Handle, hdrop syscall.Handle) {
 			files = append(files, syscall.UTF16ToString(buf[:n]))
 		}
 	}
+	peer, ok := w.activePeer()
+	if !ok {
+		w.queued = expandSendPaths(files)
+		openPairWindow(hwnd, w.app)
+		return
+	}
 	w.sendAsync(hwnd, peer, files)
 }
 
@@ -1350,11 +1666,11 @@ func (w *mainWin) sendAsync(hwnd syscall.Handle, peer client.Peer, files []strin
 	if len(files) == 0 || w.app == nil {
 		return
 	}
-	w.status = fmt.Sprintf("正在发送 %d 个文件给 %s…", len(files), peerLabel(peer))
+	w.status = fmt.Sprintf("正在发送给 %s…", peerLabel(peer))
 	procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 	go func() {
 		res, err := sendToPeer(w.app, files, peer)
-		msg := fmt.Sprintf("已发送给 %s：%d 个文件，%d 字节", peerLabel(peer), len(res.Files), res.Bytes)
+		msg := fmt.Sprintf("已发送给 %s（%s）", peerLabel(peer), summarizeFiles(res.Files))
 		if err != nil {
 			msg = "发送失败：" + err.Error()
 		}
@@ -1374,8 +1690,6 @@ func peerLabel(p client.Peer) string {
 	return truncID(p.ID)
 }
 
-// openFileDialog shows the native multi-select dialog (no shell extension
-// dependency, works without a browser engine).
 func openFileDialog(owner uintptr) []string {
 	buf := make([]uint16, 64*1024)
 	ofn := openFileNameW{
@@ -1403,8 +1717,6 @@ func openFileDialog(owner uintptr) []string {
 	return out
 }
 
-// splitMultiSelect decodes the double-NUL separated buffer the dialog returns:
-// one path when a single file was chosen, else directory followed by names.
 func splitMultiSelect(buf []uint16) []string {
 	var parts []string
 	start := 0
@@ -1412,7 +1724,7 @@ func splitMultiSelect(buf []uint16) []string {
 		if c != 0 {
 			continue
 		}
-		if i == start { // double NUL: end of list
+		if i == start {
 			break
 		}
 		parts = append(parts, syscall.UTF16ToString(buf[start:i]))
@@ -1464,17 +1776,6 @@ func fillRect(hdc uintptr, r rectT, color uint32) {
 	procFillRect.Call(hdc, uintptr(unsafe.Pointer(&rr)), b)
 }
 
-func (w *mainWin) hline(hdc uintptr, x1, x2, y int32, color uint32) {
-	fillRect(hdc, rectT{x1, y, x2, y + 1}, color)
-}
-
-func (w *mainWin) vline(hdc uintptr, x, y1, y2 int32, color uint32) {
-	fillRect(hdc, rectT{x, y1, x + 1, y2}, color)
-}
-
-// roundBox fills a rounded rectangle and strokes it with a 1px pen. GDI pens
-// and brushes are created per call: at 25 frames per second for one small dot
-// that is cheaper than caching a palette of objects per window.
 func roundBox(hdc uintptr, r rectT, radius int32, fill, edge uint32) {
 	br, _, _ := procCreateBrush.Call(uintptr(fill))
 	pen, _, _ := procCreatePen.Call(psSolid, 1, uintptr(edge))
@@ -1488,35 +1789,6 @@ func roundBox(hdc uintptr, r rectT, radius int32, fill, edge uint32) {
 	procDeleteObject.Call(pen)
 }
 
-// dashedBox strokes a rounded rectangle with a 1px dashed pen: the GDI
-// equivalent of the mock's dashed drop zone. PS_DASH only works at width 1.
-func dashedBox(hdc uintptr, r rectT, radius int32, edge uint32) {
-	pen, _, _ := procCreatePen.Call(psDash, 1, uintptr(edge))
-	oldPen, _, _ := procSelectObject.Call(hdc, pen)
-	nullBrush, _, _ := procStock.Call(stockNullBrush)
-	oldBr, _, _ := procSelectObject.Call(hdc, nullBrush)
-	procRoundRect.Call(hdc, uintptr(r.left), uintptr(r.top), uintptr(r.right-1), uintptr(r.bottom-1),
-		uintptr(radius), uintptr(radius))
-	procSelectObject.Call(hdc, oldBr)
-	procSelectObject.Call(hdc, oldPen)
-	procDeleteObject.Call(pen)
-}
-
-// disc draws a filled circle. GDI shapes have no alpha, so the breathing is a
-// blend towards the paper colour instead of an opacity change.
-func disc(hdc uintptr, cx, cy, rad int32, color uint32) {
-	br, _, _ := procCreateBrush.Call(uintptr(color))
-	pen, _, _ := procCreatePen.Call(psSolid, 1, uintptr(color))
-	oldBr, _, _ := procSelectObject.Call(hdc, br)
-	oldPen, _, _ := procSelectObject.Call(hdc, pen)
-	procEllipse.Call(hdc, uintptr(cx-rad), uintptr(cy-rad), uintptr(cx+rad+1), uintptr(cy+rad+1))
-	procSelectObject.Call(hdc, oldBr)
-	procSelectObject.Call(hdc, oldPen)
-	procDeleteObject.Call(br)
-	procDeleteObject.Call(pen)
-}
-
-// blend mixes two COLORREFs: t=0 is a, t=1 is b.
 func blend(a, b uint32, t float64) uint32 {
 	mix := func(x, y uint32) uint32 {
 		v := float64(x) + (float64(y)-float64(x))*t
@@ -1533,8 +1805,6 @@ func blend(a, b uint32, t float64) uint32 {
 		mix((a>>16)&0xff, (b>>16)&0xff)<<16
 }
 
-// shade nudges a colour towards black (light theme) or white (dark theme); it
-// is how the primary button gets a hover state without a second token.
 func shade(c uint32, dark bool, amount float64) uint32 {
 	if dark {
 		return blend(c, 0x00FFFFFF, amount)
@@ -1552,8 +1822,6 @@ func drawText(hdc uintptr, font syscall.Handle, s string, r rectT, flags uint32,
 	procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(p)), ^uintptr(0), uintptr(unsafe.Pointer(&rr)), uintptr(flags))
 }
 
-// drawTextSpaced is drawText with letter spacing (SetTextCharacterExtra), used
-// for the small labels and the stamps.
 func drawTextSpaced(hdc uintptr, font syscall.Handle, s string, r rectT, flags uint32, color uint32, extra int32) {
 	if extra != 0 {
 		procCharExtra.Call(hdc, uintptr(extra))

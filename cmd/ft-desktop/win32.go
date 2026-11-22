@@ -16,6 +16,7 @@ var (
 	shell32  = syscall.NewLazyDLL("shell32.dll")
 	gdi32    = syscall.NewLazyDLL("gdi32.dll")
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
+	ole32    = syscall.NewLazyDLL("ole32.dll")
 
 	procRegisterClassExW         = user32.NewProc("RegisterClassExW")
 	procCreateWindowExW          = user32.NewProc("CreateWindowExW")
@@ -44,6 +45,25 @@ var (
 	procAllowSetForegroundWindow = user32.NewProc("AllowSetForegroundWindow")
 	procMessageBoxW              = user32.NewProc("MessageBoxW")
 	procGetWindowTextW           = user32.NewProc("GetWindowTextW")
+	procGetWindowTextLengthW     = user32.NewProc("GetWindowTextLengthW")
+	procSetWindowTextW           = user32.NewProc("SetWindowTextW")
+	procEnableWindow             = user32.NewProc("EnableWindow")
+	procSetFocus                 = user32.NewProc("SetFocus")
+	procOpenClipboard            = user32.NewProc("OpenClipboard")
+	procCloseClipboard           = user32.NewProc("CloseClipboard")
+	procEmptyClipboard           = user32.NewProc("EmptyClipboard")
+	procSetClipboardData         = user32.NewProc("SetClipboardData")
+	procGetClipboardData         = user32.NewProc("GetClipboardData")
+	procGlobalAlloc              = kernel32.NewProc("GlobalAlloc")
+	procGlobalLock               = kernel32.NewProc("GlobalLock")
+	procGlobalUnlock             = kernel32.NewProc("GlobalUnlock")
+	procSHBrowseForFolderW       = shell32.NewProc("SHBrowseForFolderW")
+	procSHGetPathFromIDListW     = shell32.NewProc("SHGetPathFromIDListW")
+	procCoInitializeEx           = ole32.NewProc("CoInitializeEx")
+	procCoUninitialize           = ole32.NewProc("CoUninitialize")
+	procCoTaskMemFree            = ole32.NewProc("CoTaskMemFree")
+	procMoveToEx                 = gdi32.NewProc("MoveToEx")
+	procLineTo                   = gdi32.NewProc("LineTo")
 	procGetWindowRect            = user32.NewProc("GetWindowRect")
 	procSetWindowPos             = user32.NewProc("SetWindowPos")
 	procShowWindow               = user32.NewProc("ShowWindow")
@@ -264,6 +284,100 @@ func loadAppIcon(size int32) syscall.Handle {
 	}
 	h, _, _ := procLoadIconW.Call(0, idiApplication)
 	return syscall.Handle(h)
+}
+
+func copyToClipboard(hwnd syscall.Handle, text string) bool {
+	if text == "" {
+		return false
+	}
+	u := syscall.StringToUTF16(text)
+	byteLen := len(u) * 2
+	const gmemMoveable = 0x0002
+	hMem, _, _ := procGlobalAlloc.Call(gmemMoveable, uintptr(byteLen))
+	if hMem == 0 {
+		return false
+	}
+	p, _, _ := procGlobalLock.Call(hMem)
+	if p == 0 {
+		return false
+	}
+	dst := unsafe.Slice((*uint16)(ptrAt(p)), len(u))
+	copy(dst, u)
+	procGlobalUnlock.Call(hMem)
+
+	ok, _, _ := procOpenClipboard.Call(uintptr(hwnd))
+	if ok == 0 {
+		return false
+	}
+	defer procCloseClipboard.Call()
+	procEmptyClipboard.Call()
+	const cfUnicodeText = 13
+	r, _, _ := procSetClipboardData.Call(cfUnicodeText, hMem)
+	return r != 0
+}
+
+func readClipboardText() (string, bool) {
+	const cfUnicodeText = 13
+	ok, _, _ := procOpenClipboard.Call(0)
+	if ok == 0 {
+		return "", false
+	}
+	defer procCloseClipboard.Call()
+	h, _, _ := procGetClipboardData.Call(cfUnicodeText)
+	if h == 0 {
+		return "", false
+	}
+	p, _, _ := procGlobalLock.Call(h)
+	if p == 0 {
+		return "", false
+	}
+	defer procGlobalUnlock.Call(h)
+	// Scan up to 1 MiB of UTF-16 characters safely.
+	const maxChars = 512 * 1024
+	u := unsafe.Slice((*uint16)(ptrAt(p)), maxChars)
+	n := 0
+	for n < maxChars && u[n] != 0 {
+		n++
+	}
+	if n == 0 {
+		return "", false
+	}
+	return syscall.UTF16ToString(u[:n]), true
+}
+
+func browseFolderDialog(owner syscall.Handle, title string) string {
+	hr, _, _ := procCoInitializeEx.Call(0, 2)
+	if int32(hr) >= 0 {
+		defer procCoUninitialize.Call()
+	}
+	type browseInfoW struct {
+		hwndOwner      syscall.Handle
+		pidlRoot       uintptr
+		pszDisplayName *uint16
+		lpszTitle      *uint16
+		ulFlags        uint32
+		lpfn           uintptr
+		lParam         uintptr
+		iImage         int32
+	}
+	disp := make([]uint16, 260)
+	bi := browseInfoW{
+		hwndOwner:      owner,
+		pszDisplayName: &disp[0],
+		lpszTitle:      utf16Ptr(title),
+		ulFlags:        0x0001 | 0x0040 | 0x0010,
+	}
+	pidl, _, _ := procSHBrowseForFolderW.Call(uintptr(unsafe.Pointer(&bi)))
+	if pidl == 0 {
+		return ""
+	}
+	defer procCoTaskMemFree.Call(pidl)
+	buf := make([]uint16, 32768)
+	ok, _, _ := procSHGetPathFromIDListW.Call(pidl, uintptr(unsafe.Pointer(&buf[0])))
+	if ok == 0 {
+		return ""
+	}
+	return syscall.UTF16ToString(buf)
 }
 
 // setDPIAware makes the process per-monitor DPI aware. Without it Windows
