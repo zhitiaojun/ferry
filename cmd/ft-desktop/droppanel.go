@@ -466,8 +466,10 @@ func panelWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintp
 		// windows, so visibility follows the mouse button instead: hide a few
 		// ticks after the left button comes up. This is what keeps the panel
 		// from blinking while the drag passes over other windows.
-		ks, _, _ := procGetAsyncKeyState.Call(1) // VK_LBUTTON
-		if int32(ks)&0x8000 == 0 {
+		ksL, _, _ := procGetAsyncKeyState.Call(1) // VK_LBUTTON
+		ksR, _, _ := procGetAsyncKeyState.Call(2) // VK_RBUTTON
+		btnDown := int32(ksL)&0x8000 != 0 || int32(ksR)&0x8000 != 0
+		if !btnDown {
 			p.buttonUp++
 			if p.buttonUp*60 >= 180 {
 				p.buttonUp = 0
@@ -477,6 +479,15 @@ func panelWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintp
 		} else {
 			p.buttonUp = 0
 		}
+
+		var cursor pointT
+		procGetCursorPos.Call(uintptr(unsafe.Pointer(&cursor)))
+		var wr rectT
+		procGetWindowRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&wr)))
+		inside := cursor.x >= wr.left && cursor.x < wr.right && cursor.y >= wr.top && cursor.y < wr.bottom
+		pad := int32(float64(16) * float64(p.dpi) / 96.0)
+		insideLoose := cursor.x >= wr.left-pad && cursor.x < wr.right+pad && cursor.y >= wr.top-pad && cursor.y < wr.bottom+pad
+
 		dragMu.Lock()
 		// Also drop entries whose window no longer exists: when a drag ends the
 		// shell may tear the image window down without us seeing that exact
@@ -498,7 +509,11 @@ func panelWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintp
 		}
 		live := len(dragWins)
 		dragMu.Unlock()
-		if live == 0 {
+		// Explorer hides SysDragImage whenever the pointer rests over a
+		// WM_DROPFILES window; hiding on live==0 while the mouse button is
+		// still held over the panel would expose Explorer, re-show
+		// SysDragImage, and loop between compact and expanded.
+		if live == 0 && !(btnDown && insideLoose) {
 			p.dragGone++
 			if p.dragGone*60 >= 300 {
 				p.dragGone = 0
@@ -508,11 +523,6 @@ func panelWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintp
 		} else {
 			p.dragGone = 0
 		}
-		var cursor pointT
-		procGetCursorPos.Call(uintptr(unsafe.Pointer(&cursor)))
-		var wr rectT
-		procGetWindowRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&wr)))
-		inside := cursor.x >= wr.left && cursor.x < wr.right && cursor.y >= wr.top && cursor.y < wr.bottom
 		if !p.expanded {
 			// The small "drop here" window turns into the picker as soon as
 			// the dragged file reaches it.
@@ -521,9 +531,9 @@ func panelWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintp
 			}
 			return 0
 		}
-		if !inside {
+		if !insideLoose {
 			p.outside++
-			if p.outside*60 >= 260 {
+			if p.outside*60 >= 360 {
 				p.setExpanded(false)
 			}
 			return 0
