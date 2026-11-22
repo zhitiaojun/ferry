@@ -128,7 +128,7 @@ func (p *dropPanel) ensure() error {
 	}
 	p.hwnd = syscall.Handle(h)
 	_, dark := theme()
-	p.acrylic = enableAcrylicBackdrop(p.hwnd, dark)
+	p.acrylic = enableUnfocusedAcrylic(p.hwnd, dark)
 	p.applyDPI()
 	procDragAcceptFiles.Call(uintptr(p.hwnd), 1)
 	return nil
@@ -172,14 +172,9 @@ func (p *dropPanel) freeFonts() {
 
 func (p *dropPanel) makeFonts() {
 	p.freeFonts()
-	mk := func(size int32, weight int32) syscall.Handle {
-		h, _, _ := procCreateFontW.Call(uintptr(-p.px(size)), 0, 0, 0, uintptr(weight), 0, 0, 0,
-			1, 0, 0, 5, 0, uintptr(unsafe.Pointer(utf16Ptr("Microsoft YaHei UI"))))
-		return syscall.Handle(h)
-	}
-	p.fontLg = mk(14, 600)
-	p.fontNm = mk(13, 600)
-	p.fontSm = mk(12, 400)
+	p.fontLg = createUIFont(p.px(14), 600)
+	p.fontNm = createUIFont(p.px(13), 600)
+	p.fontSm = createUIFont(p.px(12), 400)
 }
 
 func (p *dropPanel) reloadPeers() {
@@ -204,6 +199,8 @@ func (p *dropPanel) show() {
 	if err := p.ensure(); err != nil {
 		return
 	}
+	_, dark := theme()
+	p.acrylic = enableUnfocusedAcrylic(p.hwnd, dark)
 	p.applyDPI()
 	p.reloadPeers()
 	p.expanded = false
@@ -312,16 +309,14 @@ func (p *dropPanel) paint(hwnd syscall.Handle) {
 
 	full := rectT{0, 0, p.pw, p.ph}
 	if p.acrylic {
-		// Semi-transparent frost over DWM Acrylic blur + hairline edge when non-acrylic
-		tintAlpha := byte(175)
-		if dark {
-			tintAlpha = 190
-		}
-		cv.fillColorAlpha(full, pal.paper, tintAlpha)
+		// Leave glass background transparent (A=0) so ACCENT_ENABLE_ACRYLICBLURBEHIND's
+		// live frosted Gaussian blur + GradientColor renders directly, plus a crisp hairline edge.
+		cv.drawAlphaRoundRect(full, float64(p.px(12)), 0, 0, pal.line, 190, 1.0)
 	} else {
 		cv.fillColorAlpha(full, pal.paper, 255)
 		cv.drawAlphaRoundRect(full, float64(p.px(12)), 0, 0, pal.line, 255, 1.0)
 	}
+	_ = dark
 
 	if !p.expanded {
 		// Compact floating pill: small paper-boat dot mark + single clear label.
@@ -348,11 +343,11 @@ func (p *dropPanel) paint(hwnd syscall.Handle) {
 	if len(p.peers) == 0 {
 		box := rectT{p.px(14), title.bottom + p.px(12), p.pw - p.px(14), p.ph - p.px(18)}
 		boxFill := pal.paper
-		boxA := byte(225)
+		boxA := byte(175)
 		if !p.acrylic {
 			boxA = 255
 		}
-		cv.drawAlphaRoundRect(box, float64(p.px(10)), boxFill, boxA, pal.line, 255, 1.0)
+		cv.drawAlphaRoundRect(box, float64(p.px(10)), boxFill, boxA, pal.line, 220, 1.0)
 		cv.drawAlphaText(p.fontSm, "还没有已配对设备\n松手后打开配对窗口",
 			rectT{box.left + p.px(10), box.top + p.px(14), box.right - p.px(10), box.bottom - p.px(10)},
 			dtCenter|dtWordBreak, pal.ink2)
@@ -363,12 +358,12 @@ func (p *dropPanel) paint(hwnd syscall.Handle) {
 	for i, r := range rows {
 		active := i == p.active
 		fill := pal.paper
-		fillA := byte(215)
+		fillA := byte(170)
 		edge := pal.line
 		borderW := 1.0
 		if active {
 			fill = pal.accentSoft
-			fillA = 240
+			fillA = 225
 			edge = pal.accent
 			borderW = float64(p.px(2))
 			if borderW < 1.5 {

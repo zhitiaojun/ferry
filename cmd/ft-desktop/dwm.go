@@ -11,14 +11,28 @@ import (
 var (
 	dwmapi = syscall.NewLazyDLL("dwmapi.dll")
 
-	procDwmSetWindowAttribute    = dwmapi.NewProc("DwmSetWindowAttribute")
-	procDwmExtendFrameIntoClient = dwmapi.NewProc("DwmExtendFrameIntoClientArea")
-	procCreateDIBSection         = gdi32.NewProc("CreateDIBSection")
-	procGdiFlush                 = gdi32.NewProc("GdiFlush")
+	procDwmSetWindowAttribute      = dwmapi.NewProc("DwmSetWindowAttribute")
+	procDwmExtendFrameIntoClient   = dwmapi.NewProc("DwmExtendFrameIntoClientArea")
+	procCreateDIBSection           = gdi32.NewProc("CreateDIBSection")
+	procGdiFlush                   = gdi32.NewProc("GdiFlush")
+	procSetWindowCompositionAttrib = user32.NewProc("SetWindowCompositionAttribute")
 )
 
 type dwmMargins struct {
 	cxLeft, cxRight, cyTop, cyBottom int32
+}
+
+type accentPolicy struct {
+	AccentState   uint32
+	AccentFlags   uint32
+	GradientColor uint32
+	AnimationId   uint32
+}
+
+type windowCompositionAttribData struct {
+	Attrib uint32
+	Data   unsafe.Pointer
+	SizeOf uintptr
 }
 
 type bitmapInfoHeader struct {
@@ -74,6 +88,55 @@ func enableAcrylicBackdrop(hwnd syscall.Handle, dark bool) bool {
 		return false
 	}
 	return true
+}
+
+// enableUnfocusedAcrylic enables Acrylic blur that remains frosted even on
+// WS_EX_NOACTIVATE popup windows that never take focus (unlike Win11
+// SystemBackdropType=3, which turns opaque gray when unfocused).
+func enableUnfocusedAcrylic(hwnd syscall.Handle, dark bool) bool {
+	if hwnd == 0 {
+		return false
+	}
+	const (
+		dwmwaUseImmersiveDarkMode   = 20
+		dwmwaWindowCornerPreference = 33
+		dwmwcpRound                 = 2
+		wcaAccentPolicy             = 19
+		accentEnableAcrylic         = 4
+		accentFlagBlend             = 2
+	)
+	var darkVal int32
+	if dark {
+		darkVal = 1
+	}
+	procDwmSetWindowAttribute.Call(uintptr(hwnd), dwmwaUseImmersiveDarkMode, uintptr(unsafe.Pointer(&darkVal)), 4)
+	corner := int32(dwmwcpRound)
+	procDwmSetWindowAttribute.Call(uintptr(hwnd), dwmwaWindowCornerPreference, uintptr(unsafe.Pointer(&corner)), 4)
+
+	m := dwmMargins{-1, -1, -1, -1}
+	procDwmExtendFrameIntoClient.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&m)))
+
+	grad := uint32(0x9CFAFAFA) // Light frost (#FAFAFA, 0xAABBGGRR)
+	if dark {
+		grad = 0xB0302218 // Dark frost (#182230, 0xAABBGGRR)
+	}
+	pol := accentPolicy{
+		AccentState:   accentEnableAcrylic,
+		AccentFlags:   accentFlagBlend,
+		GradientColor: grad,
+	}
+	data := windowCompositionAttribData{
+		Attrib: wcaAccentPolicy,
+		Data:   unsafe.Pointer(&pol),
+		SizeOf: unsafe.Sizeof(pol),
+	}
+	if err := procSetWindowCompositionAttrib.Find(); err == nil {
+		r, _, _ := procSetWindowCompositionAttrib.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&data)))
+		if r != 0 {
+			return true
+		}
+	}
+	return enableAcrylicBackdrop(hwnd, dark)
 }
 
 // glassCanvas backs GDI + premultiplied-alpha compositing in a 32-bit BGRA DIB

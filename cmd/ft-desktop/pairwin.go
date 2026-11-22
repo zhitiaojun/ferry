@@ -272,16 +272,11 @@ func (p *pairWin) px(v int32) int32 {
 }
 
 func (p *pairWin) makeFonts() {
-	mk := func(sz, weight int32, face string) syscall.Handle {
-		h, _, _ := procCreateFontW.Call(uintptr(-p.px(sz)), 0, 0, 0, uintptr(weight), 0, 0, 0,
-			1, 0, 0, 5, 0, uintptr(unsafe.Pointer(utf16Ptr(face))))
-		return syscall.Handle(h)
-	}
-	p.fontTitle = mk(17, 700, "Microsoft YaHei UI")
-	p.fontSub = mk(12, 400, "Microsoft YaHei UI")
-	p.fontCode = mk(20, 700, "Consolas")
-	p.fontBody = mk(13, 600, "Microsoft YaHei UI")
-	p.fontSm = mk(12, 400, "Microsoft YaHei UI")
+	p.fontTitle = createUIFont(p.px(17), 700)
+	p.fontSub = createUIFont(p.px(12), 400)
+	p.fontCode = createUIFont(p.px(20), 700)
+	p.fontBody = createUIFont(p.px(13), 600)
+	p.fontSm = createUIFont(p.px(12), 400)
 }
 
 func (p *pairWin) freeResources() {

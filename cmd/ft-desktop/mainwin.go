@@ -528,16 +528,8 @@ var (
 )
 
 func pickFaces() {
-	pick := func(cands []string) string {
-		for _, c := range cands {
-			if faceExists(c) {
-				return c
-			}
-		}
-		return cands[len(cands)-1]
-	}
-	sansFace = pick([]string{"Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI"})
-	monoFace = pick([]string{"Consolas", "Cascadia Mono", "Courier New"})
+	sansFace = uiFontFace()
+	monoFace = sansFace
 }
 
 func faceExists(name string) bool {
@@ -567,17 +559,12 @@ func faceExists(name string) bool {
 func (w *mainWin) makeFonts() {
 	faceOnce.Do(pickFaces)
 	w.freeFonts()
-	mk := func(size int32, weight int32, face string) syscall.Handle {
-		h, _, _ := procCreateFontW.Call(uintptr(-w.px(size)), 0, 0, 0, uintptr(weight), 0, 0, 0,
-			1, 0, 0, 5, 0, uintptr(unsafe.Pointer(utf16Ptr(face))))
-		return syscall.Handle(h)
-	}
-	w.fontH1 = mk(19, 700, sansFace)
-	w.fontH2 = mk(15, 600, sansFace)
-	w.fontBody = mk(13, 400, sansFace)
-	w.fontBold = mk(13, 600, sansFace)
-	w.fontSm = mk(12, 400, sansFace)
-	w.fontMono = mk(12, 400, monoFace)
+	w.fontH1 = createUIFont(w.px(19), 700)
+	w.fontH2 = createUIFont(w.px(15), 600)
+	w.fontBody = createUIFont(w.px(13), 400)
+	w.fontBold = createUIFont(w.px(13), 600)
+	w.fontSm = createUIFont(w.px(12), 400)
+	w.fontMono = createUIFont(w.px(12), 400)
 }
 
 func (w *mainWin) freeFonts() {
@@ -790,24 +777,31 @@ func (w *mainWin) paintDC(hdc uintptr, hwnd syscall.Handle) {
 	cv.finishBlit(hdc)
 }
 
-func (w *mainWin) drawScene(cv *glassCanvas, cr rectT) {
-	// 1. Left navigation rail (Win11 Acrylic frosted glass when available).
-	if w.acrylic {
-		railAlpha := byte(175)
-		if w.dark {
-			railAlpha = 185
-		}
-		cv.fillColorAlpha(w.railR, w.pal.paper2, railAlpha)
-	} else {
-		cv.fillColorAlpha(w.railR, w.pal.paper, 255)
+func (w *mainWin) surfaceAlpha(a byte) byte {
+	if !w.acrylic {
+		return 255
 	}
+	return a
+}
+
+func (w *mainWin) drawScene(cv *glassCanvas, cr rectT) {
+	// 1. Left navigation rail (more transparent Acrylic frosted glass).
+	railAlpha := byte(148)
+	if w.dark {
+		railAlpha = 162
+	}
+	cv.fillColorAlpha(w.railR, w.pal.paper2, w.surfaceAlpha(railAlpha))
 	// Hairline divider between rail and workspace.
-	cv.fillColorAlpha(rectT{w.railR.right - 1, 0, w.railR.right, cr.bottom}, w.pal.line, 255)
+	cv.fillColorAlpha(rectT{w.railR.right - 1, 0, w.railR.right, cr.bottom}, w.pal.line, w.surfaceAlpha(175))
 	w.drawRail(cv)
 
-	// 2. Right workspace (crisp opaque surfaces for comfortable daily reading).
+	// 2. Right workspace (subtly translucent Acrylic, clearly brighter than rail).
 	rightR := rectT{w.railR.right, 0, cr.right, cr.bottom}
-	cv.fillColorAlpha(rightR, w.pal.paper, 255)
+	workAlpha := byte(216)
+	if w.dark {
+		workAlpha = 222
+	}
+	cv.fillColorAlpha(rightR, w.pal.paper, w.surfaceAlpha(workAlpha))
 
 	switch w.page {
 	case pageHome:
@@ -889,18 +883,24 @@ func (w *mainWin) drawNavIcon(cv *glassCanvas, r rectT, kind int, color uint32) 
 func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 	p := w.px
 	// Left send card gutter
-	cv.fillColorAlpha(w.sendColR, w.pal.paper2, 255)
-	cv.fillColorAlpha(rectT{w.sendColR.right - 1, 0, w.sendColR.right, cr.bottom}, w.pal.line, 255)
+	colAlpha := byte(198)
+	if w.dark {
+		colAlpha = 208
+	}
+	cv.fillColorAlpha(w.sendColR, w.pal.paper2, w.surfaceAlpha(colAlpha))
+	cv.fillColorAlpha(rectT{w.sendColR.right - 1, 0, w.sendColR.right, cr.bottom}, w.pal.line, w.surfaceAlpha(175))
 
 	// Compact Send Card
-	cv.drawAlphaRoundRect(w.sendCardR, float64(p(12)), w.pal.paper, 255, w.pal.line, 255, 1.0)
+	cardA := w.surfaceAlpha(185)
+	tileA := w.surfaceAlpha(205)
+	cv.drawAlphaRoundRect(w.sendCardR, float64(p(12)), w.pal.paper, cardA, w.pal.line, w.surfaceAlpha(210), 1.0)
 
 	// Dual tiles: 添加文件 / 添加文件夹
 	fEdge := w.pal.line
 	if w.hover == hoverTileFiles {
 		fEdge = w.pal.accent
 	}
-	cv.drawAlphaRoundRect(w.tileFilesR, float64(p(8)), w.pal.paper, 255, fEdge, 255, 1.0)
+	cv.drawAlphaRoundRect(w.tileFilesR, float64(p(8)), w.pal.paper, tileA, fEdge, w.surfaceAlpha(220), 1.0)
 	plusR := rectT{(w.tileFilesR.left+w.tileFilesR.right)/2 - p(13), w.tileFilesR.top + p(12),
 		(w.tileFilesR.left+w.tileFilesR.right)/2 + p(13), w.tileFilesR.top + p(38)}
 	cv.drawAlphaRoundRect(plusR, float64(p(13)), w.pal.accent, 255, 0, 0, 0)
@@ -913,10 +913,10 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 	if w.hover == hoverTileFolder {
 		dEdge = w.pal.accent
 	}
-	cv.drawAlphaRoundRect(w.tileFolderR, float64(p(8)), w.pal.paper, 255, dEdge, 255, 1.0)
+	cv.drawAlphaRoundRect(w.tileFolderR, float64(p(8)), w.pal.paper, tileA, dEdge, w.surfaceAlpha(220), 1.0)
 	fldIconR := rectT{(w.tileFolderR.left+w.tileFolderR.right)/2 - p(13), w.tileFolderR.top + p(12),
 		(w.tileFolderR.left+w.tileFolderR.right)/2 + p(13), w.tileFolderR.top + p(38)}
-	cv.drawAlphaRoundRect(fldIconR, float64(p(13)), w.pal.paper, 255, w.pal.line, 255, 1.0)
+	cv.drawAlphaRoundRect(fldIconR, float64(p(13)), w.pal.paper, tileA, w.pal.line, w.surfaceAlpha(220), 1.0)
 	w.drawFolderGlyph(cv, fldIconR, w.pal.ink2)
 	cv.drawAlphaText(w.fontSm, "添加文件夹",
 		rectT{w.tileFolderR.left, fldIconR.bottom + p(4), w.tileFolderR.right, w.tileFolderR.bottom - p(6)},
@@ -924,7 +924,7 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 
 	// Queued summary row
 	if len(w.queued) > 0 {
-		cv.drawAlphaRoundRect(w.queueBoxR, float64(p(6)), w.pal.paper2, 255, w.pal.line, 255, 1.0)
+		cv.drawAlphaRoundRect(w.queueBoxR, float64(p(6)), w.pal.paper2, tileA, w.pal.line, w.surfaceAlpha(210), 1.0)
 		label := fmt.Sprintf("已选 %s", summarizeFiles(w.queued))
 		cv.drawAlphaText(w.fontSm, label,
 			rectT{w.queueBoxR.left + p(8), w.queueBoxR.top, w.queueClearR.left - p(4), w.queueBoxR.bottom},
@@ -942,7 +942,7 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 	if w.hover == hoverPeerPicker {
 		pEdge = w.pal.accent
 	}
-	cv.drawAlphaRoundRect(w.peerPickerR, float64(p(8)), w.pal.paper, 255, pEdge, 255, 1.0)
+	cv.drawAlphaRoundRect(w.peerPickerR, float64(p(8)), w.pal.paper, tileA, pEdge, w.surfaceAlpha(220), 1.0)
 	if peer, ok := w.activePeer(); ok {
 		txt := peerLabel(peer)
 		if len(w.peers) > 1 {
@@ -1025,7 +1025,7 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 			}
 			r := rows[i]
 			if w.hover == hoverLedgerRow && w.hoverIdx == i {
-				cv.fillColorAlpha(rr, w.pal.paper2, 255)
+				cv.fillColorAlpha(rr, w.pal.paper2, w.surfaceAlpha(190))
 			}
 			title := r.files
 			if title == "" {
@@ -1059,7 +1059,7 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 					rectT{rr.right - rightActionW, rr.top, rr.right - p(4), rr.bottom},
 					dtRight|dtSingleLine|dtVCenter, w.pal.accent)
 			}
-			cv.fillColorAlpha(rectT{rr.left, rr.bottom - 1, rr.right, rr.bottom}, w.pal.lineSoft, 255)
+			cv.fillColorAlpha(rectT{rr.left, rr.bottom - 1, rr.right, rr.bottom}, w.pal.lineSoft, w.surfaceAlpha(175))
 		}
 	}
 
@@ -1110,7 +1110,7 @@ func (w *mainWin) drawDevices(cv *glassCanvas, cr rectT) {
 
 	if len(w.peers) == 0 {
 		box := rectT{paneL, p(98), paneR, p(228)}
-		cv.drawAlphaRoundRect(box, float64(p(12)), w.pal.paper2, 255, w.pal.line, 255, 1.0)
+		cv.drawAlphaRoundRect(box, float64(p(12)), w.pal.paper2, w.surfaceAlpha(190), w.pal.line, w.surfaceAlpha(200), 1.0)
 		cv.drawAlphaText(w.fontBold, "还没有已配对设备", rectT{paneL, p(134), paneR, p(162)},
 			dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
 		cv.drawAlphaText(w.fontSm, "点击右上角「添加设备」，用手机轻渡扫码或输入 6 位配对码即可绑定。",
@@ -1121,7 +1121,7 @@ func (w *mainWin) drawDevices(cv *glassCanvas, cr rectT) {
 	rowH := p(58)
 	top := p(98)
 	box := rectT{paneL, top, paneR, top + int32(len(w.devSendBtnsR))*rowH}
-	cv.drawAlphaRoundRect(box, float64(p(12)), w.pal.paper, 255, w.pal.line, 255, 1.0)
+	cv.drawAlphaRoundRect(box, float64(p(12)), w.pal.paper, w.surfaceAlpha(195), w.pal.line, w.surfaceAlpha(200), 1.0)
 	for i, br := range w.devSendBtnsR {
 		ry := top + int32(i)*rowH
 		peer := w.peers[i]
@@ -1136,10 +1136,10 @@ func (w *mainWin) drawDevices(cv *glassCanvas, cr rectT) {
 		if w.hover == hoverDevSendBtn && w.hoverIdx == i {
 			bFill = w.pal.paper3
 		}
-		cv.drawAlphaRoundRect(br, float64(p(6)), bFill, 255, w.pal.line, 255, 1.0)
+		cv.drawAlphaRoundRect(br, float64(p(6)), bFill, w.surfaceAlpha(210), w.pal.line, w.surfaceAlpha(200), 1.0)
 		cv.drawAlphaText(w.fontSm, "发送文件", br, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
 		if i+1 < len(w.devSendBtnsR) {
-			cv.fillColorAlpha(rectT{paneL + p(16), ry + rowH - 1, paneR - p(16), ry + rowH}, w.pal.lineSoft, 255)
+			cv.fillColorAlpha(rectT{paneL + p(16), ry + rowH - 1, paneR - p(16), ry + rowH}, w.pal.lineSoft, w.surfaceAlpha(175))
 		}
 	}
 }
@@ -1157,7 +1157,7 @@ func (w *mainWin) drawSettings(cv *glassCanvas, cr rectT) {
 	rowH := p(58)
 	top := p(90)
 	g1 := rectT{paneL, top, paneR, top + rowH*3}
-	cv.drawAlphaRoundRect(g1, float64(p(12)), w.pal.paper, 255, w.pal.line, 255, 1.0)
+	cv.drawAlphaRoundRect(g1, float64(p(12)), w.pal.paper, w.surfaceAlpha(195), w.pal.line, w.surfaceAlpha(200), 1.0)
 
 	recvTxt := "已暂停"
 	if recvEnabled.Load() {
@@ -1196,10 +1196,10 @@ func (w *mainWin) drawSettings(cv *glassCanvas, cr rectT) {
 		if w.hover == r.hoverID {
 			bFill = w.pal.paper3
 		}
-		cv.drawAlphaRoundRect(r.btnR, float64(p(6)), bFill, 255, w.pal.line, 255, 1.0)
+		cv.drawAlphaRoundRect(r.btnR, float64(p(6)), bFill, w.surfaceAlpha(210), w.pal.line, w.surfaceAlpha(200), 1.0)
 		cv.drawAlphaText(w.fontSm, r.btn, r.btnR, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
 		if i+1 < len(g1Rows) {
-			cv.fillColorAlpha(rectT{paneL + p(16), ry + rowH - 1, paneR - p(16), ry + rowH}, w.pal.lineSoft, 255)
+			cv.fillColorAlpha(rectT{paneL + p(16), ry + rowH - 1, paneR - p(16), ry + rowH}, w.pal.lineSoft, w.surfaceAlpha(175))
 		}
 	}
 
@@ -1211,7 +1211,7 @@ func (w *mainWin) drawSettings(cv *glassCanvas, cr rectT) {
 	infoRowH := p(42)
 	infoTop := lblY + p(26)
 	g2 := rectT{paneL, infoTop, paneR, infoTop + infoRowH*3}
-	cv.drawAlphaRoundRect(g2, float64(p(12)), w.pal.paper, 255, w.pal.line, 255, 1.0)
+	cv.drawAlphaRoundRect(g2, float64(p(12)), w.pal.paper, w.surfaceAlpha(195), w.pal.line, w.surfaceAlpha(200), 1.0)
 
 	idShow := truncID(w.fullID) + "（点击复制）"
 	if w.fullID == "" {
@@ -1228,7 +1228,7 @@ func (w *mainWin) drawSettings(cv *glassCanvas, cr rectT) {
 	for i, r := range g2Rows {
 		ry := infoTop + int32(i)*infoRowH
 		if i == 1 && w.hover == hoverSetCopyID {
-			cv.fillColorAlpha(rectT{paneL + 1, ry + 1, paneR - 1, ry + infoRowH - 1}, w.pal.paper2, 255)
+			cv.fillColorAlpha(rectT{paneL + 1, ry + 1, paneR - 1, ry + infoRowH - 1}, w.pal.paper2, w.surfaceAlpha(190))
 		}
 		cv.drawAlphaText(w.fontSm, r.k, rectT{paneL + p(16), ry, paneL + p(140), ry + infoRowH},
 			dtSingleLine|dtVCenter, w.pal.ink2)
