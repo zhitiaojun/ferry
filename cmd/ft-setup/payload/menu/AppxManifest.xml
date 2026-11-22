@@ -13,8 +13,8 @@
   <Identity Name="FileTransfer.ShellMenu" Publisher="CN=ft-dev" Version="1.0.0.3" ProcessorArchitecture="x64" />
 
   <Properties>
-    <DisplayName>ft 文件传递</DisplayName>
-    <PublisherDisplayName>ft</PublisherDisplayName>
+    <DisplayName>轻渡文件快传</DisplayName>
+    <PublisherDisplayName>轻渡 Ferry</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
     <uap10:AllowExternalContent>true</uap10:AllowExternalContent>
     <desktop6:RegistryWriteVirtualization>disabled</desktop6:RegistryWriteVirtualization>
@@ -36,12 +36,12 @@
 
   <Applications>
     <Application Id="FTMenu" Executable="ftstub.exe" uap10:TrustLevel="mediumIL" uap10:RuntimeBehavior="win32App">
-      <uap:VisualElements DisplayName="ft 文件传递" Description="ft 文件传递" BackgroundColor="transparent"
+      <uap:VisualElements DisplayName="轻渡文件快传" Description="轻渡文件快传" BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png" AppListEntry="none" />
       <Extensions>
         <com:Extension Category="windows.comServer">
           <com:ComServer>
-            <com:SurrogateServer DisplayName="ft 右键菜单">
+            <com:SurrogateServer DisplayName="轻渡右键菜单">
               <com:Class Id="B7F1D2C4-8A31-4C77-9D2E-3A5B7C1E9F10" Path="ftmenu.dll" ThreadingModel="Both" />
             </com:SurrogateServer>
           </com:ComServer>

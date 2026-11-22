@@ -194,10 +194,6 @@ func (p *dropPanel) show() {
 	}
 	p.applyDPI()
 	p.reloadPeers()
-	if len(p.peers) == 0 {
-		p.app.event("desktop.panel_skip", map[string]any{"reason": "no peers"})
-		return
-	}
 	p.expanded = false
 	p.outside = 0
 	p.dragGone = 0
@@ -390,7 +386,7 @@ func (p *dropPanel) paint(hwnd syscall.Handle) {
 		}
 	}
 	if len(p.peers) == 0 {
-		drawText(d, p.fontSm, "还没有配对设备", rectT{12, p.ph / 2, p.pw - 12, p.ph/2 + 20},
+		drawText(d, p.fontSm, "尚未配对设备 · 松手打开主界面配对", rectT{12, p.ph / 2, p.pw - 12, p.ph/2 + 20},
 			dtSingleLine|dtCenter, pal.ink2)
 	}
 	drawText(d, p.fontSm, "拖动时出现，松手后自动隐藏", foot, dtSingleLine|dtVCenter|dtCenter, pal.ink2)
@@ -421,8 +417,18 @@ func (p *dropPanel) onDrop(hdrop syscall.Handle) {
 		}
 	}
 	p.hide()
-	if len(files) == 0 || idx >= len(p.peers) {
+	if len(files) == 0 {
 		return
+	}
+	if len(p.peers) == 0 {
+		openMainWindow(p.app)
+		if trayHandle != nil {
+			trayHandle.balloon("尚未配对设备", "请先配对手机或其他设备后再拖放发送")
+		}
+		return
+	}
+	if idx < 0 || idx >= len(p.peers) {
+		idx = 0
 	}
 	peer := p.peers[idx]
 	go func() {

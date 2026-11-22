@@ -232,8 +232,15 @@ func installWithOptions(opts installOptions) error {
 	if err := writeUninstallKey(dir, setupDest, iconPath); err != nil {
 		logf("write Uninstall err=%v", err)
 	}
-	if err := writeContextMenu(desktopExe); err != nil {
-		fmt.Fprintln(os.Stderr, "提示：写右键菜单失败（可稍后重装重试）：", err)
+	if err := registerShellMenu(menuDir); err != nil {
+		fmt.Fprintln(os.Stderr, "提示：一级右键菜单注册失败（需要开发者模式）：", err)
+		if cerr := writeContextMenu(desktopExe); cerr != nil {
+			fmt.Fprintln(os.Stderr, "提示：写右键菜单失败（可稍后重装重试）：", cerr)
+		}
+	} else {
+		// Remove classic registry verb when the Win11 first-level menu is
+		// active so Explorer never shows two "用轻渡发送" items.
+		removeContextMenu()
 	}
 	if err := writeSendTo(desktopExe, iconPath); err != nil {
 		fmt.Fprintln(os.Stderr, "提示：写“发送到”快捷方式失败（可稍后从托盘菜单重试）：", err)
@@ -247,9 +254,6 @@ func installWithOptions(opts installOptions) error {
 		if err := writeStartMenuShortcuts(desktopExe, setupDest, dir, iconPath); err != nil {
 			fmt.Fprintln(os.Stderr, "提示：创建开始菜单快捷方式失败：", err)
 		}
-	}
-	if err := registerShellMenu(menuDir); err != nil {
-		fmt.Fprintln(os.Stderr, "提示：一级右键菜单注册失败（需要开发者模式）：", err)
 	}
 	if opts.LaunchAfter {
 		_ = exec.Command(desktopExe).Start()

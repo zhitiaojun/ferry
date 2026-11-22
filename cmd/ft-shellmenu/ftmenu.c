@@ -17,8 +17,8 @@
 static const GUID CLSID_FTMenu = {
     0xB7F1D2C4, 0x8A31, 0x4C77, {0x9D, 0x2E, 0x3A, 0x5B, 0x7C, 0x1E, 0x9F, 0x10}};
 
-static const wchar_t *MENU_TITLE = L"\u7528 ft \u53d1\u9001"; // 用 ft 发送
-static const wchar_t *MENU_TIP = L"\u7528 ft \u628a\u6587\u4ef6\u53d1\u9001\u5230\u5df2\u914d\u5bf9\u8bbe\u5907";
+static const wchar_t *MENU_TITLE = L"\u7528\u8f7b\u6e21\u53d1\u9001"; // 用轻渡发送
+static const wchar_t *MENU_TIP = L"\u7528\u8f7b\u6e21\u628a\u6587\u4ef6\u53d1\u9001\u5230\u5df2\u914d\u5bf9\u8bbe\u5907";
 
 typedef struct FTMenu FTMenu;
 struct FTMenu {
