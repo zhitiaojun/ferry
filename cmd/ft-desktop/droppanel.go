@@ -30,7 +30,6 @@ var (
 	procUnhookWinEvent   = user32.NewProc("UnhookWinEvent")
 	procGetClassNameW    = user32.NewProc("GetClassNameW")
 	procIsWindow         = user32.NewProc("IsWindow")
-	procIsWindowVisible  = user32.NewProc("IsWindowVisible")
 	procGetAsyncKeyState = user32.NewProc("GetAsyncKeyState")
 	procDragQueryPoint   = shell32.NewProc("DragQueryPoint")
 )
@@ -462,6 +461,11 @@ func panelWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintp
 		if !p.shown {
 			return 0
 		}
+		ksEsc, _, _ := procGetAsyncKeyState.Call(0x1B) // VK_ESCAPE
+		if int32(ksEsc)&0x8000 != 0 {
+			p.hide()
+			return 0
+		}
 		ksL, _, _ := procGetAsyncKeyState.Call(1) // VK_LBUTTON
 		ksR, _, _ := procGetAsyncKeyState.Call(2) // VK_RBUTTON
 		btnDown := int32(ksL)&0x8000 != 0 || int32(ksR)&0x8000 != 0
@@ -484,13 +488,11 @@ func panelWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintp
 		pad := p.px(16)
 		insideLoose := cursor.x >= wr.left-pad && cursor.x < wr.right+pad && cursor.y >= wr.top-pad && cursor.y < wr.bottom+pad
 
+		// Shell hides SysDragImage while crossing non-drop windows (such as desktop widgets)
+		// or WM_DROPFILES targets without destroying it; keep tracking until IsWindow == 0.
 		dragMu.Lock()
 		for h := range dragWins {
 			if r, _, _ := procIsWindow.Call(h); r == 0 {
-				delete(dragWins, h)
-				continue
-			}
-			if v, _, _ := procIsWindowVisible.Call(h); v == 0 {
 				delete(dragWins, h)
 				continue
 			}
@@ -502,7 +504,6 @@ func panelWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintp
 		}
 		live := len(dragWins)
 		dragMu.Unlock()
-		// Explorer hides SysDragImage while dragging over a WM_DROPFILES target.
 		if live == 0 && !(btnDown && insideLoose) {
 			p.dragGone++
 			if p.dragGone*60 >= 300 {
@@ -558,7 +559,6 @@ func winEventProc(hook uintptr, event uint32, hwnd uintptr, idObject, idChild in
 		eventObjectCreate  = 0x8000
 		eventObjectDestroy = 0x8001
 		eventObjectShow    = 0x8002
-		eventObjectHide    = 0x8003
 	)
 	if hwnd == 0 || idObject != 0 {
 		return 0
@@ -579,7 +579,7 @@ func winEventProc(hook uintptr, event uint32, hwnd uintptr, idObject, idChild in
 	switch event {
 	case eventObjectCreate, eventObjectShow:
 		dragWins[hwnd] = true
-	case eventObjectDestroy, eventObjectHide:
+	case eventObjectDestroy:
 		delete(dragWins, hwnd)
 	}
 	alive := len(dragWins)
@@ -598,14 +598,14 @@ var (
 func startDragWatch() uintptr {
 	const (
 		eventObjectCreate = 0x8000
-		eventObjectHide   = 0x8003
+		eventObjectShow   = 0x8002
 		winEventOutOfCtx  = 0x0000
 		winEventSkipOwn   = 0x0002
 	)
 	if winEventPtr == 0 {
 		winEventPtr = syscall.NewCallback(winEventProc)
 	}
-	h, _, _ := procSetWinEventHook.Call(eventObjectCreate, eventObjectHide, 0, winEventPtr, 0, 0,
+	h, _, _ := procSetWinEventHook.Call(eventObjectCreate, eventObjectShow, 0, winEventPtr, 0, 0,
 		winEventOutOfCtx|winEventSkipOwn)
 	return h
 }
