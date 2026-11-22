@@ -42,6 +42,9 @@ var (
 	procShellExecuteW            = shell32.NewProc("ShellExecuteW")
 	procFindWindowW              = user32.NewProc("FindWindowW")
 	procIsIconic                 = user32.NewProc("IsIconic")
+	procIsZoomed                 = user32.NewProc("IsZoomed")
+	procGetSystemMetricsForDpi   = user32.NewProc("GetSystemMetricsForDpi")
+	procGetSystemMetrics         = user32.NewProc("GetSystemMetrics")
 	procAllowSetForegroundWindow = user32.NewProc("AllowSetForegroundWindow")
 	procMessageBoxW              = user32.NewProc("MessageBoxW")
 	procGetWindowTextW           = user32.NewProc("GetWindowTextW")
@@ -92,16 +95,29 @@ const (
 	wsExToolWindow = 0x00000080
 	wsExAppWindow  = 0x00040000
 
-	wmDestroy   = 0x0002
-	wmClose     = 0x0010
-	wmPaint     = 0x000F
-	wmCommand   = 0x0111
-	wmDropFiles = 0x0233
-	wmRButtonUp = 0x0205
-	wmLButtonUp = 0x0202
-	wmApp       = 0x8000
-	wmTray      = wmApp + 1
-	wmShowMain  = wmApp + 2
+	wmDestroy    = 0x0002
+	wmClose      = 0x0010
+	wmPaint      = 0x000F
+	wmNcCalcSize = 0x0083
+	wmNcHitTest  = 0x0084
+	wmNcActivate = 0x0086
+	wmCommand    = 0x0111
+	wmDropFiles  = 0x0233
+	wmRButtonUp  = 0x0205
+	wmLButtonUp  = 0x0202
+	wmApp        = 0x8000
+	wmTray       = wmApp + 1
+	wmShowMain   = wmApp + 2
+
+	htCaption     = 2
+	htLeft        = 10
+	htRight       = 11
+	htTop         = 12
+	htTopLeft     = 13
+	htTopRight    = 14
+	htBottom      = 15
+	htBottomLeft  = 16
+	htBottomRight = 17
 
 	spiGetWorkArea = 0x0030
 	smCXScreen     = 0
@@ -118,9 +134,11 @@ const (
 	bkTransparent  = 1
 	colorWindow    = 6
 
-	swShow    = 5
-	swHide    = 0
-	swRestore = 9
+	swHide     = 0
+	swMaximize = 3
+	swShow     = 5
+	swMinimize = 6
+	swRestore  = 9
 
 	mfString    = 0x0000
 	mfSeparator = 0x0800

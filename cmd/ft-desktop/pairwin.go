@@ -51,6 +51,7 @@ type pairWin struct {
 	qrBits     [][]bool
 	status     string
 	hoverZone  int
+	tracking   bool
 
 	editCode syscall.Handle
 	editPeer syscall.Handle
@@ -69,6 +70,7 @@ type pairWin struct {
 	lastDone bool
 
 	// Hit-test rectangles calculated in layout()
+	closeRect   rectT
 	qrRect      rectT
 	regenRect   rectT
 	copyRect    rectT
@@ -172,6 +174,7 @@ func pairWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintpt
 			dpi:  windowDPI(hwnd),
 		}
 		p.acrylic = enableAcrylicBackdrop(hwnd, dark)
+		procSetWindowPos.Call(uintptr(hwnd), 0, 0, 0, 0, 0, 0x0027)
 		p.editBg = syscall.Handle(createPairBrush(pal.paper2))
 		p.makeFonts()
 		p.initEdits()
@@ -182,6 +185,19 @@ func pairWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintpt
 		procSetTimer.Call(uintptr(hwnd), pairTimerID, 1000, 0)
 		p.refreshSession()
 		return 0
+
+	case wmNcCalcSize:
+		if wParam != 0 {
+			return 0
+		}
+
+	case wmNcActivate:
+		return 1
+
+	case wmNcHitTest:
+		if pw != nil {
+			return pw.ncHitTest(hwnd, lParam)
+		}
 
 	case wmEraseBkgnd:
 		return 1
@@ -198,8 +214,18 @@ func pairWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintpt
 			return 0
 		}
 
+	case wmMouseLeave:
+		if pw != nil {
+			pw.tracking = false
+			if pw.hoverZone != 0 {
+				pw.hoverZone = 0
+				procInvalidateRect.Call(uintptr(hwnd), 0, 0)
+			}
+			return 0
+		}
+
 	case wmSetCursor:
-		if pw != nil && loword(lParam) == htClient && pw.hoverZone != 0 {
+		if pw != nil && loword(lParam) == htClient && pw.hoverZone != 0 && pw.hoverZone != 7 {
 			h, _, _ := procLoadCursorW.Call(0, idcHand)
 			procSetCursor.Call(h)
 			return 1
@@ -341,8 +367,8 @@ func (p *pairWin) layoutManual() {
 	pad := p.px(28)
 	ew := cr.right - pad*2
 	eh := p.px(32)
-	procSetWindowPos.Call(uintptr(p.editCode), 0, uintptr(pad), uintptr(p.px(124)), uintptr(ew), uintptr(eh), 0x0004)
-	procSetWindowPos.Call(uintptr(p.editPeer), 0, uintptr(pad), uintptr(p.px(202)), uintptr(ew), uintptr(eh), 0x0004)
+	procSetWindowPos.Call(uintptr(p.editCode), 0, uintptr(pad), uintptr(p.px(136)), uintptr(ew), uintptr(eh), 0x0004)
+	procSetWindowPos.Call(uintptr(p.editPeer), 0, uintptr(pad), uintptr(p.px(214)), uintptr(ew), uintptr(eh), 0x0004)
 }
 
 func (p *pairWin) cancelWait() {
@@ -559,19 +585,20 @@ func (p *pairWin) onAsyncEvent() {
 }
 
 func (p *pairWin) layout(cw, ch int32) {
-	p.qrRect, p.regenRect, p.copyRect, p.refreshRect, p.submitRect, p.switchRect = rectT{}, rectT{}, rectT{}, rectT{}, rectT{}, rectT{}
+	p.closeRect, p.qrRect, p.regenRect, p.copyRect, p.refreshRect, p.submitRect, p.switchRect = rectT{}, rectT{}, rectT{}, rectT{}, rectT{}, rectT{}, rectT{}
+	p.closeRect = rectT{cw - p.px(40), 0, cw, p.px(34)}
 	pad := p.px(28)
 	p.switchRect = rectT{pad, ch - p.px(44), cw - pad, ch - p.px(12)}
 
 	if p.manualMode {
 		p.layoutManual()
-		p.submitRect = rectT{pad, p.px(258), cw - pad, p.px(296)}
+		p.submitRect = rectT{pad, p.px(270), cw - pad, p.px(308)}
 		return
 	}
 
 	qrSz := p.px(184)
 	qx := (cw - qrSz) / 2
-	qy := p.px(88)
+	qy := p.px(98)
 	p.qrRect = rectT{qx, qy, qx + qrSz, qy + qrSz}
 	p.regenRect = rectT{qx + p.px(36), qy + qrSz/2 + p.px(8), qx + qrSz - p.px(36), qy + qrSz/2 + p.px(40)}
 
@@ -579,6 +606,18 @@ func (p *pairWin) layout(cw, ch int32) {
 	p.copyRect = rectT{cw/2 + p.px(52), codeY + p.px(2), cw/2 + p.px(100), codeY + p.px(28)}
 	cdY := codeY + p.px(36)
 	p.refreshRect = rectT{cw/2 + p.px(56), cdY, cw/2 + p.px(104), cdY + p.px(22)}
+}
+
+func (p *pairWin) ncHitTest(hwnd syscall.Handle, lParam uintptr) uintptr {
+	pt := pointT{int32(int16(lParam & 0xffff)), int32(int16((lParam >> 16) & 0xffff))}
+	procScreenToClient.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&pt)))
+	var cr rectT
+	procGetClientRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&cr)))
+	p.layout(cr.right, cr.bottom)
+	if pt.y < p.px(36) && !ptIn(p.closeRect, pt.x, pt.y) {
+		return htCaption
+	}
+	return htClient
 }
 
 func (p *pairWin) paint(hwnd syscall.Handle) {
@@ -608,17 +647,25 @@ func (p *pairWin) paint(hwnd syscall.Handle) {
 		cv.fillColorAlpha(cr, p.pal.paper, 255)
 	}
 
+	// Seamless top-right close button matching borderless Acrylic frame.
+	closeInk := p.pal.ink2
+	if p.hoverZone == 7 {
+		cv.fillColorAlpha(p.closeRect, p.pal.danger, 230)
+		closeInk = col(0xFF, 0xFF, 0xFF)
+	}
+	drawCloseGlyph(cv, p.closeRect, closeInk)
+
 	pad := p.px(28)
 	if p.manualMode {
-		cv.drawAlphaText(p.fontTitle, "输入配对码", rectT{pad, p.px(24), cr.right - pad, p.px(52)},
+		cv.drawAlphaText(p.fontTitle, "输入配对码", rectT{pad, p.px(32), cr.right - pad, p.px(60)},
 			dtCenter|dtSingleLine|dtVCenter, p.pal.ink)
 		cv.drawAlphaText(p.fontSub, "输入另一台设备上的 6 位配对码（10 分钟内有效）",
-			rectT{pad, p.px(54), cr.right - pad, p.px(78)}, dtCenter|dtSingleLine|dtVCenter, p.pal.ink2)
+			rectT{pad, p.px(62), cr.right - pad, p.px(86)}, dtCenter|dtSingleLine|dtVCenter, p.pal.ink2)
 
-		cv.drawAlphaText(p.fontSm, "6 位配对码", rectT{pad, p.px(100), cr.right - pad, p.px(120)},
+		cv.drawAlphaText(p.fontSm, "6 位配对码", rectT{pad, p.px(112), cr.right - pad, p.px(132)},
 			dtSingleLine|dtVCenter, p.pal.ink2)
 		cv.drawAlphaText(p.fontSm, "对方设备 ID（或粘贴 ferry:// 配对链接）",
-			rectT{pad, p.px(178), cr.right - pad, p.px(198)}, dtSingleLine|dtVCenter, p.pal.ink2)
+			rectT{pad, p.px(190), cr.right - pad, p.px(210)}, dtSingleLine|dtVCenter, p.pal.ink2)
 
 		fill := p.pal.accent
 		if p.hoverZone == 5 && !p.busy {
@@ -644,10 +691,10 @@ func (p *pairWin) paint(hwnd syscall.Handle) {
 	}
 
 	// QR mode
-	cv.drawAlphaText(p.fontTitle, "添加设备", rectT{pad, p.px(24), cr.right - pad, p.px(52)},
+	cv.drawAlphaText(p.fontTitle, "添加设备", rectT{pad, p.px(32), cr.right - pad, p.px(60)},
 		dtCenter|dtSingleLine|dtVCenter, p.pal.ink)
 	cv.drawAlphaText(p.fontSub, "用手机轻渡扫描下方二维码",
-		rectT{pad, p.px(52), cr.right - pad, p.px(74)}, dtCenter|dtSingleLine|dtVCenter, p.pal.ink2)
+		rectT{pad, p.px(62), cr.right - pad, p.px(84)}, dtCenter|dtSingleLine|dtVCenter, p.pal.ink2)
 
 	// White QR card (always high-contrast white behind QR modules for camera recognition)
 	cv.drawAlphaRoundRect(p.qrRect, float64(p.px(12)), col(0xFF, 0xFF, 0xFF), 255, p.pal.line, 255, 1.0)
@@ -728,6 +775,8 @@ func (p *pairWin) paint(hwnd syscall.Handle) {
 func (p *pairWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
 	z := 0
 	switch {
+	case ptIn(p.closeRect, x, y):
+		z = 7
 	case !p.manualMode && p.expired && ptIn(p.regenRect, x, y):
 		z = 1
 	case !p.manualMode && ptIn(p.copyRect, x, y):
@@ -743,10 +792,25 @@ func (p *pairWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
 		p.hoverZone = z
 		procInvalidateRect.Call(uintptr(hwnd), 0, 0)
 	}
+	if !p.tracking {
+		var tme struct {
+			cbSize    uint32
+			flags     uint32
+			hwnd      syscall.Handle
+			hoverTime uint32
+		}
+		tme.cbSize = uint32(unsafe.Sizeof(tme))
+		tme.flags = tmeLeave
+		tme.hwnd = hwnd
+		procTrackMouse.Call(uintptr(unsafe.Pointer(&tme)))
+		p.tracking = true
+	}
 }
 
 func (p *pairWin) onClick(hwnd syscall.Handle, x, y int32) {
 	switch {
+	case ptIn(p.closeRect, x, y):
+		procDestroyWindow.Call(uintptr(hwnd))
 	case !p.manualMode && p.expired && ptIn(p.regenRect, x, y):
 		p.refreshSession()
 	case !p.manualMode && ptIn(p.copyRect, x, y):

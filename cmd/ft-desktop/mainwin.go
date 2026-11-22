@@ -43,6 +43,7 @@ const (
 	designMinH = 440
 
 	railW      = 64
+	topBarH    = 36
 	sendColW   = 312
 	contentPad = 24
 
@@ -65,6 +66,9 @@ const (
 	fltRecv = 2
 
 	hoverNone = iota
+	hoverCapMin
+	hoverCapMax
+	hoverCapClose
 	hoverNavHome
 	hoverNavDevices
 	hoverNavSettings
@@ -246,6 +250,10 @@ type mainWin struct {
 	timer    uintptr
 
 	// Hit-test rectangles updated on every layout() pass.
+	titleBarR   rectT
+	capMinR     rectT
+	capMaxR     rectT
+	capCloseR   rectT
 	railR       rectT
 	navHomeR    rectT
 	navDevicesR rectT
@@ -382,6 +390,7 @@ func mainWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintpt
 		mw.hwnd = hwnd
 		mw.dpi = windowDPI(hwnd)
 		mw.acrylic = enableAcrylicBackdrop(hwnd, dark)
+		procSetWindowPos.Call(uintptr(hwnd), 0, 0, 0, 0, 0, 0x0027)
 		mw.makeFonts()
 		mw.loadPeers()
 		mw.refreshLocalMeta()
@@ -391,6 +400,26 @@ func mainWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintpt
 		procDragAcceptFiles.Call(uintptr(hwnd), 1)
 		mw.syncTimer(hwnd)
 		return 0
+	case wmNcCalcSize:
+		if wParam != 0 {
+			if zoomed, _, _ := procIsZoomed.Call(uintptr(hwnd)); zoomed != 0 && w != nil {
+				r := (*rectT)(ptrAt(lParam))
+				pad := w.maxFramePad()
+				r.left += pad
+				r.top += pad
+				r.right -= pad
+				r.bottom -= pad
+			}
+			return 0
+		}
+	case wmNcActivate:
+		if iconic, _, _ := procIsIconic.Call(uintptr(hwnd)); iconic == 0 {
+			return 1
+		}
+	case wmNcHitTest:
+		if w != nil {
+			return w.ncHitTest(hwnd, lParam)
+		}
 	case wmPaint:
 		if w != nil {
 			w.paint(hwnd)
@@ -502,13 +531,73 @@ func (w *mainWin) minMaxInfo(hwnd syscall.Handle, lParam uintptr) {
 		maxTrackSize pointT
 	}
 	m := (*mmi)(ptrAt(lParam))
-	var wr, cr rectT
-	procGetWindowRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&wr)))
-	procGetClientRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&cr)))
-	frameW := (wr.right - wr.left) - cr.right
-	frameH := (wr.bottom - wr.top) - cr.bottom
 	procDefWindowProcW.Call(uintptr(hwnd), wmGetMinMax, 0, lParam)
-	m.minTrack = pointT{w.px(designMinW) + frameW, w.px(designMinH) + frameH}
+	m.minTrack = pointT{w.px(designMinW), w.px(designMinH)}
+}
+
+func (w *mainWin) maxFramePad() int32 {
+	const (
+		smCxSizeFrame    = 32
+		smCxPaddedBorder = 92
+	)
+	dpi := uintptr(w.dpi)
+	if dpi == 0 {
+		dpi = 96
+	}
+	if err := procGetSystemMetricsForDpi.Find(); err == nil {
+		f, _, _ := procGetSystemMetricsForDpi.Call(smCxSizeFrame, dpi)
+		p, _, _ := procGetSystemMetricsForDpi.Call(smCxPaddedBorder, dpi)
+		if f+p > 0 {
+			return int32(f + p)
+		}
+	}
+	f, _, _ := procGetSystemMetrics.Call(smCxSizeFrame)
+	p, _, _ := procGetSystemMetrics.Call(smCxPaddedBorder)
+	if f+p > 0 {
+		return int32(f + p)
+	}
+	return w.px(8)
+}
+
+func (w *mainWin) ncHitTest(hwnd syscall.Handle, lParam uintptr) uintptr {
+	pt := pointT{int32(int16(lParam & 0xffff)), int32(int16((lParam >> 16) & 0xffff))}
+	procScreenToClient.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&pt)))
+	var cr rectT
+	procGetClientRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&cr)))
+	w.layout(cr.right, cr.bottom)
+
+	if zoomed, _, _ := procIsZoomed.Call(uintptr(hwnd)); zoomed == 0 {
+		bw := w.px(6)
+		onL := pt.x < bw
+		onR := pt.x >= cr.right-bw
+		onT := pt.y < bw
+		onB := pt.y >= cr.bottom-bw
+		switch {
+		case onT && onL:
+			return htTopLeft
+		case onT && onR:
+			return htTopRight
+		case onB && onL:
+			return htBottomLeft
+		case onB && onR:
+			return htBottomRight
+		case onL:
+			return htLeft
+		case onR:
+			return htRight
+		case onT:
+			return htTop
+		case onB:
+			return htBottom
+		}
+	}
+	if ptIn(w.titleBarR, pt.x, pt.y) &&
+		!ptIn(w.capMinR, pt.x, pt.y) &&
+		!ptIn(w.capMaxR, pt.x, pt.y) &&
+		!ptIn(w.capCloseR, pt.x, pt.y) {
+		return htCaption
+	}
+	return htClient
 }
 
 func ptrAt(u uintptr) unsafe.Pointer {
@@ -637,13 +726,20 @@ func (w *mainWin) activePeer() (client.Peer, bool) {
 
 func (w *mainWin) layout(cw, ch int32) {
 	p := w.px
+	topH := p(topBarH)
+	w.titleBarR = rectT{0, 0, cw, topH}
+	bw := p(44)
+	w.capCloseR = rectT{cw - bw, 0, cw, topH}
+	w.capMaxR = rectT{cw - bw*2, 0, cw - bw, topH}
+	w.capMinR = rectT{cw - bw*3, 0, cw - bw*2, topH}
+
 	rw := p(railW)
-	w.railR = rectT{0, 0, rw, ch}
+	w.railR = rectT{0, topH, rw, ch}
 
 	navX := p(8)
 	navW := rw - p(16)
 	navH := p(50)
-	w.navHomeR = rectT{navX, p(16), navX + navW, p(16) + navH}
+	w.navHomeR = rectT{navX, topH + p(12), navX + navW, topH + p(12) + navH}
 	w.navDevicesR = rectT{navX, w.navHomeR.bottom + p(6), navX + navW, w.navHomeR.bottom + p(6) + navH}
 	w.navSetR = rectT{navX, w.navDevicesR.bottom + p(6), navX + navW, w.navDevicesR.bottom + p(6) + navH}
 
@@ -662,16 +758,16 @@ func (w *mainWin) layout(cw, ch int32) {
 		if colW > (cw-rw)/2 {
 			colW = (cw - rw) / 2
 		}
-		w.sendColR = rectT{rw, 0, rw + colW, ch}
+		w.sendColR = rectT{rw, topH, rw + colW, ch}
 		pad := p(22)
 		cardW := colW - pad*2
 		cardH := p(252)
 		if len(w.queued) > 0 {
 			cardH = p(292)
 		}
-		cy := (ch - cardH) / 2
-		if cy < p(24) {
-			cy = p(24)
+		cy := topH + (ch-topH-cardH)/2
+		if cy < topH+p(20) {
+			cy = topH + p(20)
 		}
 		w.sendCardR = rectT{rw + pad, cy, rw + pad + cardW, cy + cardH}
 
@@ -702,7 +798,7 @@ func (w *mainWin) layout(cw, ch int32) {
 		rPad := p(28)
 		paneL := w.sendColR.right + rPad
 		paneR := cw - rPad
-		tabY := p(66)
+		tabY := topH + p(62)
 		w.fltAllR = rectT{paneL, tabY, paneL + p(42), tabY + p(28)}
 		w.fltSendR = rectT{w.fltAllR.right + p(16), tabY, w.fltAllR.right + p(68), tabY + p(28)}
 		w.fltRecvR = rectT{w.fltSendR.right + p(16), tabY, w.fltSendR.right + p(68), tabY + p(28)}
@@ -721,8 +817,8 @@ func (w *mainWin) layout(cw, ch int32) {
 	case pageDevices:
 		pad := p(28)
 		paneR := cw - pad
-		w.devAddBtnR = rectT{paneR - p(96), p(28), paneR, p(62)}
-		y := p(98)
+		w.devAddBtnR = rectT{paneR - p(96), topH + p(24), paneR, topH + p(58)}
+		y := topH + p(94)
 		rowH := p(58)
 		for range w.peers {
 			if y+rowH > ch-pad {
@@ -737,13 +833,12 @@ func (w *mainWin) layout(cw, ch int32) {
 		paneL := rw + pad
 		paneR := cw - pad
 		rowH := p(58)
-		y := p(90)
+		y := topH + p(86)
 		w.setRecvBtnR = rectT{paneR - p(88), y + p(13), paneR - p(16), y + rowH - p(13)}
 		y += rowH
 		w.setOpenDirR = rectT{paneR - p(88), y + p(13), paneR - p(16), y + rowH - p(13)}
 		y += rowH
 		w.setAutoBtnR = rectT{paneR - p(88), y + p(13), paneR - p(16), y + rowH - p(13)}
-		_ = paneL
 		infoY := y + rowH + p(50) + p(42)
 		w.setCopyIDRowR = rectT{paneL, infoY, paneR, infoY + p(42)}
 	}
@@ -785,18 +880,24 @@ func (w *mainWin) surfaceAlpha(a byte) byte {
 }
 
 func (w *mainWin) drawScene(cv *glassCanvas, cr rectT) {
-	// 1. Left navigation rail (more transparent Acrylic frosted glass).
+	// 1. Unified seamless L-shaped Acrylic header + left navigation rail (identical transparency).
 	railAlpha := byte(148)
 	if w.dark {
 		railAlpha = 162
 	}
-	cv.fillColorAlpha(w.railR, w.pal.paper2, w.surfaceAlpha(railAlpha))
-	// Hairline divider between rail and workspace.
-	cv.fillColorAlpha(rectT{w.railR.right - 1, 0, w.railR.right, cr.bottom}, w.pal.line, w.surfaceAlpha(175))
+	barA := w.surfaceAlpha(railAlpha)
+	cv.fillColorAlpha(w.titleBarR, w.pal.paper2, barA)
+	cv.fillColorAlpha(w.railR, w.pal.paper2, barA)
+	w.drawTitleBar(cv)
 	w.drawRail(cv)
 
-	// 2. Right workspace (subtly translucent Acrylic, clearly brighter than rail).
-	rightR := rectT{w.railR.right, 0, cr.right, cr.bottom}
+	// Hairline dividers separating workspace from top bar and left rail.
+	divA := w.surfaceAlpha(175)
+	cv.fillColorAlpha(rectT{w.railR.right, w.titleBarR.bottom - 1, cr.right, w.titleBarR.bottom}, w.pal.line, divA)
+	cv.fillColorAlpha(rectT{w.railR.right - 1, w.titleBarR.bottom, w.railR.right, cr.bottom}, w.pal.line, divA)
+
+	// 2. Right workspace (subtly translucent Acrylic, clearly brighter than top bar + rail).
+	rightR := rectT{w.railR.right, w.titleBarR.bottom, cr.right, cr.bottom}
 	workAlpha := byte(216)
 	if w.dark {
 		workAlpha = 222
@@ -811,6 +912,96 @@ func (w *mainWin) drawScene(cv *glassCanvas, cr rectT) {
 	case pageSettings:
 		w.drawSettings(cv, cr)
 	}
+}
+
+func (w *mainWin) drawTitleBar(cv *glassCanvas) {
+	p := w.px
+	// Brand mark + title on left
+	mSz := p(18)
+	my := (w.titleBarR.bottom - mSz) / 2
+	markR := rectT{p(14), my, p(14) + mSz, my + mSz}
+	cv.drawAlphaRoundRect(markR, float64(p(5)), w.pal.accent, 255, 0, 0, 0)
+	cv.drawAlphaGraphic(markR, col(255, 255, 255), func(dc uintptr, rw, rh int32) {
+		pen, _, _ := procCreatePen.Call(psSolid, 1, uintptr(col(255, 255, 255)))
+		oldPen, _, _ := procSelectObject.Call(dc, pen)
+		defer func() {
+			procSelectObject.Call(dc, oldPen)
+			procDeleteObject.Call(pen)
+		}()
+		// Tiny paper-boat hull + water wave
+		procMoveToEx.Call(dc, uintptr(rw*22/100), uintptr(rh*50/100), 0)
+		procLineTo.Call(dc, uintptr(rw*78/100), uintptr(rh*38/100))
+		procLineTo.Call(dc, uintptr(rw*66/100), uintptr(rh*64/100))
+		procLineTo.Call(dc, uintptr(rw*30/100), uintptr(rh*64/100))
+		procLineTo.Call(dc, uintptr(rw*22/100), uintptr(rh*50/100))
+		procMoveToEx.Call(dc, uintptr(rw*24/100), uintptr(rh*76/100), 0)
+		procLineTo.Call(dc, uintptr(rw*76/100), uintptr(rh*76/100))
+	})
+	cv.drawAlphaText(w.fontSm, "轻渡", rectT{markR.right + p(8), 0, w.capMinR.left, w.titleBarR.bottom},
+		dtSingleLine|dtVCenter, w.pal.ink)
+
+	// Minimize button
+	if w.hover == hoverCapMin {
+		cv.fillColorAlpha(w.capMinR, w.pal.paper3, w.surfaceAlpha(155))
+	}
+	cv.drawAlphaGraphic(w.capMinR, w.pal.ink, func(dc uintptr, rw, rh int32) {
+		pen, _, _ := procCreatePen.Call(psSolid, 1, uintptr(col(255, 255, 255)))
+		oldPen, _, _ := procSelectObject.Call(dc, pen)
+		defer func() {
+			procSelectObject.Call(dc, oldPen)
+			procDeleteObject.Call(pen)
+		}()
+		sz := p(10)
+		x0 := (rw - sz) / 2
+		y0 := rh / 2
+		procMoveToEx.Call(dc, uintptr(x0), uintptr(y0), 0)
+		procLineTo.Call(dc, uintptr(x0+sz+1), uintptr(y0))
+	})
+
+	// Maximize / Restore button
+	if w.hover == hoverCapMax {
+		cv.fillColorAlpha(w.capMaxR, w.pal.paper3, w.surfaceAlpha(155))
+	}
+	zoomed, _, _ := procIsZoomed.Call(uintptr(w.hwnd))
+	cv.drawAlphaGraphic(w.capMaxR, w.pal.ink, func(dc uintptr, rw, rh int32) {
+		pen, _, _ := procCreatePen.Call(psSolid, 1, uintptr(col(255, 255, 255)))
+		oldPen, _, _ := procSelectObject.Call(dc, pen)
+		defer func() {
+			procSelectObject.Call(dc, oldPen)
+			procDeleteObject.Call(pen)
+		}()
+		box := func(x0, y0, x1, y1 int32) {
+			procMoveToEx.Call(dc, uintptr(x0), uintptr(y0), 0)
+			procLineTo.Call(dc, uintptr(x1), uintptr(y0))
+			procLineTo.Call(dc, uintptr(x1), uintptr(y1))
+			procLineTo.Call(dc, uintptr(x0), uintptr(y1))
+			procLineTo.Call(dc, uintptr(x0), uintptr(y0))
+		}
+		if zoomed != 0 {
+			sz := p(8)
+			x0 := (rw-sz)/2 - p(1)
+			y0 := (rh-sz)/2 + p(1)
+			box(x0, y0, x0+sz, y0+sz)
+			procMoveToEx.Call(dc, uintptr(x0+p(2)), uintptr(y0), 0)
+			procLineTo.Call(dc, uintptr(x0+p(2)), uintptr(y0-p(2)))
+			procLineTo.Call(dc, uintptr(x0+p(2)+sz), uintptr(y0-p(2)))
+			procLineTo.Call(dc, uintptr(x0+p(2)+sz), uintptr(y0-p(2)+sz))
+			procLineTo.Call(dc, uintptr(x0+sz), uintptr(y0-p(2)+sz))
+		} else {
+			sz := p(10)
+			x0 := (rw - sz) / 2
+			y0 := (rh - sz) / 2
+			box(x0, y0, x0+sz, y0+sz)
+		}
+	})
+
+	// Close button
+	closeInk := w.pal.ink
+	if w.hover == hoverCapClose {
+		cv.fillColorAlpha(w.capCloseR, w.pal.danger, 235)
+		closeInk = col(255, 255, 255)
+	}
+	drawCloseGlyph(cv, w.capCloseR, closeInk)
 }
 
 func (w *mainWin) drawRail(cv *glassCanvas) {
@@ -882,13 +1073,14 @@ func (w *mainWin) drawNavIcon(cv *glassCanvas, r rectT, kind int, color uint32) 
 
 func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 	p := w.px
+	topH := w.titleBarR.bottom
 	// Left send card gutter
 	colAlpha := byte(198)
 	if w.dark {
 		colAlpha = 208
 	}
 	cv.fillColorAlpha(w.sendColR, w.pal.paper2, w.surfaceAlpha(colAlpha))
-	cv.fillColorAlpha(rectT{w.sendColR.right - 1, 0, w.sendColR.right, cr.bottom}, w.pal.line, w.surfaceAlpha(175))
+	cv.fillColorAlpha(rectT{w.sendColR.right - 1, topH, w.sendColR.right, cr.bottom}, w.pal.line, w.surfaceAlpha(175))
 
 	// Compact Send Card
 	cardA := w.surfaceAlpha(185)
@@ -984,7 +1176,7 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 	// Right Transfers Pane
 	paneL := w.sendColR.right + p(28)
 	paneR := cr.right - p(28)
-	cv.drawAlphaText(w.fontH1, "传输记录", rectT{paneL, p(24), paneR, p(58)}, dtSingleLine|dtVCenter, w.pal.ink)
+	cv.drawAlphaText(w.fontH1, "传输记录", rectT{paneL, topH + p(20), paneR, topH + p(54)}, dtSingleLine|dtVCenter, w.pal.ink)
 
 	// Underlined filter tabs
 	tabItems := []struct {
@@ -1093,12 +1285,13 @@ func (w *mainWin) drawFolderGlyph(cv *glassCanvas, r rectT, color uint32) {
 
 func (w *mainWin) drawDevices(cv *glassCanvas, cr rectT) {
 	p := w.px
+	topH := w.titleBarR.bottom
 	pad := p(28)
 	paneL := w.railR.right + pad
 	paneR := cr.right - pad
 
-	cv.drawAlphaText(w.fontH1, "设备", rectT{paneL, p(24), paneR - p(110), p(56)}, dtSingleLine|dtVCenter, w.pal.ink)
-	cv.drawAlphaText(w.fontSm, "已配对的设备可直接互相收发文件。", rectT{paneL, p(58), paneR - p(110), p(80)},
+	cv.drawAlphaText(w.fontH1, "设备", rectT{paneL, topH + p(20), paneR - p(110), topH + p(52)}, dtSingleLine|dtVCenter, w.pal.ink)
+	cv.drawAlphaText(w.fontSm, "已配对的设备可直接互相收发文件。", rectT{paneL, topH + p(54), paneR - p(110), topH + p(76)},
 		dtSingleLine|dtVCenter, w.pal.ink2)
 
 	addFill := w.pal.accent
@@ -1109,17 +1302,17 @@ func (w *mainWin) drawDevices(cv *glassCanvas, cr rectT) {
 	cv.drawAlphaText(w.fontBold, "添加设备", w.devAddBtnR, dtCenter|dtSingleLine|dtVCenter, w.pal.accentInk)
 
 	if len(w.peers) == 0 {
-		box := rectT{paneL, p(98), paneR, p(228)}
+		box := rectT{paneL, topH + p(94), paneR, topH + p(224)}
 		cv.drawAlphaRoundRect(box, float64(p(12)), w.pal.paper2, w.surfaceAlpha(190), w.pal.line, w.surfaceAlpha(200), 1.0)
-		cv.drawAlphaText(w.fontBold, "还没有已配对设备", rectT{paneL, p(134), paneR, p(162)},
+		cv.drawAlphaText(w.fontBold, "还没有已配对设备", rectT{paneL, topH + p(130), paneR, topH + p(158)},
 			dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
 		cv.drawAlphaText(w.fontSm, "点击右上角「添加设备」，用手机轻渡扫码或输入 6 位配对码即可绑定。",
-			rectT{paneL + p(20), p(164), paneR - p(20), p(198)}, dtCenter|dtSingleLine|dtVCenter, w.pal.ink2)
+			rectT{paneL + p(20), topH + p(160), paneR - p(20), topH + p(194)}, dtCenter|dtSingleLine|dtVCenter, w.pal.ink2)
 		return
 	}
 
 	rowH := p(58)
-	top := p(98)
+	top := topH + p(94)
 	box := rectT{paneL, top, paneR, top + int32(len(w.devSendBtnsR))*rowH}
 	cv.drawAlphaRoundRect(box, float64(p(12)), w.pal.paper, w.surfaceAlpha(195), w.pal.line, w.surfaceAlpha(200), 1.0)
 	for i, br := range w.devSendBtnsR {
@@ -1146,16 +1339,17 @@ func (w *mainWin) drawDevices(cv *glassCanvas, cr rectT) {
 
 func (w *mainWin) drawSettings(cv *glassCanvas, cr rectT) {
 	p := w.px
+	topH := w.titleBarR.bottom
 	pad := p(28)
 	paneL := w.railR.right + pad
 	paneR := cr.right - pad
 
-	cv.drawAlphaText(w.fontH1, "设置", rectT{paneL, p(24), paneR, p(56)}, dtSingleLine|dtVCenter, w.pal.ink)
-	cv.drawAlphaText(w.fontSm, "常规接收选项与本机技术信息。", rectT{paneL, p(58), paneR, p(80)},
+	cv.drawAlphaText(w.fontH1, "设置", rectT{paneL, topH + p(20), paneR, topH + p(52)}, dtSingleLine|dtVCenter, w.pal.ink)
+	cv.drawAlphaText(w.fontSm, "常规接收选项与本机技术信息。", rectT{paneL, topH + p(54), paneR, topH + p(76)},
 		dtSingleLine|dtVCenter, w.pal.ink2)
 
 	rowH := p(58)
-	top := p(90)
+	top := topH + p(86)
 	g1 := rectT{paneL, top, paneR, top + rowH*3}
 	cv.drawAlphaRoundRect(g1, float64(p(12)), w.pal.paper, w.surfaceAlpha(195), w.pal.line, w.surfaceAlpha(200), 1.0)
 
@@ -1374,7 +1568,11 @@ func isPathToken(s string) bool {
 // ---------------------------------------------------------------------------
 
 func (w *mainWin) cursorIsHand() bool {
-	return w.hover != hoverNone
+	switch w.hover {
+	case hoverNone, hoverCapMin, hoverCapMax, hoverCapClose:
+		return false
+	}
+	return true
 }
 
 func (w *mainWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
@@ -1384,6 +1582,12 @@ func (w *mainWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
 
 	kind, idx := hoverNone, 0
 	switch {
+	case ptIn(w.capMinR, x, y):
+		kind = hoverCapMin
+	case ptIn(w.capMaxR, x, y):
+		kind = hoverCapMax
+	case ptIn(w.capCloseR, x, y):
+		kind = hoverCapClose
 	case ptIn(w.navHomeR, x, y):
 		kind = hoverNavHome
 	case ptIn(w.navDevicesR, x, y):
@@ -1464,6 +1668,19 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 	w.layout(cr.right, cr.bottom)
 
 	switch {
+	case ptIn(w.capMinR, x, y):
+		procShowWindow.Call(uintptr(hwnd), swMinimize)
+		return
+	case ptIn(w.capMaxR, x, y):
+		if zoomed, _, _ := procIsZoomed.Call(uintptr(hwnd)); zoomed != 0 {
+			procShowWindow.Call(uintptr(hwnd), swRestore)
+		} else {
+			procShowWindow.Call(uintptr(hwnd), swMaximize)
+		}
+		return
+	case ptIn(w.capCloseR, x, y):
+		procPostMessageW.Call(uintptr(hwnd), wmClose, 0, 0)
+		return
 	case ptIn(w.navHomeR, x, y):
 		w.page = pageHome
 		w.status = ""
