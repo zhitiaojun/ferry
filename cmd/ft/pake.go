@@ -87,18 +87,23 @@ func runPairPake(args []string) int {
 	if opts.Wait {
 		mode = pairing.Respond
 	}
-	peer, err := pairing.Run(ctx, client, key, paired, mode, opts.Code, opts.With, opts.Timeout)
+	host, _ := os.Hostname()
+	peer, err := pairing.RunWithName(ctx, client, key, paired, mode, opts.Code, opts.With, host, opts.Timeout)
 	if err != nil {
 		return pairFail(emit, err)
 	}
 	if err := paired.Save(); err != nil {
 		return pairFail(emit, err)
 	}
+	peerObj := map[string]any{"device_id": peer.ID, "pubkey": hex.EncodeToString(peer.Pub)}
+	if peer.Name != "" {
+		peerObj["name"] = peer.Name
+	}
 	emit(map[string]any{
 		"ok":        true,
 		"action":    "pake",
 		"device_id": key.IDHex(),
-		"peer":      map[string]any{"device_id": peer.ID, "pubkey": hex.EncodeToString(peer.Pub)},
+		"peer":      peerObj,
 		"paired":    len(paired.List()),
 	})
 	return 0

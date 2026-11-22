@@ -20,6 +20,7 @@ import (
 	"github.com/cwlindean/filetransfer/core/discovery"
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/logging"
+	"github.com/cwlindean/filetransfer/core/pairing"
 	"github.com/cwlindean/filetransfer/core/pathmgr"
 	"github.com/cwlindean/filetransfer/core/proto"
 	"github.com/cwlindean/filetransfer/core/session"
@@ -72,6 +73,7 @@ func StartReceiver(name, outDir, hintJSON string) (string, error) {
 	if rcv != nil {
 		return rcv.ln.Addr(), nil
 	}
+	name = pairing.SanitizeName(name)
 	if name == "" {
 		name = "android"
 	}
@@ -176,12 +178,13 @@ func (r *receiver) handle(ctx context.Context, nc net.Conn) {
 		r.logger.Event("transfer.error", map[string]any{"error": err.Error()})
 		return
 	}
-	recordReceived(r.outDir, "lan", res.Files, res.Bytes)
+	recordReceivedFrom(r.outDir, "lan", pairing.SanitizeName(s.Peer.Name), res.Files, res.Bytes)
 }
 
 // Discover waits timeoutMS for LAN announcements and returns a JSON array of
 // devices (name, addr, iface). It announces this device's name too.
 func Discover(name string, timeoutMS int, hintJSON string) (string, error) {
+	name = pairing.SanitizeName(name)
 	if name == "" {
 		name = "android"
 	}
@@ -234,6 +237,7 @@ func Discover(name string, timeoutMS int, hintJSON string) (string, error) {
 // []string, so the list crosses the bridge as JSON.
 func SendFiles(peerAddr, name, pathsJSON string) (string, error) {
 	res := summary{OK: false, Path: "lan"}
+	name = pairing.SanitizeName(name)
 	if name == "" {
 		name = "android"
 	}

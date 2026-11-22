@@ -25,7 +25,7 @@ import (
 
 var (
 	flagDrop   = flag.Bool("drop", false, "show the drop window instead of the tray receiver")
-	flagDir    = flag.String("dir", "", "receive directory (default: %USERPROFILE%\\Downloads\\Ferry)")
+	flagDir    = flag.String("dir", "", "receive directory (default: %USERPROFILE%\\Downloads)")
 	flagPort   = flag.Int("port", 18800, "receive port on all interfaces")
 	flagPos    = flag.String("pos", "", "drop window position X,Y (drop mode only)")
 	flagSize   = flag.String("size", "260x90", "drop window size WxH (drop mode only)")
@@ -51,19 +51,33 @@ func main() {
 	}
 	flag.Parse()
 
+	settingsPath := defaultSettingsPath()
+	cfg := loadDesktopSettings(settingsPath)
+
 	dir := *flagDir
 	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			fatal("cannot find home directory: %v", err)
-		}
-		dir = filepath.Join(home, "Downloads", "Ferry")
+		dir = cfg.ReceiveDir
+	}
+	if dir == "" {
+		dir = defaultReceiveDir()
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		fatal("create receive directory: %v", err)
+		if *flagDir == "" && cfg.ReceiveDir != "" {
+			dir = defaultReceiveDir()
+			if derr := os.MkdirAll(dir, 0o755); derr != nil {
+				fatal("create receive directory: %v", derr)
+			}
+		} else {
+			fatal("create receive directory: %v", err)
+		}
 	}
 
 	app := newApp(dir, *flagPort)
+	app.settingsPath = settingsPath
+	app.name = cfg.DeviceName
+	if app.name == "" {
+		app.name = defaultDeviceName()
+	}
 	app.pairedPath = *flagPair
 	if app.pairedPath == "" {
 		app.pairedPath = defaultPairedPath()
@@ -191,13 +205,15 @@ func parsePos(s string) (*[2]int32, error) {
 
 // app holds state shared by tray and drop modes.
 type app struct {
-	dir        string
-	port       int
-	keyPath    string
-	pairedPath string
-	signalURL  string
-	logOut     *os.File
-	showMain   bool
+	dir          string
+	name         string
+	settingsPath string
+	port         int
+	keyPath      string
+	pairedPath   string
+	signalURL    string
+	logOut       *os.File
+	showMain     bool
 
 	mu     sync.Mutex
 	recent []string

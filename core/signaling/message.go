@@ -202,6 +202,7 @@ type RelayReady struct {
 type PairBegin struct {
 	ToDevice   string `json:"to_device"`
 	FromDevice string `json:"from_device"`
+	Name       string `json:"name,omitempty"`
 	Method     string `json:"method"`
 	Proof      string `json:"proof"`
 }
@@ -211,6 +212,7 @@ type PairBegin struct {
 type PairRelay struct {
 	ToDevice   string `json:"to_device"`
 	FromDevice string `json:"from_device"`
+	Name       string `json:"name,omitempty"`
 	Payload    string `json:"payload"`
 }
 

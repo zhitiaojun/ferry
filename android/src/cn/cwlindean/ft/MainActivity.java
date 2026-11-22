@@ -50,6 +50,7 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.provider.DocumentsContract;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.provider.Settings;
@@ -92,6 +93,7 @@ import java.net.InetAddress;
 import java.net.InterfaceAddress;
 import java.net.NetworkInterface;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -116,6 +118,7 @@ public class MainActivity extends Activity {
     private static final int PICK_FILES = 42;
     private static final int PICK_PAIR_FILE = 43;
     private static final int REQ_CAMERA = 44;
+    private static final int PICK_DOWNLOAD_DIR = 45;
     private static final int PAIR_TTL_SEC = 600;
     private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
     private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
@@ -134,6 +137,8 @@ public class MainActivity extends Activity {
     private WifiManager.MulticastLock multicastLock;
     private String deviceName = "";
     private String fullDeviceId = "";
+    private String customDownloadTreeUri = "";
+    private String customDownloadLabel = "";
     private String webShareUrl = "";
     private boolean recvRunning;
     private boolean webRunning;
@@ -168,6 +173,7 @@ public class MainActivity extends Activity {
     private ValueAnimator dotAnimator;
     private TextView shareBannerView;
     private LinearLayout sendPickTile;
+    private LinearLayout sendTextTile;
     private LinearLayout sendClipTile;
     private LinearLayout sendResultCard;
     private TextView sendResultBadge;
@@ -177,9 +183,12 @@ public class MainActivity extends Activity {
     private final TextView[] filterTabs = new TextView[3];
     private LinearLayout recentListView;
     private LinearLayout recentEmptyView;
+    private TextView recentEmptySub;
 
     // Settings views
     private Button setRecvBtn;
+    private TextView setDownloadDirSub;
+    private Button setDownloadResetBtn;
     private Button setWebBtn;
     private TextView setWebUrlView;
     private TextView setNameVal;
@@ -235,6 +244,7 @@ public class MainActivity extends Activity {
         applyWindowChrome();
         migrateLegacyState();
         deviceName = loadSavedName();
+        loadDownloadDirPrefs();
         setContentView(buildUi());
 
         if (Build.VERSION.SDK_INT >= 33) {
@@ -595,15 +605,20 @@ public class MainActivity extends Activity {
         sbLp.topMargin = dp(10);
         sendCard.addView(shareBannerView, sbLp);
 
+        sendPickTile = actionRowTile("发文件", IconDrawable.UPLOAD, true, v -> pickFiles());
+        LinearLayout.LayoutParams t1Lp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        t1Lp.topMargin = dp(12);
+        sendCard.addView(sendPickTile, t1Lp);
+
         LinearLayout tileGrid = new LinearLayout(this);
         tileGrid.setOrientation(LinearLayout.HORIZONTAL);
         LinearLayout.LayoutParams tgLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        tgLp.topMargin = dp(12);
+        tgLp.topMargin = dp(10);
 
-        sendPickTile = actionTile("发文件 / 照片", IconDrawable.UPLOAD, true, v -> pickFiles());
-        LinearLayout.LayoutParams t1Lp = new LinearLayout.LayoutParams(0, WRAP, 1f);
-        t1Lp.rightMargin = dp(10);
-        tileGrid.addView(sendPickTile, t1Lp);
+        sendTextTile = actionTile("发文字", IconDrawable.TEXT, false, v -> showSendTextDialog(""));
+        LinearLayout.LayoutParams txtLp = new LinearLayout.LayoutParams(0, WRAP, 1f);
+        txtLp.rightMargin = dp(10);
+        tileGrid.addView(sendTextTile, txtLp);
 
         sendClipTile = actionTile("发剪贴板", IconDrawable.CLIP, false, v -> sendClipboard());
         tileGrid.addView(sendClipTile, new LinearLayout.LayoutParams(0, WRAP, 1f));
@@ -719,20 +734,43 @@ public class MainActivity extends Activity {
         recentEmptyView.setPadding(dp(16), dp(36), dp(16), dp(24));
         TextView empTitle = label("还没有传输记录", 13, cOnSurface, true);
         recentEmptyView.addView(empTitle, new LinearLayout.LayoutParams(WRAP, WRAP));
-        TextView empSub = label("收到的文件会自动放进系统 Download/Ferry 文件夹。", 12, cOnSurfaceVariant, false);
-        empSub.setGravity(Gravity.CENTER);
+        recentEmptySub = label("收到的文件会自动放进系统 Download 文件夹。", 12, cOnSurfaceVariant, false);
+        recentEmptySub.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams esLp = new LinearLayout.LayoutParams(WRAP, WRAP);
         esLp.topMargin = dp(4);
-        recentEmptyView.addView(empSub, esLp);
+        recentEmptyView.addView(recentEmptySub, esLp);
         root.addView(recentEmptyView, new LinearLayout.LayoutParams(MATCH, WRAP));
 
         renderPeerSection();
         renderFilterTabs();
         renderRecentList();
         refreshReceiveUi();
+        refreshDownloadDirUi();
 
         sv.addView(root, new FrameLayout.LayoutParams(MATCH, WRAP));
         return sv;
+    }
+
+    private LinearLayout actionRowTile(String text, int iconKind, boolean primary, View.OnClickListener click) {
+        LinearLayout tile = new LinearLayout(this);
+        tile.setOrientation(LinearLayout.HORIZONTAL);
+        tile.setGravity(Gravity.CENTER);
+        tile.setPadding(dp(14), dp(14), dp(14), dp(14));
+        Drawable bg = primary
+                ? roundBox(cPrimaryPressed, 0, 12)
+                : roundBox(cSurface, cBorder, 12);
+        tile.setBackground(ripple(bg, 12));
+        tile.setOnClickListener(click);
+
+        ImageView iv = new ImageView(this);
+        iv.setImageDrawable(new IconDrawable(iconKind, primary ? cOnPrimary : cOnSurface));
+        LinearLayout.LayoutParams ivLp = new LinearLayout.LayoutParams(dp(20), dp(20));
+        ivLp.rightMargin = dp(8);
+        tile.addView(iv, ivLp);
+
+        TextView tv = label(text, 14, primary ? cOnPrimary : cOnSurface, true);
+        tile.addView(tv, new LinearLayout.LayoutParams(WRAP, WRAP));
+        return tile;
     }
 
     private LinearLayout actionTile(String text, int iconKind, boolean primary, View.OnClickListener click) {
@@ -773,8 +811,12 @@ public class MainActivity extends Activity {
         grp1.setBackground(roundBox(cCard, cBorder, 16));
 
         setRecvBtn = smallOutlineBtn("开启中", v -> toggleReceive());
-        grp1.addView(settingActionRow("后台接收文件", "自动存入系统 Download/Ferry", setRecvBtn, null),
+        grp1.addView(settingActionRow("后台接收文件", "开启后其他设备可随时向此手机发送文件", setRecvBtn, null),
                 new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        grp1.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
+
+        grp1.addView(settingDownloadDirRow(), new LinearLayout.LayoutParams(MATCH, WRAP));
 
         grp1.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
 
@@ -842,8 +884,45 @@ public class MainActivity extends Activity {
         importLegacyBtn.setOnClickListener(v -> pickPairFile());
         root.addView(importLegacyBtn, new LinearLayout.LayoutParams(MATCH, WRAP));
 
+        refreshDownloadDirUi();
         sv.addView(root, new FrameLayout.LayoutParams(MATCH, WRAP));
         return sv;
+    }
+
+    private LinearLayout settingDownloadDirRow() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(16), dp(14), dp(16), dp(14));
+
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.addView(label("下载目录", 13, cOnSurface, true), new LinearLayout.LayoutParams(MATCH, WRAP));
+        setDownloadDirSub = label("默认：系统 Download 文件夹", 12, cOnSurfaceVariant, false);
+        setDownloadDirSub.setSingleLine(true);
+        setDownloadDirSub.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        sLp.topMargin = dp(2);
+        col.addView(setDownloadDirSub, sLp);
+        row.addView(col, new LinearLayout.LayoutParams(0, WRAP, 1f));
+
+        LinearLayout btns = new LinearLayout(this);
+        btns.setOrientation(LinearLayout.HORIZONTAL);
+        btns.setGravity(Gravity.CENTER_VERTICAL);
+
+        setDownloadResetBtn = smallOutlineBtn("恢复默认", v -> resetDownloadDirectory());
+        setDownloadResetBtn.setVisibility(View.GONE);
+        LinearLayout.LayoutParams rstLp = new LinearLayout.LayoutParams(WRAP, dp(30));
+        rstLp.rightMargin = dp(6);
+        btns.addView(setDownloadResetBtn, rstLp);
+
+        Button changeBtn = smallOutlineBtn("更改", v -> pickDownloadDirectory());
+        btns.addView(changeBtn, new LinearLayout.LayoutParams(WRAP, dp(30)));
+
+        LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        bLp.leftMargin = dp(10);
+        row.addView(btns, bLp);
+        return row;
     }
 
     private LinearLayout settingActionRow(String title, String sub, View rightView, View.OnClickListener rowClick) {
@@ -904,6 +983,7 @@ public class MainActivity extends Activity {
         if (setPortVal != null) {
             setPortVal.setText(recvRunning && !lanPort.isEmpty() ? lanPort : (recvRunning ? "启动中" : "未开启"));
         }
+        refreshDownloadDirUi();
     }
 
     private void showRenameDialog() {
@@ -920,14 +1000,30 @@ public class MainActivity extends Activity {
                 .setView(wrap)
                 .setNegativeButton("取消", null)
                 .setPositiveButton("保存", (d, w) -> {
-                    String n = input.getText().toString().trim();
+                    String n = trimToUtf8Bytes(input.getText().toString().trim(), 64);
                     if (n.isEmpty()) {
                         n = defaultName();
                     }
-                    deviceName = n;
-                    getPreferences(MODE_PRIVATE).edit().putString("deviceName", n).apply();
+                    final String finalName = n;
+                    deviceName = finalName;
+                    getPreferences(MODE_PRIVATE).edit().putString("deviceName", finalName).apply();
                     refreshSettingsInfo();
-                    toast("设备名称已更新，下次开启接收或配对生效");
+                    if (recvRunning) {
+                        new Thread(() -> {
+                            try {
+                                Mobile.stopReceiver();
+                                Mobile.stopAutoReceive();
+                            } catch (Exception e) {
+                                Log.w(TAG, "restart recv on rename", e);
+                            }
+                            ui.post(() -> {
+                                startAllReceive();
+                                toast("设备名称已更新为 " + finalName);
+                            });
+                        }).start();
+                    } else {
+                        toast("设备名称已更新为 " + finalName);
+                    }
                 })
                 .show();
     }
@@ -1376,10 +1472,11 @@ public class MainActivity extends Activity {
             }
         });
 
+        final String myName = deviceName;
         new Thread(() -> {
             try {
-                Mobile.waitPairCode(SIGNAL_URL, keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(),
-                        code, PAIR_TTL_SEC * 1000L);
+                Mobile.waitPairCodeNamed(SIGNAL_URL, keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(),
+                        code, myName, PAIR_TTL_SEC * 1000L);
                 ui.post(() -> {
                     if (seq != pairShowSeq || pairDialog == null || !pairDialog.isShowing()) {
                         return;
@@ -1432,6 +1529,7 @@ public class MainActivity extends Activity {
     private void submitManualPair() {
         String code = enterCodeField.getText().toString().trim();
         String peer = enterPeerField.getText().toString().trim();
+        final String myName = deviceName;
         if (peer.startsWith("ferry://")) {
             enterSubmitBtn.setEnabled(false);
             enterStatusView.setVisibility(View.VISIBLE);
@@ -1439,7 +1537,7 @@ public class MainActivity extends Activity {
             enterStatusView.setText("正在验证二维码链接并配对…");
             new Thread(() -> {
                 try {
-                    Mobile.pairWithURI(SIGNAL_URL, keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(), peer);
+                    Mobile.pairWithURINamed(SIGNAL_URL, keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(), peer, myName);
                     ui.post(() -> {
                         if (pairDialog != null && pairDialog.isShowing()) {
                             toast("配对成功");
@@ -1475,7 +1573,7 @@ public class MainActivity extends Activity {
         enterStatusView.setText("正在协商信任密钥…");
         new Thread(() -> {
             try {
-                Mobile.pairWithCode(SIGNAL_URL, keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(), code, peer);
+                Mobile.pairWithCodeNamed(SIGNAL_URL, keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(), code, peer, myName);
                 ui.post(() -> {
                     if (pairDialog != null && pairDialog.isShowing()) {
                         toast("配对成功");
@@ -1745,12 +1843,13 @@ public class MainActivity extends Activity {
         if (scanStatusLabel != null) {
             scanStatusLabel.setText("已识别二维码，正在配对…");
         }
+        final String myName = deviceName;
         new Thread(() -> {
             try {
                 if (payload.startsWith("ftpair://")) {
                     Mobile.pairImport(payload, pairedFile().getAbsolutePath());
                 } else {
-                    Mobile.pairWithURI(SIGNAL_URL, keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(), payload);
+                    Mobile.pairWithURINamed(SIGNAL_URL, keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(), payload, myName);
                 }
                 ui.post(() -> {
                     if (pairDialog != null && pairDialog.isShowing()) {
@@ -2057,7 +2156,7 @@ public class MainActivity extends Activity {
         return i >= 0 ? addr.substring(i + 1).trim() : "";
     }
 
-    // ================= Receive Poll -> Public Download/Ferry =================
+    // ================= Receive Poll -> Public Download or Custom Directory =================
 
     private void pollReceivedOnce() {
         ioPool.execute(() -> {
@@ -2067,11 +2166,13 @@ public class MainActivity extends Activity {
                     return;
                 }
                 JSONArray arr = new JSONArray(raw);
+                boolean refreshPeers = false;
                 for (int i = 0; i < arr.length(); i++) {
                     JSONObject o = arr.getJSONObject(i);
                     String fileName = o.optString("file", "");
                     String fullPath = o.optString("full_path", "");
                     String via = o.optString("via", "");
+                    String peer = o.optString("peer", "");
                     long bytes = o.optLong("bytes", 0);
                     long ts = o.optLong("ts", System.currentTimeMillis());
                     if (fileName.isEmpty() || fullPath.isEmpty()) {
@@ -2081,7 +2182,13 @@ public class MainActivity extends Activity {
                     if (!src.isFile()) {
                         continue;
                     }
-                    exportStagedFile(src, fileName, via, bytes, ts);
+                    if (!peer.isEmpty()) {
+                        refreshPeers = true;
+                    }
+                    exportStagedFile(src, fileName, via, peer, bytes, ts);
+                }
+                if (refreshPeers) {
+                    loadPairedPeers();
                 }
             } catch (Exception e) {
                 Log.w(TAG, "pollReceivedOnce", e);
@@ -2097,26 +2204,68 @@ public class MainActivity extends Activity {
             }
             for (File f : files) {
                 if (f.isFile() && !f.getName().endsWith(".ftpart")) {
-                    exportStagedFile(f, f.getName(), "", f.length(), f.lastModified());
+                    exportStagedFile(f, f.getName(), "", "", f.length(), f.lastModified());
                 }
             }
         });
     }
 
-    private void exportStagedFile(File src, String fileName, String via, long bytes, long ts) {
+    private void exportStagedFile(File src, String fileName, String via, String peer, long bytes, long ts) {
         String mime = guessMime(fileName);
-        String savedUri = saveToPublicDownloads(src, fileName, mime);
+        String savedUri = null;
+        String destLabel = "下载";
+        String customUri = customDownloadTreeUri;
+        if (customUri != null && !customUri.isEmpty()) {
+            savedUri = saveToCustomTree(Uri.parse(customUri), src, fileName, mime);
+            if (savedUri != null) {
+                destLabel = currentDownloadShortLabel();
+            }
+        }
+        if (savedUri == null) {
+            savedUri = saveToPublicDownloads(src, fileName, mime);
+            destLabel = "下载";
+        }
         if (savedUri == null) {
             return;
         }
         if (!src.delete()) {
             Log.w(TAG, "could not delete staged file: " + src);
         }
-        final ReceivedEntry entry = new ReceivedEntry(fileName, savedUri, mime, via, bytes, ts, "recv", "");
+        final String savedLabel = destLabel;
+        final ReceivedEntry entry = new ReceivedEntry(fileName, savedUri, mime, via, bytes, ts, "recv", peer);
         ui.post(() -> {
             addRecentEntry(entry);
-            toast("已保存到「下载/Ferry」：" + fileName);
+            toast("已保存到「" + savedLabel + "」：" + fileName);
         });
+    }
+
+    private String saveToCustomTree(Uri treeUri, File src, String fileName, String mime) {
+        Uri docUri = null;
+        try {
+            String treeDocId = DocumentsContract.getTreeDocumentId(treeUri);
+            Uri parentDocUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocId);
+            docUri = DocumentsContract.createDocument(getContentResolver(), parentDocUri, mime, fileName);
+            if (docUri == null) {
+                return null;
+            }
+            try (InputStream in = new FileInputStream(src);
+                 OutputStream out = getContentResolver().openOutputStream(docUri, "w")) {
+                if (out == null) {
+                    throw new Exception("openOutputStream null");
+                }
+                copyStream(in, out);
+            }
+            return docUri.toString();
+        } catch (Exception e) {
+            Log.e(TAG, "saveToCustomTree", e);
+            if (docUri != null) {
+                try {
+                    DocumentsContract.deleteDocument(getContentResolver(), docUri);
+                } catch (Exception ignored) {
+                }
+            }
+            return null;
+        }
     }
 
     private String saveToPublicDownloads(File src, String fileName, String mime) {
@@ -2124,7 +2273,7 @@ public class MainActivity extends Activity {
             ContentValues cv = new ContentValues();
             cv.put(MediaStore.Downloads.DISPLAY_NAME, fileName);
             cv.put(MediaStore.Downloads.MIME_TYPE, mime);
-            cv.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Ferry");
+            cv.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
             cv.put(MediaStore.Downloads.IS_PENDING, 1);
             Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
             if (uri == null) {
@@ -2151,8 +2300,7 @@ public class MainActivity extends Activity {
             }
         }
         try {
-            File dl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-            File dir = new File(dl, "Ferry");
+            File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
             if (!dir.exists() && !dir.mkdirs()) {
                 return null;
             }
@@ -2166,6 +2314,108 @@ public class MainActivity extends Activity {
             Log.e(TAG, "saveToPublicDownloads legacy", e);
             return null;
         }
+    }
+
+    private void loadDownloadDirPrefs() {
+        SharedPreferences sp = getPreferences(MODE_PRIVATE);
+        String rawUri = sp.getString("customDownloadTreeUri", "").trim();
+        String rawLbl = sp.getString("customDownloadLabel", "").trim();
+        if (!rawUri.isEmpty()) {
+            try {
+                Uri parsed = Uri.parse(rawUri);
+                if (hasPersistedTreePermission(parsed)) {
+                    customDownloadTreeUri = rawUri;
+                    customDownloadLabel = rawLbl.isEmpty() ? formatTreeUriLabel(parsed) : rawLbl;
+                    return;
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "loadDownloadDirPrefs", e);
+            }
+            sp.edit().remove("customDownloadTreeUri").remove("customDownloadLabel").apply();
+        }
+        customDownloadTreeUri = "";
+        customDownloadLabel = "";
+    }
+
+    private boolean hasPersistedTreePermission(Uri uri) {
+        for (android.content.UriPermission p : getContentResolver().getPersistedUriPermissions()) {
+            if (p.getUri().equals(uri) && p.isWritePermission()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void pickDownloadDirectory() {
+        try {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                    | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+            startActivityForResult(i, PICK_DOWNLOAD_DIR);
+        } catch (Exception e) {
+            toast("无法打开文件夹选择器：" + e.getMessage());
+        }
+    }
+
+    private void resetDownloadDirectory() {
+        customDownloadTreeUri = "";
+        customDownloadLabel = "";
+        getPreferences(MODE_PRIVATE).edit()
+                .remove("customDownloadTreeUri")
+                .remove("customDownloadLabel")
+                .apply();
+        refreshDownloadDirUi();
+        toast("已恢复默认系统 Download 文件夹");
+    }
+
+    private void refreshDownloadDirUi() {
+        boolean custom = customDownloadTreeUri != null && !customDownloadTreeUri.isEmpty();
+        if (setDownloadDirSub != null) {
+            setDownloadDirSub.setText(custom ? customDownloadLabel : "默认：系统 Download 文件夹");
+        }
+        if (setDownloadResetBtn != null) {
+            setDownloadResetBtn.setVisibility(custom ? View.VISIBLE : View.GONE);
+        }
+        if (recentEmptySub != null) {
+            recentEmptySub.setText("收到的文件会自动放进" + currentDownloadDisplayName() + "。");
+        }
+    }
+
+    private String currentDownloadDisplayName() {
+        if (customDownloadTreeUri != null && !customDownloadTreeUri.isEmpty() && !customDownloadLabel.isEmpty()) {
+            return "「" + customDownloadLabel + "」";
+        }
+        return "系统 Download 文件夹";
+    }
+
+    private String currentDownloadShortLabel() {
+        if (customDownloadTreeUri != null && !customDownloadTreeUri.isEmpty() && !customDownloadLabel.isEmpty()) {
+            return customDownloadLabel;
+        }
+        return "下载";
+    }
+
+    private static String formatTreeUriLabel(Uri treeUri) {
+        try {
+            String docId = DocumentsContract.getTreeDocumentId(treeUri);
+            if (docId != null && !docId.isEmpty()) {
+                if (docId.startsWith("primary:")) {
+                    String rel = docId.substring("primary:".length());
+                    return rel.isEmpty() ? "内部存储根目录" : "内部存储 / " + rel;
+                }
+                int colon = docId.indexOf(':');
+                if (colon > 0) {
+                    String vol = docId.substring(0, colon);
+                    String rel = docId.substring(colon + 1);
+                    return rel.isEmpty() ? vol : vol + " / " + rel;
+                }
+                return docId;
+            }
+        } catch (Exception ignored) {
+        }
+        return "自定义文件夹";
     }
 
     private static File uniqueDestFile(File dir, String name) {
@@ -2361,11 +2611,11 @@ public class MainActivity extends Activity {
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(intent);
         } catch (Exception e) {
-            toast("文件已保存在「下载 / Ferry / " + r.name + "」");
+            toast("文件已保存在「" + currentDownloadShortLabel() + " / " + r.name + "」");
         }
     }
 
-    // ================= Send Flows (Files & Clipboard) =================
+    // ================= Send Flows (Files, Text & Clipboard) =================
 
     private void handleShareIntent(Intent intent) {
         if (intent == null) {
@@ -2378,18 +2628,29 @@ public class MainActivity extends Activity {
         List<Uri> uris = new ArrayList<>();
         if (intent.getClipData() != null) {
             for (int i = 0; i < intent.getClipData().getItemCount(); i++) {
-                uris.add(intent.getClipData().getItemAt(i).getUri());
+                Uri u = intent.getClipData().getItemAt(i).getUri();
+                if (u != null) {
+                    uris.add(u);
+                }
             }
         } else if (intent.getParcelableExtra(Intent.EXTRA_STREAM) instanceof Uri) {
             uris.add(intent.getParcelableExtra(Intent.EXTRA_STREAM));
         }
         if (uris.isEmpty()) {
+            if (Intent.ACTION_SEND.equals(action)) {
+                String sharedText = intent.getStringExtra(Intent.EXTRA_TEXT);
+                if (sharedText != null && !sharedText.trim().isEmpty()) {
+                    showPage(0);
+                    final String textToSend = sharedText;
+                    ui.post(() -> showSendTextDialog(textToSend));
+                }
+            }
             return;
         }
         sharedUris = uris;
         showPage(0);
         if (shareBannerView != null) {
-            shareBannerView.setText("已从其他应用带入 " + uris.size() + " 个文件 · 点「发文件 / 照片」发送");
+            shareBannerView.setText("已从其他应用带入 " + uris.size() + " 个文件 · 点「发文件」发送");
             shareBannerView.setVisibility(View.VISIBLE);
         }
     }
@@ -2418,6 +2679,48 @@ public class MainActivity extends Activity {
         startActivityForResult(i, PICK_FILES);
     }
 
+    private void showSendTextDialog(String initialText) {
+        final String target = selectedTarget;
+        if (!isAutoTarget(target) && !isLanTarget(target)) {
+            toast("请先选择或配对接收设备");
+            return;
+        }
+        final String targetName = resolveTargetName(target);
+        final EditText input = new EditText(this);
+        input.setHint("输入要发送的文字内容…");
+        input.setHintTextColor(cOnSurfaceVariant);
+        input.setTextColor(cOnSurface);
+        input.setTextSize(14);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        input.setMinLines(4);
+        input.setMaxLines(8);
+        input.setGravity(Gravity.TOP | Gravity.START);
+        input.setPadding(dp(12), dp(10), dp(12), dp(10));
+        input.setBackground(roundBox(cSurface, cBorder, 10));
+        if (initialText != null && !initialText.isEmpty()) {
+            input.setText(initialText);
+            input.setSelection(initialText.length());
+        }
+
+        FrameLayout wrap = new FrameLayout(this);
+        wrap.setPadding(dp(20), dp(10), dp(20), 0);
+        wrap.addView(input, new FrameLayout.LayoutParams(MATCH, WRAP));
+
+        new AlertDialog.Builder(this)
+                .setTitle("发文字给 " + targetName)
+                .setView(wrap)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("发送", (d, w) -> {
+                    String text = input.getText().toString();
+                    if (text.trim().isEmpty()) {
+                        toast("请输入要发送的文字");
+                        return;
+                    }
+                    sendTextContent(text, "text", "正在发送文字…");
+                })
+                .show();
+    }
+
     private void sendClipboard() {
         final String target = selectedTarget;
         if (!isAutoTarget(target) && !isLanTarget(target)) {
@@ -2436,23 +2739,32 @@ public class MainActivity extends Activity {
             toast("剪贴板文本为空");
             return;
         }
+        sendTextContent(text, "clipboard", "正在发送剪贴板文本…");
+    }
+
+    private void sendTextContent(final String text, final String prefix, String busyMsg) {
+        final String target = selectedTarget;
+        if (!isAutoTarget(target) && !isLanTarget(target)) {
+            toast("请先选择或配对接收设备");
+            return;
+        }
         saveLastPeer(target);
         final String name = deviceName;
         final String targetName = resolveTargetName(target);
         final boolean auto = isAutoTarget(target);
-        setSendBusy(true, "正在发送剪贴板文本…");
+        setSendBusy(true, busyMsg);
         new Thread(() -> {
-            File dir = new File(getCacheDir(), "clip-" + System.nanoTime());
+            File dir = new File(getCacheDir(), "text-" + System.nanoTime());
             dir.mkdirs();
             String ts = new SimpleDateFormat("HHmmss", Locale.US).format(new Date());
-            File f = new File(dir, "clipboard-" + ts + ".txt");
+            File f = new File(dir, prefix + "-" + ts + ".txt");
             try (OutputStream out = new FileOutputStream(f)) {
-                out.write(text.getBytes("UTF-8"));
+                out.write(text.getBytes(StandardCharsets.UTF_8));
                 List<File> list = new ArrayList<>();
                 list.add(f);
                 sendPreparedFiles(list, dir, name, target, targetName, auto);
             } catch (Exception e) {
-                Log.e(TAG, "sendClipboard", e);
+                Log.e(TAG, "sendTextContent:" + prefix, e);
                 deleteTree(f, dir);
                 onSendFailed(e.getMessage());
             }
@@ -2515,6 +2827,10 @@ public class MainActivity extends Activity {
             sendPickTile.setEnabled(!busy);
             sendPickTile.setAlpha(busy ? 0.6f : 1f);
         }
+        if (sendTextTile != null) {
+            sendTextTile.setEnabled(!busy);
+            sendTextTile.setAlpha(busy ? 0.6f : 1f);
+        }
         if (sendClipTile != null) {
             sendClipTile.setEnabled(!busy);
             sendClipTile.setAlpha(busy ? 0.6f : 1f);
@@ -2533,6 +2849,7 @@ public class MainActivity extends Activity {
             } else {
                 stopKeepAlive();
             }
+            loadPairedPeers();
             try {
                 JSONObject o = new JSONObject(raw);
                 if (!o.optBoolean("ok", false)) {
@@ -2600,6 +2917,26 @@ public class MainActivity extends Activity {
         if (requestCode == PICK_PAIR_FILE) {
             if (data.getData() != null) {
                 importPairFile(data.getData());
+            }
+            return;
+        }
+        if (requestCode == PICK_DOWNLOAD_DIR) {
+            Uri treeUri = data.getData();
+            if (treeUri != null) {
+                final int takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
+                try {
+                    getContentResolver().takePersistableUriPermission(treeUri, takeFlags);
+                } catch (Exception e) {
+                    Log.w(TAG, "takePersistableUriPermission", e);
+                }
+                customDownloadTreeUri = treeUri.toString();
+                customDownloadLabel = formatTreeUriLabel(treeUri);
+                getPreferences(MODE_PRIVATE).edit()
+                        .putString("customDownloadTreeUri", customDownloadTreeUri)
+                        .putString("customDownloadLabel", customDownloadLabel)
+                        .apply();
+                refreshDownloadDirUi();
+                toast("下载目录已更改为：" + customDownloadLabel);
             }
             return;
         }
@@ -2897,19 +3234,52 @@ public class MainActivity extends Activity {
     private String loadSavedName() {
         SharedPreferences sp = getPreferences(MODE_PRIVATE);
         String saved = sp.getString("deviceName", "").trim();
-        return saved.isEmpty() ? defaultName() : saved;
+        return saved.isEmpty() ? defaultName() : trimToUtf8Bytes(saved, 64);
     }
 
     private String defaultName() {
-        String model = Build.MODEL == null ? "phone" : Build.MODEL;
-        String s = model.replaceAll("[^A-Za-z0-9]+", "-");
-        if (s.isEmpty() || s.equals("-")) {
-            s = "phone";
+        try {
+            if (Build.VERSION.SDK_INT >= 25) {
+                String g = Settings.Global.getString(getContentResolver(), Settings.Global.DEVICE_NAME);
+                if (g != null && !g.trim().isEmpty()) {
+                    return trimToUtf8Bytes(g.trim(), 64);
+                }
+            }
+        } catch (Exception ignored) {
         }
-        if (s.length() > 24) {
-            s = s.substring(0, 24);
+        String brand = Build.MANUFACTURER == null ? "" : Build.MANUFACTURER.trim();
+        String model = Build.MODEL == null ? "" : Build.MODEL.trim();
+        String raw = model;
+        if (!brand.isEmpty() && !model.toLowerCase(Locale.US).startsWith(brand.toLowerCase(Locale.US))) {
+            raw = model.isEmpty() ? brand : brand + " " + model;
         }
-        return "android-" + s;
+        if (raw.isEmpty()) {
+            raw = "Android";
+        }
+        return trimToUtf8Bytes(raw, 64);
+    }
+
+    private static String trimToUtf8Bytes(String s, int maxBytes) {
+        if (s == null) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder(s.length());
+        int bytes = 0;
+        for (int i = 0; i < s.length(); ) {
+            int cp = s.codePointAt(i);
+            int charLen = Character.charCount(cp);
+            if (cp >= 0x20 && cp != 0x7f) {
+                String ch = new String(Character.toChars(cp));
+                int bLen = ch.getBytes(StandardCharsets.UTF_8).length;
+                if (bytes + bLen > maxBytes) {
+                    break;
+                }
+                sb.append(ch);
+                bytes += bLen;
+            }
+            i += charLen;
+        }
+        return sb.toString().trim();
     }
 
     // ================= Models & Custom Views =================
@@ -2998,6 +3368,7 @@ public class MainActivity extends Activity {
         static final int BACK = 2;
         static final int UPLOAD = 3;
         static final int CLIP = 4;
+        static final int TEXT = 5;
 
         private final int kind;
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -3047,6 +3418,11 @@ public class MainActivity extends Activity {
                 p.moveTo(w * 0.20f, h * 0.65f); p.lineTo(w * 0.20f, h * 0.80f);
                 p.lineTo(w * 0.80f, h * 0.80f); p.lineTo(w * 0.80f, h * 0.65f);
                 c.drawPath(p, paint);
+            } else if (kind == TEXT) {
+                c.drawRoundRect(new RectF(w * 0.18f, h * 0.22f, w * 0.82f, h * 0.78f),
+                        w * 0.12f, h * 0.12f, paint);
+                c.drawLine(w * 0.32f, h * 0.42f, w * 0.68f, h * 0.42f, paint);
+                c.drawLine(w * 0.32f, h * 0.58f, w * 0.56f, h * 0.58f, paint);
             } else { // CLIP
                 c.drawRoundRect(new RectF(w * 0.34f, h * 0.34f, w * 0.82f, h * 0.82f),
                         w * 0.08f, h * 0.08f, paint);

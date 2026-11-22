@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"unsafe"
 
 	"github.com/cwlindean/filetransfer/core/identity"
+	"github.com/cwlindean/filetransfer/core/pairing"
 	"github.com/cwlindean/filetransfer/core/proto"
 	"github.com/cwlindean/filetransfer/core/session"
 	"github.com/cwlindean/filetransfer/core/transfer"
@@ -59,10 +61,7 @@ func runTray(a *app, keyPath string) int {
 	}
 	t.key = key
 	t.devID = key.ID()
-	t.name, _ = os.Hostname()
-	if t.name == "" {
-		t.name = "windows"
-	}
+	t.name = a.deviceName()
 
 	// Background receiver.
 	ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", a.port))
@@ -73,7 +72,7 @@ func runTray(a *app, keyPath string) int {
 	t.ln = ln
 	a.event("desktop.receiver.listen", map[string]any{
 		"addr": ln.Addr().String(),
-		"dir":  a.dir,
+		"dir":  a.receiveDir(),
 		"id":   fmt.Sprintf("%x", t.devID[:4]),
 	})
 	go t.acceptLoop()
@@ -236,11 +235,11 @@ func appendMenu(menu uintptr, flags uint32, id uint16, text string) {
 func (t *tray) command(id uint16) {
 	switch id {
 	case menuOpenDir:
-		shellOpen(t.app.dir)
+		shellOpen(t.app.receiveDir())
 	case menuInfo:
 		messageBox("轻渡 接收信息", fmt.Sprintf(
-			"设备 ID：%x\n端口：%d\n目录：%s\n\n在手机/电脑上用这个地址即可发送：\n%s",
-			t.devID[:4], t.app.port, t.app.dir, localAddr(t.app.port)))
+			"设备名称：%s\n设备 ID：%x\n端口：%d\n目录：%s\n\n在手机/电脑上用这个地址即可发送：\n%s",
+			t.app.deviceName(), t.devID[:4], t.app.port, t.app.receiveDir(), localAddr(t.app.port)))
 	case menuMain:
 		openMainWindow(t.app)
 	case menuDrop:
@@ -299,7 +298,7 @@ func (t *tray) acceptLoop() {
 
 func (t *tray) handle(nc net.Conn) {
 	start := time.Now()
-	params := session.Params{DeviceID: t.devID, Name: t.name, Capabilities: proto.CapResume}
+	params := session.Params{DeviceID: t.devID, Name: t.app.deviceName(), Capabilities: proto.CapResume}
 	sess, err := session.Accept(nc, params)
 	if err != nil {
 		nc.Close()
@@ -307,9 +306,17 @@ func (t *tray) handle(nc net.Conn) {
 		return
 	}
 	peer := fmt.Sprintf("%x", sess.Peer.DeviceID[:4])
-	peerName := sess.Peer.Name
+	peerClean := pairing.SanitizeName(sess.Peer.Name)
+	peerName := peerClean
 	if peerName == "" {
 		peerName = peer
+	} else if identity.UpdatePeerName(t.app.pairedPath, hex.EncodeToString(sess.Peer.DeviceID[:]), peerClean) {
+		if thePanel != nil {
+			thePanel.reloadPeers()
+		}
+		if h := existingMainWindow(); h != 0 {
+			procPostMessageW.Call(uintptr(h), wmAppReload, 0, 0)
+		}
 	}
 	t.app.event("desktop.session_ready", map[string]any{"peer": peer, "name": sess.Peer.Name})
 
@@ -317,7 +324,8 @@ func (t *tray) handle(nc net.Conn) {
 		nc.Close()
 		return
 	}
-	res, err := transfer.Receive(sess, t.app.dir, transfer.Config{})
+	outDir := t.app.receiveDir()
+	res, err := transfer.Receive(sess, outDir, transfer.Config{})
 	if err != nil {
 		t.app.event("desktop.transfer_error", map[string]any{"peer": peer, "error": err.Error()})
 		t.app.note(fmt.Sprintf("%s  ← %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerName)))
@@ -336,7 +344,7 @@ func (t *tray) handle(nc net.Conn) {
 		procPostMessageW.Call(uintptr(h), wmAppPaint, 0, 0)
 	}
 	title := fmt.Sprintf("已接收 %d 个文件", len(res.Files))
-	t.balloon(title, fmt.Sprintf("来自 %s，共 %d 字节，已存入 %s", peerName, res.Bytes, t.app.dir))
+	t.balloon(title, fmt.Sprintf("来自 %s，共 %d 字节，已存入 %s", peerName, res.Bytes, outDir))
 }
 
 func trayWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {

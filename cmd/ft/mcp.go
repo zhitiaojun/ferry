@@ -83,7 +83,7 @@ func mcpDefaultOutDir() string {
 	if err != nil || home == "" {
 		return "received"
 	}
-	return filepath.Join(home, "Downloads", "Ferry")
+	return filepath.Join(home, "Downloads")
 }
 
 type jsonRPCRequest struct {

@@ -104,3 +104,48 @@ func TestPairedStoreRoundTrip(t *testing.T) {
 		t.Fatal("PairedAt not filled")
 	}
 }
+
+func TestUpdatePeerName(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "paired.json")
+	store, err := LoadPaired(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := GenerateKey()
+	unknown, _ := GenerateKey()
+	if err := store.Add(PairedDevice{
+		DeviceID: a.IDHex(),
+		PubKey:   hex.EncodeToString(a.Public()),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	if UpdatePeerName(path, unknown.IDHex(), "stranger") {
+		t.Fatal("UpdatePeerName should ignore unpaired peer")
+	}
+	if UpdatePeerName(path, a.IDHex(), "   ") {
+		t.Fatal("UpdatePeerName should ignore blank name")
+	}
+	if !UpdatePeerName(path, a.IDHex(), "小米手机") {
+		t.Fatal("UpdatePeerName should succeed for paired peer")
+	}
+	if UpdatePeerName(path, a.IDHex(), "小米手机") {
+		t.Fatal("UpdatePeerName should return false when name is unchanged")
+	}
+
+	reloaded, err := LoadPaired(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := reloaded.Get(a.IDHex())
+	if !ok || got.Name != "小米手机" {
+		t.Fatalf("got = %+v (ok=%v), want Name=小米手机", got, ok)
+	}
+	if _, ok := reloaded.Get(unknown.IDHex()); ok {
+		t.Fatal("unpaired peer was unexpectedly trusted")
+	}
+}

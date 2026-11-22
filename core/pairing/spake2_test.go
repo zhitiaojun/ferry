@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"crypto/rand"
 	"testing"
+	"unicode/utf8"
+
+	"github.com/cwlindean/filetransfer/core/proto"
 )
 
 func newSID(t *testing.T) [16]byte {
@@ -103,5 +106,23 @@ func TestStartRejectsShortCode(t *testing.T) {
 	}
 	if _, err := Start(Role(9), "123456", sid); err == nil {
 		t.Fatal("bad role accepted")
+	}
+}
+
+func TestSanitizeName(t *testing.T) {
+	if got := SanitizeName("  \x00小米\t手机\x7f  "); got != "小米手机" {
+		t.Fatalf("SanitizeName control/trim = %q, want 小米手机", got)
+	}
+	// 30 Chinese characters = 90 UTF-8 bytes; must truncate cleanly <= 64 bytes on a valid rune boundary.
+	longCN := ""
+	for i := 0; i < 30; i++ {
+		longCN += "中"
+	}
+	got := SanitizeName(longCN)
+	if !utf8.ValidString(got) {
+		t.Fatalf("SanitizeName produced invalid UTF-8: %q", got)
+	}
+	if len(got) > proto.MaxDeviceName || len(got) == 0 {
+		t.Fatalf("SanitizeName len = %d, want 1..%d", len(got), proto.MaxDeviceName)
 	}
 }

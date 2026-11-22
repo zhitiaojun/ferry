@@ -14,6 +14,7 @@ type ReceivedEvent struct {
 	File     string `json:"file"`
 	FullPath string `json:"full_path"`
 	Via      string `json:"via"`
+	Peer     string `json:"peer,omitempty"`
 	Bytes    int64  `json:"bytes"`
 	Ts       int64  `json:"ts"`
 }
@@ -24,6 +25,10 @@ var (
 )
 
 func recordReceived(outDir, via string, files []string, totalBytes int64) {
+	recordReceivedFrom(outDir, via, "", files, totalBytes)
+}
+
+func recordReceivedFrom(outDir, via, peer string, files []string, totalBytes int64) {
 	if len(files) == 0 {
 		return
 	}
@@ -43,6 +48,7 @@ func recordReceived(outDir, via string, files []string, totalBytes int64) {
 			File:     name,
 			FullPath: full,
 			Via:      via,
+			Peer:     peer,
 			Bytes:    sz,
 			Ts:       now,
 		})

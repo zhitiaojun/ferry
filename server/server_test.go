@@ -6,13 +6,16 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
 
 	"github.com/cwlindean/filetransfer/core/identity"
+	"github.com/cwlindean/filetransfer/core/pairing"
 	"github.com/cwlindean/filetransfer/core/relay"
 	"github.com/cwlindean/filetransfer/core/signaling"
 )
@@ -317,5 +320,77 @@ func TestLoginBudgetPerIP(t *testing.T) {
 	srv.loginMu.Unlock()
 	if !srv.allowLogin("203.0.113.7") {
 		t.Fatal("budget not restored after the window")
+	}
+}
+
+func TestPairNameExchange(t *testing.T) {
+	ts, _ := newTestServer(t)
+	sigURL := wsURL(t, ts, "/signal")
+	dir := t.TempDir()
+
+	initKey, err := identity.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	respKey, err := identity.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	initPaired, err := identity.LoadPaired(filepath.Join(dir, "init-paired.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	respPaired, err := identity.LoadPaired(filepath.Join(dir, "resp-paired.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	initCl, err := signaling.Dial(ctx, sigURL, initKey, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer initCl.Close()
+
+	respCl, err := signaling.Dial(ctx, sigURL, respKey, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer respCl.Close()
+
+	const code = "482913"
+	var wg sync.WaitGroup
+	var respPeer pairing.Peer
+	var respErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		respPeer, respErr = pairing.RunWithName(ctx, respCl, respKey, respPaired, pairing.Respond, code, "", "办公室电脑", 8*time.Second)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	initPeer, initErr := pairing.RunWithName(ctx, initCl, initKey, initPaired, pairing.Initiate, code, respKey.IDHex(), "我的小米手机", 8*time.Second)
+	wg.Wait()
+
+	if initErr != nil {
+		t.Fatalf("initiate pairing: %v", initErr)
+	}
+	if respErr != nil {
+		t.Fatalf("respond pairing: %v", respErr)
+	}
+	if initPeer.Name != "办公室电脑" {
+		t.Fatalf("initiator got peer name = %q, want 办公室电脑", initPeer.Name)
+	}
+	if respPeer.Name != "我的小米手机" {
+		t.Fatalf("responder got peer name = %q, want 我的小米手机", respPeer.Name)
+	}
+
+	if dev, ok := initPaired.Get(respKey.IDHex()); !ok || dev.Name != "办公室电脑" {
+		t.Fatalf("initiator stored peer = %+v (ok=%v), want Name=办公室电脑", dev, ok)
+	}
+	if dev, ok := respPaired.Get(initKey.IDHex()); !ok || dev.Name != "我的小米手机" {
+		t.Fatalf("responder stored peer = %+v (ok=%v), want Name=我的小米手机", dev, ok)
 	}
 }

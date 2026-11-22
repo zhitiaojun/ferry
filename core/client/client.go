@@ -16,6 +16,7 @@ import (
 
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/logging"
+	"github.com/cwlindean/filetransfer/core/pairing"
 	"github.com/cwlindean/filetransfer/core/proto"
 	"github.com/cwlindean/filetransfer/core/relay"
 	"github.com/cwlindean/filetransfer/core/session"
@@ -38,6 +39,7 @@ type Options struct {
 // Result summarises a completed transfer.
 type Result struct {
 	TransferID string
+	PeerName   string
 	Files      []string
 	Bytes      int64
 	Chunks     int
@@ -161,12 +163,17 @@ func SendFiles(ctx context.Context, o Options, toID string, files []string) (Res
 			o.Log.Event("relay.tls", map[string]any{"peer": truncHex(toID), "tls": "1.3", "pinned": true})
 		}
 	}
-	s, err := session.Dial(conn, sessionParams(key, o.Name))
+	s, err := session.Dial(conn, sessionParams(key, pairing.SanitizeName(o.Name)))
 	if err != nil {
 		_ = rc.Close()
 		return Result{}, fmt.Errorf("handshake over relay: %w", err)
 	}
 	defer s.Drain(2 * time.Second)
+
+	peerName := pairing.SanitizeName(s.Peer.Name)
+	if peerName != "" {
+		identity.UpdatePeerName(o.PairedPath, toID, peerName)
+	}
 
 	start := time.Now()
 	res, err := transfer.Send(s, files, transfer.Config{
@@ -177,7 +184,7 @@ func SendFiles(ctx context.Context, o Options, toID string, files []string) (Res
 		return Result{}, err
 	}
 	return Result{
-		TransferID: transferID, Files: res.Files, Bytes: res.Bytes,
+		TransferID: transferID, PeerName: peerName, Files: res.Files, Bytes: res.Bytes,
 		Chunks: res.Chunks, Duration: time.Since(start),
 	}, nil
 }

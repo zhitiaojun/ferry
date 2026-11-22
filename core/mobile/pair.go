@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/cwlindean/filetransfer/core/identity"
@@ -28,9 +27,10 @@ func BuildMyPairURI(keyPath, code, name string, ttlSec int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(name) == "" {
+	name = pairing.SanitizeName(name)
+	if name == "" {
 		if h, herr := os.Hostname(); herr == nil {
-			name = h
+			name = pairing.SanitizeName(h)
 		}
 	}
 	exp := time.Now().UTC().Add(time.Duration(ttlSec) * time.Second)
@@ -40,20 +40,28 @@ func BuildMyPairURI(keyPath, code, name string, ttlSec int) (string, error) {
 // PairWithURI validates an incoming ferry://pair?... QR URI against its 10-minute
 // expiration and runs SPAKE2 pairing against the peer.
 func PairWithURI(signalURL, keyPath, pairedPath, rawURI string) (string, error) {
+	return PairWithURINamed(signalURL, keyPath, pairedPath, rawURI, "")
+}
+
+// PairWithURINamed validates an incoming ferry://pair?... QR URI against its
+// 10-minute expiration and exchanges both devices' names during SPAKE2 pairing.
+func PairWithURINamed(signalURL, keyPath, pairedPath, rawURI, localName string) (string, error) {
 	u, err := pairing.ParsePairURI(rawURI, time.Now().UTC())
 	if err != nil {
 		return "", err
 	}
-	res, err := PairWithCode(signalURL, keyPath, pairedPath, u.Code, u.DeviceID)
+	res, err := PairWithCodeNamed(signalURL, keyPath, pairedPath, u.Code, u.DeviceID, localName)
 	if err != nil {
 		return "", err
 	}
 	if u.Name != "" {
 		if store, lerr := identity.LoadPaired(pairedPath); lerr == nil {
 			if dev, ok := store.Get(u.DeviceID); ok && dev.Name == "" {
-				dev.Name = u.Name
-				if aerr := store.Add(dev); aerr == nil {
-					_ = store.Save()
+				dev.Name = pairing.SanitizeName(u.Name)
+				if dev.Name != "" {
+					if aerr := store.Add(dev); aerr == nil {
+						_ = store.Save()
+					}
 				}
 			}
 		}
@@ -65,6 +73,12 @@ func PairWithURI(signalURL, keyPath, pairedPath, rawURI string) (string, error) 
 // The 6-digit code never leaves the device; both sides prove knowledge of it
 // with SPAKE2 (protocol §8.6).
 func PairWithCode(signalURL, keyPath, pairedPath, code, peerID string) (string, error) {
+	return PairWithCodeNamed(signalURL, keyPath, pairedPath, code, peerID, "")
+}
+
+// PairWithCodeNamed runs the initiator side of one-time-code pairing while
+// advertising localName to the peer.
+func PairWithCodeNamed(signalURL, keyPath, pairedPath, code, peerID, localName string) (string, error) {
 	if signalURL == "" {
 		signalURL = DefaultSignalURL
 	}
@@ -86,7 +100,7 @@ func PairWithCode(signalURL, keyPath, pairedPath, code, peerID string) (string, 
 		return "", err
 	}
 	defer client.Close()
-	peer, err := pairing.Run(ctx, client, key, paired, pairing.Initiate, code, peerID, 60*time.Second)
+	peer, err := pairing.RunWithName(ctx, client, key, paired, pairing.Initiate, code, peerID, localName, 60*time.Second)
 	if err != nil {
 		return "", err
 	}
@@ -99,6 +113,12 @@ func PairWithCode(signalURL, keyPath, pairedPath, code, peerID string) (string, 
 // WaitPairCode runs the responder side: it waits for someone who typed the same
 // code and then trusts them (default timeout 10 minutes).
 func WaitPairCode(signalURL, keyPath, pairedPath, code string, timeoutMS int) (string, error) {
+	return WaitPairCodeNamed(signalURL, keyPath, pairedPath, code, "", timeoutMS)
+}
+
+// WaitPairCodeNamed runs the responder side while advertising localName to the
+// initiator.
+func WaitPairCodeNamed(signalURL, keyPath, pairedPath, code, localName string, timeoutMS int) (string, error) {
 	if signalURL == "" {
 		signalURL = DefaultSignalURL
 	}
@@ -120,7 +140,7 @@ func WaitPairCode(signalURL, keyPath, pairedPath, code string, timeoutMS int) (s
 		return "", err
 	}
 	defer client.Close()
-	peer, err := pairing.Run(ctx, client, key, paired, pairing.Respond, code, "", time.Duration(timeoutMS)*time.Millisecond)
+	peer, err := pairing.RunWithName(ctx, client, key, paired, pairing.Respond, code, "", localName, time.Duration(timeoutMS)*time.Millisecond)
 	if err != nil {
 		return "", err
 	}
@@ -132,7 +152,7 @@ func WaitPairCode(signalURL, keyPath, pairedPath, code string, timeoutMS int) (s
 
 func pairResult(peer pairing.Peer, total int) string {
 	raw, _ := json.Marshal(map[string]any{
-		"ok": true, "peer": peer.ID, "pubkey": fmt.Sprintf("%x", peer.Pub), "paired": total,
+		"ok": true, "peer": peer.ID, "name": peer.Name, "pubkey": fmt.Sprintf("%x", peer.Pub), "paired": total,
 	})
 	return string(raw)
 }

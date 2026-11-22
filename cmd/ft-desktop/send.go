@@ -111,12 +111,21 @@ func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error)
 		SignalURL:  a.signalURL,
 		KeyPath:    a.keyPath,
 		PairedPath: a.pairedPath,
-		Name:       "windows-desktop",
+		Name:       a.deviceName(),
 	}, peer.ID, files)
 	if err != nil {
 		a.event("desktop.send_error", map[string]any{"to": truncID(peer.ID), "error": err.Error()})
 		a.note(fmt.Sprintf("%s  → %s · %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeFiles(files)))
 		return client.Result{}, err
+	}
+	if res.PeerName != "" && res.PeerName != peer.Name {
+		peer.Name = res.PeerName
+		if thePanel != nil {
+			thePanel.reloadPeers()
+		}
+		if h := existingMainWindow(); h != 0 {
+			procPostMessageW.Call(uintptr(h), wmAppReload, 0, 0)
+		}
 	}
 	a.event("desktop.send_done", map[string]any{
 		"to": truncID(peer.ID), "bytes": res.Bytes, "chunks": res.Chunks,

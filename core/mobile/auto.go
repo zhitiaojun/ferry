@@ -12,6 +12,7 @@ import (
 	"github.com/cwlindean/filetransfer/core/discovery"
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/logging"
+	"github.com/cwlindean/filetransfer/core/pairing"
 	"github.com/cwlindean/filetransfer/core/pathmgr"
 	"github.com/cwlindean/filetransfer/core/punch"
 	"github.com/cwlindean/filetransfer/core/relay"
@@ -41,6 +42,7 @@ func StartAutoReceive(name, outDir, signalURL, keyPath, pairedPath, hintJSON, st
 	if err != nil {
 		return "", err
 	}
+	name = pairing.SanitizeName(name)
 	if name == "" {
 		name = "android"
 	}
@@ -238,6 +240,14 @@ func autoServe(ctx context.Context, key *identity.Key, name, outDir, signalURL, 
 		return fmt.Errorf("race: %w", err)
 	}
 	defer sess.Drain(2 * time.Second)
+	peerName := pairing.SanitizeName(sess.Peer.Name)
+	if peerName != "" {
+		identity.UpdatePeerName(pairedPath, req.FromDevice, peerName)
+	} else if store, serr := identity.LoadPaired(pairedPath); serr == nil {
+		if dev, ok := store.Get(req.FromDevice); ok {
+			peerName = dev.Name
+		}
+	}
 	if logger != nil {
 		logger.Event("path.selected", map[string]any{"path": winner, "peer": truncID(req.FromDevice)})
 	}
@@ -248,7 +258,7 @@ func autoServe(ctx context.Context, key *identity.Key, name, outDir, signalURL, 
 	if err != nil {
 		return err
 	}
-	recordReceived(outDir, winner, res.Files, res.Bytes)
+	recordReceivedFrom(outDir, winner, peerName, res.Files, res.Bytes)
 	if logger != nil {
 		logger.Event("auto.done", map[string]any{"path": winner, "peer": truncID(req.FromDevice)})
 	}
@@ -264,6 +274,10 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 	}
 	if len(paths) == 0 {
 		return "", fmt.Errorf("no files")
+	}
+	name = pairing.SanitizeName(name)
+	if name == "" {
+		name = "android"
 	}
 	key, err := identity.LoadOrCreateKey(keyPath)
 	if err != nil {
@@ -413,6 +427,9 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 		return "", fmt.Errorf("race: %w", err)
 	}
 	defer sess.Drain(2 * time.Second)
+	if peerName := pairing.SanitizeName(sess.Peer.Name); peerName != "" {
+		identity.UpdatePeerName(pairedPath, toID, peerName)
+	}
 	if logger != nil {
 		logger.Event("path.selected", map[string]any{"path": winner, "peer": truncID(toID)})
 	}

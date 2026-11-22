@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"syscall"
@@ -395,7 +394,7 @@ func (p *pairWin) refreshSession() {
 		procInvalidateRect.Call(uintptr(p.hwnd), 0, 1)
 		return
 	}
-	host, _ := os.Hostname()
+	host := p.app.deviceName()
 	p.uri = pairing.BuildPairURI(key.IDHex(), p.code, host, p.expiresAt)
 	if qr, qerr := qrcode.New(p.uri, qrcode.Medium); qerr == nil {
 		qr.DisableBorder = true
@@ -444,7 +443,7 @@ func (p *pairWin) startResponder() {
 			return
 		}
 		defer cl.Close()
-		peer, err := pairing.Run(ctx, cl, key, paired, pairing.Respond, code, "", rem)
+		peer, err := pairing.RunWithName(ctx, cl, key, paired, pairing.Respond, code, "", app.deviceName(), rem)
 		if err != nil {
 			if ctx.Err() == nil {
 				p.reportAsync(gen, false, err.Error())
@@ -455,7 +454,11 @@ func (p *pairWin) startResponder() {
 			p.reportAsync(gen, false, serr.Error())
 			return
 		}
-		p.reportAsync(gen, true, truncID(peer.ID))
+		display := peer.Name
+		if display == "" {
+			display = truncID(peer.ID)
+		}
+		p.reportAsync(gen, true, display)
 		_ = hwnd
 	}()
 }
@@ -521,22 +524,28 @@ func (p *pairWin) submitManual() {
 			return
 		}
 		defer cl.Close()
-		peer, err := pairing.Run(ctx, cl, key, paired, pairing.Initiate, code, peerText, 60*time.Second)
+		peer, err := pairing.RunWithName(ctx, cl, key, paired, pairing.Initiate, code, peerText, app.deviceName(), 60*time.Second)
 		if err != nil {
 			p.reportAsync(gen, false, err.Error())
 			return
 		}
 		if peerName != "" {
 			if d, ok := paired.Get(peer.ID); ok && d.Name == "" {
-				d.Name = peerName
-				_ = paired.Add(d)
+				d.Name = pairing.SanitizeName(peerName)
+				if d.Name != "" {
+					_ = paired.Add(d)
+				}
 			}
 		}
 		if serr := paired.Save(); serr != nil {
 			p.reportAsync(gen, false, serr.Error())
 			return
 		}
-		p.reportAsync(gen, true, truncID(peer.ID))
+		display := peer.Name
+		if display == "" {
+			display = truncID(peer.ID)
+		}
+		p.reportAsync(gen, true, display)
 	}()
 }
 

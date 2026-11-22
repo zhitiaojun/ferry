@@ -11,7 +11,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
-	"time"
 	"unsafe"
 
 	"github.com/cwlindean/filetransfer/core/client"
@@ -21,6 +20,7 @@ import (
 const (
 	mainClass     = "ftMainWin"
 	wmAppPaint    = wmApp + 10
+	wmAppReload   = wmApp + 11
 	wmPrint       = 0x0317
 	wmPrintClient = 0x0318
 	wmSizeMsg     = 0x0005
@@ -78,6 +78,7 @@ const (
 	hoverAddDevice
 	hoverPeerPicker
 	hoverSendBtn
+	hoverSendText
 	hoverSendClip
 	hoverFltAll
 	hoverFltSend
@@ -87,8 +88,11 @@ const (
 	hoverDevAddBtn
 	hoverDevSendBtn
 	hoverSetRecv
+	hoverSetResetDir
+	hoverSetChangeDir
 	hoverSetOpenDir
 	hoverSetAuto
+	hoverSetRename
 	hoverSetCopyID
 )
 
@@ -268,6 +272,7 @@ type mainWin struct {
 	addDevLinkR rectT
 	peerPickerR rectT
 	sendBtnR    rectT
+	sendTextR   rectT
 	sendClipR   rectT
 
 	fltAllR     rectT
@@ -280,8 +285,11 @@ type mainWin struct {
 	devSendBtnsR []rectT
 
 	setRecvBtnR   rectT
+	setResetDirR  rectT
+	setChangeDirR rectT
 	setOpenDirR   rectT
 	setAutoBtnR   rectT
+	setRenameBtnR rectT
 	setCopyIDRowR rectT
 
 	fontH1   syscall.Handle
@@ -495,6 +503,13 @@ func mainWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintpt
 			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 		}
 		return 0
+	case wmAppReload:
+		if w != nil {
+			w.loadPeers()
+			w.refreshLocalMeta()
+			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+		}
+		return 0
 	case wmClose:
 		procShowWindow.Call(uintptr(hwnd), swHide)
 		return 0
@@ -666,9 +681,10 @@ func (w *mainWin) freeFonts() {
 // ---------------------------------------------------------------------------
 
 func (w *mainWin) refreshLocalMeta() {
-	w.hostName, _ = os.Hostname()
-	if w.hostName == "" {
-		w.hostName = "Windows"
+	if w.app != nil {
+		w.hostName = w.app.deviceName()
+	} else {
+		w.hostName = defaultDeviceName()
 	}
 	w.fullID = ""
 	if w.app != nil && w.app.keyPath != "" {
@@ -741,12 +757,12 @@ func (w *mainWin) layout(cw, ch int32) {
 
 	// Reset page-specific rects
 	w.tileFilesR, w.tileFolderR, w.queueBoxR, w.queueClearR = rectT{}, rectT{}, rectT{}, rectT{}
-	w.addDevLinkR, w.peerPickerR, w.sendBtnR, w.sendClipR = rectT{}, rectT{}, rectT{}, rectT{}
+	w.addDevLinkR, w.peerPickerR, w.sendBtnR, w.sendTextR, w.sendClipR = rectT{}, rectT{}, rectT{}, rectT{}, rectT{}
 	w.fltAllR, w.fltSendR, w.fltRecvR, w.openDirR = rectT{}, rectT{}, rectT{}, rectT{}
 	w.ledgerRowsR = w.ledgerRowsR[:0]
 	w.devAddBtnR = rectT{}
 	w.devSendBtnsR = w.devSendBtnsR[:0]
-	w.setRecvBtnR, w.setOpenDirR, w.setAutoBtnR, w.setCopyIDRowR = rectT{}, rectT{}, rectT{}, rectT{}
+	w.setRecvBtnR, w.setResetDirR, w.setChangeDirR, w.setOpenDirR, w.setAutoBtnR, w.setRenameBtnR, w.setCopyIDRowR = rectT{}, rectT{}, rectT{}, rectT{}, rectT{}, rectT{}, rectT{}
 
 	switch w.page {
 	case pageHome:
@@ -788,7 +804,9 @@ func (w *mainWin) layout(cw, ch int32) {
 		w.peerPickerR = rectT{inL, y, inR, y + p(34)}
 		y = w.peerPickerR.bottom + p(14)
 		w.sendBtnR = rectT{inL, y, inR, y + p(38)}
-		w.sendClipR = rectT{inL, w.sendCardR.bottom + p(10), inL + p(86), w.sendCardR.bottom + p(32)}
+		footY := w.sendCardR.bottom + p(10)
+		w.sendTextR = rectT{w.sendCardR.left + p(2), footY, w.sendCardR.left + p(56), footY + p(22)}
+		w.sendClipR = rectT{w.sendTextR.right + p(12), footY, w.sendTextR.right + p(78), footY + p(22)}
 
 		// Right transfers pane
 		rPad := p(28)
@@ -832,11 +850,21 @@ func (w *mainWin) layout(cw, ch int32) {
 		y := topH + p(86)
 		w.setRecvBtnR = rectT{paneR - p(88), y + p(13), paneR - p(16), y + rowH - p(13)}
 		y += rowH
-		w.setOpenDirR = rectT{paneR - p(88), y + p(13), paneR - p(16), y + rowH - p(13)}
+		btnTop := y + p(13)
+		btnBot := y + rowH - p(13)
+		btnGap := p(8)
+		w.setOpenDirR = rectT{paneR - p(72), btnTop, paneR - p(16), btnBot}
+		w.setChangeDirR = rectT{w.setOpenDirR.left - btnGap - p(56), btnTop, w.setOpenDirR.left - btnGap, btnBot}
+		if w.app != nil && w.app.isCustomReceiveDir() {
+			w.setResetDirR = rectT{w.setChangeDirR.left - btnGap - p(68), btnTop, w.setChangeDirR.left - btnGap, btnBot}
+		}
 		y += rowH
 		w.setAutoBtnR = rectT{paneR - p(88), y + p(13), paneR - p(16), y + rowH - p(13)}
-		infoY := y + rowH + p(50) + p(42)
-		w.setCopyIDRowR = rectT{paneL, infoY, paneR, infoY + p(42)}
+		infoTop := y + rowH + p(50)
+		infoRowH := p(42)
+		w.setRenameBtnR = rectT{paneR - p(70), infoTop + p(8), paneR - p(16), infoTop + infoRowH - p(8)}
+		infoY := infoTop + infoRowH
+		w.setCopyIDRowR = rectT{paneL, infoY, paneR, infoY + infoRowH}
 	}
 }
 
@@ -1160,13 +1188,22 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 	cv.drawAlphaText(w.fontBold, btnLbl, w.sendBtnR, dtCenter|dtSingleLine|dtVCenter, w.pal.accentInk)
 
 	// Footer links under Send Card
+	textColor := w.pal.ink2
+	if w.hover == hoverSendText {
+		textColor = w.pal.accent
+	}
+	cv.drawAlphaText(w.fontSm, "发送文字", w.sendTextR, dtSingleLine|dtVCenter, textColor)
+	cv.drawAlphaText(w.fontSm, "·",
+		rectT{w.sendTextR.right, w.sendTextR.top, w.sendClipR.left, w.sendTextR.bottom},
+		dtCenter|dtSingleLine|dtVCenter, w.pal.ink3)
+
 	clipColor := w.pal.ink2
 	if w.hover == hoverSendClip {
 		clipColor = w.pal.accent
 	}
 	cv.drawAlphaText(w.fontSm, "发送剪贴板", w.sendClipR, dtSingleLine|dtVCenter, clipColor)
 	cv.drawAlphaText(w.fontSm, "支持直接拖入文件",
-		rectT{w.sendClipR.right, w.sendClipR.top, w.sendCardR.right, w.sendClipR.bottom},
+		rectT{w.sendClipR.right + p(4), w.sendClipR.top, w.sendCardR.right - p(2), w.sendClipR.bottom},
 		dtRight|dtSingleLine|dtVCenter, w.pal.ink3)
 
 	// Right Transfers Pane
@@ -1357,37 +1394,60 @@ func (w *mainWin) drawSettings(cv *glassCanvas, cr rectT) {
 	if autostartEnabled() {
 		autoTxt = "已开启"
 	}
-	dirText := ""
+	dirText := defaultReceiveDir()
 	portText := "18800"
 	if w.app != nil {
-		dirText = w.app.dir
+		dirText = w.app.receiveDir()
 		portText = fmt.Sprintf("%d", w.app.port)
 	}
 
+	drawSmallBtn := func(r rectT, label string, hoverID int) {
+		bFill := w.pal.paper2
+		if w.hover == hoverID {
+			bFill = w.pal.paper3
+		}
+		cv.drawAlphaRoundRect(r, float64(p(6)), bFill, w.surfaceAlpha(210), w.pal.line, w.surfaceAlpha(200), 1.0)
+		cv.drawAlphaText(w.fontSm, label, r, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
+	}
+
+	type g1Action struct {
+		label   string
+		r       rectT
+		hoverID int
+	}
+	dirActions := make([]g1Action, 0, 3)
+	if w.setResetDirR.right > w.setResetDirR.left {
+		dirActions = append(dirActions, g1Action{"恢复默认", w.setResetDirR, hoverSetResetDir})
+	}
+	dirActions = append(dirActions,
+		g1Action{"更改", w.setChangeDirR, hoverSetChangeDir},
+		g1Action{"打开", w.setOpenDirR, hoverSetOpenDir},
+	)
+
 	g1Rows := []struct {
-		title, sub, btn string
-		btnR            rectT
-		hoverID         int
+		title, sub string
+		actions    []g1Action
 	}{
-		{"后台接收文件", "关闭后其他设备暂时无法向此电脑发送", recvTxt, w.setRecvBtnR, hoverSetRecv},
-		{"接收文件保存位置", dirText, "打开", w.setOpenDirR, hoverSetOpenDir},
-		{"开机自动启动", "登录后自动缩至右下角托盘接收", autoTxt, w.setAutoBtnR, hoverSetAuto},
+		{"后台接收文件", "关闭后其他设备暂时无法向此电脑发送", []g1Action{{recvTxt, w.setRecvBtnR, hoverSetRecv}}},
+		{"接收文件保存位置", dirText, dirActions},
+		{"开机自动启动", "登录后自动缩至右下角托盘接收", []g1Action{{autoTxt, w.setAutoBtnR, hoverSetAuto}}},
 	}
 	for i, r := range g1Rows {
 		ry := top + int32(i)*rowH
+		textRight := paneR - p(16)
+		if len(r.actions) > 0 {
+			textRight = r.actions[0].r.left - p(12)
+		}
 		cv.drawAlphaText(w.fontBold, r.title,
-			rectT{paneL + p(16), ry + p(8), r.btnR.left - p(12), ry + p(30)},
+			rectT{paneL + p(16), ry + p(8), textRight, ry + p(30)},
 			dtSingleLine|dtVCenter, w.pal.ink)
 		cv.drawAlphaText(w.fontSm, r.sub,
-			rectT{paneL + p(16), ry + p(30), r.btnR.left - p(12), ry + p(50)},
+			rectT{paneL + p(16), ry + p(30), textRight, ry + p(50)},
 			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
 
-		bFill := w.pal.paper2
-		if w.hover == r.hoverID {
-			bFill = w.pal.paper3
+		for _, act := range r.actions {
+			drawSmallBtn(act.r, act.label, act.hoverID)
 		}
-		cv.drawAlphaRoundRect(r.btnR, float64(p(6)), bFill, w.surfaceAlpha(210), w.pal.line, w.surfaceAlpha(200), 1.0)
-		cv.drawAlphaText(w.fontSm, r.btn, r.btnR, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
 		if i+1 < len(g1Rows) {
 			cv.fillColorAlpha(rectT{paneL + p(16), ry + rowH - 1, paneR - p(16), ry + rowH}, w.pal.lineSoft, w.surfaceAlpha(175))
 		}
@@ -1422,7 +1482,12 @@ func (w *mainWin) drawSettings(cv *glassCanvas, cr rectT) {
 		}
 		cv.drawAlphaText(w.fontSm, r.k, rectT{paneL + p(16), ry, paneL + p(140), ry + infoRowH},
 			dtSingleLine|dtVCenter, w.pal.ink2)
-		cv.drawAlphaText(r.font, r.v, rectT{paneL + p(140), ry, paneR - p(16), ry + infoRowH},
+		valRight := paneR - p(16)
+		if i == 0 {
+			valRight = w.setRenameBtnR.left - p(10)
+			drawSmallBtn(w.setRenameBtnR, "修改", hoverSetRename)
+		}
+		cv.drawAlphaText(r.font, r.v, rectT{paneL + p(140), ry, valRight, ry + infoRowH},
 			dtRight|dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink)
 		if i+1 < len(g2Rows) {
 			cv.fillColorAlpha(rectT{paneL + p(16), ry + infoRowH - 1, paneR - p(16), ry + infoRowH}, w.pal.lineSoft, 255)
@@ -1602,6 +1667,8 @@ func (w *mainWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
 		kind = hoverPeerPicker
 	case w.page == pageHome && ptIn(w.sendBtnR, x, y):
 		kind = hoverSendBtn
+	case w.page == pageHome && ptIn(w.sendTextR, x, y):
+		kind = hoverSendText
 	case w.page == pageHome && ptIn(w.sendClipR, x, y):
 		kind = hoverSendClip
 	case w.page == pageHome && ptIn(w.fltAllR, x, y):
@@ -1616,10 +1683,16 @@ func (w *mainWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
 		kind = hoverDevAddBtn
 	case w.page == pageSettings && ptIn(w.setRecvBtnR, x, y):
 		kind = hoverSetRecv
+	case w.page == pageSettings && w.setResetDirR.right > w.setResetDirR.left && ptIn(w.setResetDirR, x, y):
+		kind = hoverSetResetDir
+	case w.page == pageSettings && ptIn(w.setChangeDirR, x, y):
+		kind = hoverSetChangeDir
 	case w.page == pageSettings && ptIn(w.setOpenDirR, x, y):
 		kind = hoverSetOpenDir
 	case w.page == pageSettings && ptIn(w.setAutoBtnR, x, y):
 		kind = hoverSetAuto
+	case w.page == pageSettings && ptIn(w.setRenameBtnR, x, y):
+		kind = hoverSetRename
 	case w.page == pageSettings && ptIn(w.setCopyIDRowR, x, y):
 		kind = hoverSetCopyID
 	default:
@@ -1741,6 +1814,8 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 			} else {
 				w.pickAndSend(hwnd)
 			}
+		case ptIn(w.sendTextR, x, y):
+			w.openSendText(hwnd)
 		case ptIn(w.sendClipR, x, y):
 			w.sendClipboard(hwnd)
 		case ptIn(w.fltAllR, x, y):
@@ -1754,12 +1829,12 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 		case ptIn(w.openDirR, x, y):
 			if w.app != nil {
-				shellOpen(w.app.dir)
+				shellOpen(w.app.receiveDir())
 			}
 		default:
 			for _, rr := range w.ledgerRowsR {
 				if ptIn(rr, x, y) && w.app != nil {
-					shellOpen(w.app.dir)
+					shellOpen(w.app.receiveDir())
 					return
 				}
 			}
@@ -1785,9 +1860,27 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 			recvEnabled.Store(on)
 			w.status = map[bool]string{true: "已开启后台接收", false: "已暂停接收"}[on]
 			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+		case w.setResetDirR.right > w.setResetDirR.left && ptIn(w.setResetDirR, x, y):
+			if w.app != nil {
+				if dir, err := w.app.resetReceiveDir(); err != nil {
+					w.status = "恢复默认目录失败：" + err.Error()
+				} else {
+					w.status = "已恢复默认下载目录：" + dir
+				}
+				procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+			}
+		case ptIn(w.setChangeDirR, x, y):
+			if chosen := browseFolderDialog(hwnd, "选择接收文件保存目录"); chosen != "" && w.app != nil {
+				if err := w.app.setReceiveDir(chosen); err != nil {
+					w.status = "更改下载目录失败：" + err.Error()
+				} else {
+					w.status = "接收目录已更改为 " + w.app.receiveDir()
+				}
+				procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+			}
 		case ptIn(w.setOpenDirR, x, y):
 			if w.app != nil {
-				shellOpen(w.app.dir)
+				shellOpen(w.app.receiveDir())
 			}
 		case ptIn(w.setAutoBtnR, x, y):
 			on := !autostartEnabled()
@@ -1797,6 +1890,8 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 				w.status = map[bool]string{true: "已设置开机静默自启", false: "已取消开机自启"}[on]
 			}
 			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+		case ptIn(w.setRenameBtnR, x, y):
+			w.openRenameDialog(hwnd)
 		case ptIn(w.setCopyIDRowR, x, y):
 			if w.fullID != "" && copyToClipboard(hwnd, w.fullID) {
 				w.status = "已复制本机设备 ID"
@@ -1818,18 +1913,41 @@ func (w *mainWin) sendClipboard(hwnd syscall.Handle) {
 		procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 		return
 	}
-	tmp := filepath.Join(os.TempDir(), fmt.Sprintf("clipboard-%s.txt", time.Now().Format("150405")))
-	if err := os.WriteFile(tmp, []byte(txt), 0o600); err != nil {
-		w.status = "读取剪贴板失败：" + err.Error()
+	w.sendTextPayload(hwnd, peer, txt, "clipboard", "剪贴板")
+}
+
+func (w *mainWin) openSendText(hwnd syscall.Handle) {
+	peer, ok := w.activePeer()
+	if !ok {
+		openPairWindow(hwnd, w.app)
+		return
+	}
+	openTextInputDialog(textInputOpts{
+		Owner:       hwnd,
+		Title:       "发送文字",
+		Subtitle:    "发给 " + peerLabel(peer) + "（Ctrl+Enter 快速发送）",
+		ConfirmText: "发送",
+		Multiline:   true,
+		AllowEmpty:  false,
+		OnSubmit: func(text string) {
+			w.sendTextPayload(hwnd, peer, text, "text", "文字")
+		},
+	})
+}
+
+func (w *mainWin) sendTextPayload(hwnd syscall.Handle, peer client.Peer, txt, prefix, kindLabel string) {
+	tmp, err := writeTempTextFile(prefix, txt)
+	if err != nil {
+		w.status = "创建临时文本失败：" + err.Error()
 		procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 		return
 	}
-	w.status = fmt.Sprintf("正在将剪贴板发往 %s…", peerLabel(peer))
+	w.status = fmt.Sprintf("正在将%s发往 %s…", kindLabel, peerLabel(peer))
 	procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 	go func() {
-		defer os.Remove(tmp)
+		defer os.RemoveAll(filepath.Dir(tmp))
 		res, err := sendToPeer(w.app, []string{tmp}, peer)
-		msg := fmt.Sprintf("已将剪贴板发给 %s（%d 字节）", peerLabel(peer), res.Bytes)
+		msg := fmt.Sprintf("已将%s发给 %s（%d 字节）", kindLabel, peerLabel(peer), res.Bytes)
 		if err != nil {
 			msg = "发送失败：" + err.Error()
 		}
@@ -1840,6 +1958,35 @@ func (w *mainWin) sendClipboard(hwnd syscall.Handle) {
 		mainMu.Unlock()
 		procPostMessageW.Call(uintptr(hwnd), wmAppPaint, 0, 0)
 	}()
+}
+
+func (w *mainWin) openRenameDialog(hwnd syscall.Handle) {
+	if w.app == nil {
+		return
+	}
+	openTextInputDialog(textInputOpts{
+		Owner:       hwnd,
+		Title:       "修改设备名称",
+		Subtitle:    "其他设备配对或传输时将看到此名称（留空恢复计算机名）",
+		Initial:     w.app.deviceName(),
+		ConfirmText: "保存",
+		Multiline:   false,
+		AllowEmpty:  true,
+		OnSubmit: func(text string) {
+			eff, err := w.app.setDeviceName(text)
+			mainMu.Lock()
+			if mw := mainWins[hwnd]; mw != nil {
+				mw.hostName = eff
+				if err != nil {
+					mw.status = "保存设备名称失败：" + err.Error()
+				} else {
+					mw.status = "设备名称已更新为 " + eff
+				}
+			}
+			mainMu.Unlock()
+			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+		},
+	})
 }
 
 func (w *mainWin) pickAndSend(hwnd syscall.Handle) {

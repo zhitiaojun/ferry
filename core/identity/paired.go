@@ -209,6 +209,28 @@ func (s *PairedStore) Save() error {
 	return os.Rename(tmpName, s.path)
 }
 
+// UpdatePeerName refreshes the stored friendly name of an already-paired
+// device. Unpaired device IDs and blank names are ignored.
+func UpdatePeerName(pairedPath, peerID, name string) bool {
+	name = strings.TrimSpace(name)
+	if pairedPath == "" || peerID == "" || name == "" {
+		return false
+	}
+	store, err := LoadPaired(pairedPath)
+	if err != nil {
+		return false
+	}
+	dev, ok := store.Get(peerID)
+	if !ok || dev.Name == name {
+		return false
+	}
+	dev.Name = name
+	if err := store.Add(dev); err != nil {
+		return false
+	}
+	return store.Save() == nil
+}
+
 // PublicKeyBytes decodes the stored hex public key.
 func (d PairedDevice) PublicKeyBytes() (ed25519.PublicKey, error) {
 	pub, err := hex.DecodeString(d.PubKey)
