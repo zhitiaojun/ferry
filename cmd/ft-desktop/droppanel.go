@@ -64,7 +64,6 @@ type dropPanel struct {
 	expanded bool
 	acrylic  bool
 	outside  int
-	dragGone int
 	buttonUp int
 	pw, ph   int32
 	dpi      int32
@@ -204,7 +203,6 @@ func (p *dropPanel) show() {
 	p.reloadPeers()
 	p.expanded = false
 	p.outside = 0
-	p.dragGone = 0
 	p.buttonUp = 0
 	w, h := p.size()
 	p.pw, p.ph = w, h
@@ -488,8 +486,9 @@ func panelWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintp
 		pad := p.px(16)
 		insideLoose := cursor.x >= wr.left-pad && cursor.x < wr.right+pad && cursor.y >= wr.top-pad && cursor.y < wr.bottom+pad
 
-		// Shell hides SysDragImage while crossing non-drop windows (such as desktop widgets)
-		// or WM_DROPFILES targets without destroying it; keep tracking until IsWindow == 0.
+		// Keep pruning destroyed SysDragImage handles without hiding the panel while
+		// the mouse button remains pressed, since Shell may temporarily destroy
+		// SysDragImage across desktop widgets or non-OLE windows.
 		dragMu.Lock()
 		for h := range dragWins {
 			if r, _, _ := procIsWindow.Call(h); r == 0 {
@@ -502,18 +501,7 @@ func panelWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintp
 				delete(dragWins, h)
 			}
 		}
-		live := len(dragWins)
 		dragMu.Unlock()
-		if live == 0 && !(btnDown && insideLoose) {
-			p.dragGone++
-			if p.dragGone*60 >= 300 {
-				p.dragGone = 0
-				p.hide()
-				return 0
-			}
-		} else {
-			p.dragGone = 0
-		}
 		if !p.expanded {
 			if inside {
 				p.setExpanded(true)
