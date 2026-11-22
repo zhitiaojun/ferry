@@ -185,7 +185,7 @@ static void desktop_exe(wchar_t *out, DWORD cap) {
     wchar_t *local = NULL;
     size_t n = 0;
     if (_wdupenv_s(&local, &n, L"LOCALAPPDATA") == 0 && local) {
-        _snwprintf(out, cap, L"%s\\ft\\bin\\ft-desktop.exe", local);
+        _snwprintf(out, cap, L"%s\\Ferry\\bin\\ferry-desktop.exe", local);
         free(local);
         return;
     }

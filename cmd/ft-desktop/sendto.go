@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 )
 
 // installSendTo drops a shortcut into the user's "Send to" folder so Explorer's
@@ -28,6 +29,7 @@ $s.TargetPath = '%s'
 $s.Description = '用轻渡 Ferry 发送到已配对设备'
 $s.Save()`, escapePS(lnk), escapePS(exe))
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("powershell: %v: %s", err, out)
 	}

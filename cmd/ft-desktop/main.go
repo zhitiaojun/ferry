@@ -25,17 +25,18 @@ import (
 
 var (
 	flagDrop   = flag.Bool("drop", false, "show the drop window instead of the tray receiver")
-	flagDir    = flag.String("dir", "", "receive directory (default: %USERPROFILE%\\Downloads\\ft)")
+	flagDir    = flag.String("dir", "", "receive directory (default: %USERPROFILE%\\Downloads\\Ferry)")
 	flagPort   = flag.Int("port", 18800, "receive port on all interfaces")
 	flagPos    = flag.String("pos", "", "drop window position X,Y (drop mode only)")
 	flagSize   = flag.String("size", "260x90", "drop window size WxH (drop mode only)")
 	flagLog    = flag.String("log", "", "append JSONL events to this file")
-	flagKey    = flag.String("key", "", "device key file (default: %LOCALAPPDATA%\\ft\\device.key)")
-	flagPair   = flag.String("paired", "", "trusted device table (default: %LOCALAPPDATA%\\ft\\paired.json)")
+	flagKey    = flag.String("key", "", "device key file (default: %LOCALAPPDATA%\\Ferry\\device.key)")
+	flagPair   = flag.String("paired", "", "trusted device table (default: %LOCALAPPDATA%\\Ferry\\paired.json)")
 	flagSig    = flag.String("signal", "wss://ft.cwlindean.cn/signal", "signaling URL used to send via the relay")
 	flagSend   = flag.String("send", "", "diagnostic: send these comma-separated files to the paired device, then exit")
 	flagAuto   = flag.String("startup", "", "diagnostic: on/off/status for the HKCU Run entry, then exit")
-	flagMain   = flag.Bool("main", false, "open the main window at startup")
+	flagMain   = flag.Bool("main", false, "open the main window at startup (default behavior unless -silent)")
+	flagSilent = flag.Bool("silent", false, "start minimized to tray without opening the main window")
 	flagSendTo = flag.Bool("install-sendto", false, "install the Explorer \"Send to\" shortcut, then exit")
 	flagPanel  = flag.Bool("panel", true, "show the drop panel while files are dragged")
 )
@@ -56,7 +57,7 @@ func main() {
 		if err != nil {
 			fatal("cannot find home directory: %v", err)
 		}
-		dir = filepath.Join(home, "Downloads", "ft")
+		dir = filepath.Join(home, "Downloads", "Ferry")
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		fatal("create receive directory: %v", err)
@@ -122,11 +123,10 @@ func main() {
 	if len(files) > 0 && app.logOut == nil {
 		// Explorer's "Send to" starts us without a console: keep a log so the
 		// outcome is still inspectable.
-		if d, err := localAppData(); err == nil {
-			_ = os.MkdirAll(filepath.Join(d, "ft"), 0o755)
-			if f, err := os.OpenFile(filepath.Join(d, "ft", "events.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
-				app.logOut = f
-			}
+		sd := defaultStateDir()
+		_ = os.MkdirAll(sd, 0o755)
+		if f, err := os.OpenFile(filepath.Join(sd, "events.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
+			app.logOut = f
 		}
 	}
 	if len(files) > 0 && *flagSend == "" {
@@ -150,7 +150,7 @@ func main() {
 		return
 	}
 
-	app.showMain = *flagMain
+	app.showMain = !*flagSilent
 	if *flagPanel {
 		newDropPanel(app) // window + hook are created on the tray thread
 	}
@@ -248,12 +248,56 @@ func localAppData() (string, error) {
 	return "", fmt.Errorf("LOCALAPPDATA is not set")
 }
 
+var migrateStateOnce sync.Once
+
+// defaultStateDir returns %LOCALAPPDATA%\Ferry (or ~/.ferry), migrating any
+// existing device.key and paired.json from the legacy ft directory once.
+func defaultStateDir() string {
+	var dir, old string
+	if d, err := localAppData(); err == nil {
+		dir = filepath.Join(d, "Ferry")
+		old = filepath.Join(d, "ft")
+	} else {
+		h := homeDir()
+		if h == "" {
+			return "."
+		}
+		dir = filepath.Join(h, ".ferry")
+		old = filepath.Join(h, ".ft")
+	}
+	migrateStateOnce.Do(func() {
+		migrateLegacyState(old, dir)
+	})
+	return dir
+}
+
+func migrateLegacyState(oldDir, newDir string) {
+	if oldDir == "" || oldDir == newDir {
+		return
+	}
+	type item struct {
+		name string
+		mode os.FileMode
+	}
+	for _, it := range []item{{"device.key", 0o600}, {"paired.json", 0o644}} {
+		dst := filepath.Join(newDir, it.name)
+		if _, err := os.Stat(dst); err == nil {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(oldDir, it.name))
+		if err != nil {
+			continue
+		}
+		if err := os.MkdirAll(newDir, 0o755); err != nil {
+			return
+		}
+		_ = os.WriteFile(dst, data, it.mode)
+	}
+}
+
 // defaultPairedPath keeps the trusted-device table next to the device key.
 func defaultPairedPath() string {
-	if d, err := localAppData(); err == nil {
-		return filepath.Join(d, "ft", "paired.json")
-	}
-	return "paired.json"
+	return filepath.Join(defaultStateDir(), "paired.json")
 }
 
 // event appends one JSON line to the log file (if any) and stderr.

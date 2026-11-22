@@ -51,13 +51,13 @@ jobs:
           & $cc -shared -O2 -o cmd/ft-setup/payload/menu/ftmenu.dll cmd/ft-shellmenu/ftmenu.c cmd/ft-shellmenu/ftmenu.def "-Wl,--exclude-all-symbols" -lole32 -luuid -lshell32 -ladvapi32
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          Copy-Item out/windows/ferry-windows-amd64.exe cmd/ft-setup/payload/ft.exe -Force
-          Copy-Item out/windows/ferry-desktop-windows-amd64.exe cmd/ft-setup/payload/ft-desktop.exe -Force
+          Copy-Item out/windows/ferry-windows-amd64.exe cmd/ft-setup/payload/ferry.exe -Force
+          Copy-Item out/windows/ferry-desktop-windows-amd64.exe cmd/ft-setup/payload/ferry-desktop.exe -Force
           Copy-Item deploy/msix/AppxManifest.xml cmd/ft-setup/payload/menu/ -Force
           Copy-Item deploy/msix/ft.ico cmd/ft-setup/payload/menu/ -Force
           Copy-Item deploy/msix/Assets/*.png cmd/ft-setup/payload/menu/Assets/ -Force
 
-          go build -trimpath -o out/windows/ferry-setup-windows-amd64.exe ./cmd/ft-setup
+          go build -trimpath -ldflags="-H=windowsgui" -o out/windows/ferry-setup-windows-amd64.exe ./cmd/ft-setup
           go vet ./...
           go test -count=1 ./cmd/ft ./cmd/ft-desktop
       - uses: actions/upload-artifact@v4

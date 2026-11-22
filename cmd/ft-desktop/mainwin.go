@@ -305,7 +305,11 @@ func openMainWindow(a *app) {
 	// Do not hold mainMu across CreateWindowExW: WM_CREATE arrives on this same
 	// thread and currentWin() takes the same mutex, which would deadlock.
 	if h := existingMainWindow(); h != 0 {
-		procShowWindow.Call(uintptr(h), swShow)
+		if iconic, _, _ := procIsIconic.Call(uintptr(h)); iconic != 0 {
+			procShowWindow.Call(uintptr(h), swRestore)
+		} else {
+			procShowWindow.Call(uintptr(h), swShow)
+		}
 		procSetForegroundWindow.Call(uintptr(h))
 		if mw := currentWin(h); mw != nil {
 			mw.loadPeers()

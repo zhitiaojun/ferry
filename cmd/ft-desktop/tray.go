@@ -40,6 +40,13 @@ type tray struct {
 }
 
 func runTray(a *app, keyPath string) int {
+	// If an instance is already running, bring its main window forward instead
+	// of failing on the listening port or opening a duplicate tray icon.
+	if existing := findTrayWindow(); existing != 0 {
+		procAllowSetForegroundWindow.Call(^uintptr(0))
+		procPostMessageW.Call(uintptr(existing), wmShowMain, 0, 0)
+		return 0
+	}
 	// Windows are created here and the message loop below runs on this thread,
 	// so the panel window must be born on it too.
 	runtime.LockOSThread()
@@ -114,14 +121,15 @@ func homeDir() string {
 	return h
 }
 
-// defaultKeyPath keeps the device key where Windows apps normally write user
-// state: %LOCALAPPDATA%\ft. Unlike ~/.ft this directory is always writable for a
-// normal user process.
+// defaultKeyPath keeps the device key in %LOCALAPPDATA%\Ferry (migrating any
+// legacy %LOCALAPPDATA%\ft files on first run).
 func defaultKeyPath() string {
-	if dir := os.Getenv("LOCALAPPDATA"); dir != "" {
-		return filepath.Join(dir, "ft", "device.key")
-	}
-	return filepath.Join(homeDir(), ".ft", "device.key")
+	return filepath.Join(defaultStateDir(), "device.key")
+}
+
+func findTrayWindow() syscall.Handle {
+	h, _, _ := procFindWindowW.Call(uintptr(unsafe.Pointer(utf16Ptr("ftTrayWnd"))), 0)
+	return syscall.Handle(h)
 }
 
 func (t *tray) createWindow() bool {
@@ -344,6 +352,11 @@ func trayWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintpt
 	case wmCommand:
 		if trayHandle != nil {
 			trayHandle.command(loword(wParam))
+		}
+		return 0
+	case wmShowMain:
+		if trayHandle != nil {
+			openMainWindow(trayHandle.app)
 		}
 		return 0
 	case wmDestroy:
