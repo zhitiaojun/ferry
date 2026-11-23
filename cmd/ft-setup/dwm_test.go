@@ -41,6 +41,7 @@ func TestSetupWin32ProcsResolve(t *testing.T) {
 		procWizSetTimer,
 		procWizKillTimer,
 		procWizDrawTextW,
+		procWizSetLayeredWindowAttributes,
 		procWizGetModuleHandleW,
 		procWizCreateFontW,
 		procWizSelectObject,

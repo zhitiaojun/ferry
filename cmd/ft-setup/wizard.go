@@ -318,19 +318,20 @@ func (w *wizardState) s(v int32) int32 { return wizScale(w.dpi, v) }
 func wizardWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 	w := activeWizard
 	const (
-		wmCreate       = 0x0001
-		wmDestroy      = 0x0002
-		wmPaint        = 0x000F
-		wmClose        = 0x0010
-		wmEraseBkgnd   = 0x0014
-		wmSetCursor    = 0x0020
-		wmNcCalcSize   = 0x0083
-		wmNcHitTest    = 0x0084
-		wmTimer        = 0x0113
-		wmCtlColorEdit = 0x0133
-		wmMouseMove    = 0x0200
-		wmLButtonUp    = 0x0202
-		wmMouseLeave   = 0x02A3
+		wmCreate         = 0x0001
+		wmDestroy        = 0x0002
+		wmPaint          = 0x000F
+		wmClose          = 0x0010
+		wmEraseBkgnd     = 0x0014
+		wmSetCursor      = 0x0020
+		wmNcCalcSize     = 0x0083
+		wmNcHitTest      = 0x0084
+		wmTimer          = 0x0113
+		wmCtlColorEdit   = 0x0133
+		wmCtlColorStatic = 0x0138
+		wmMouseMove      = 0x0200
+		wmLButtonUp      = 0x0202
+		wmMouseLeave     = 0x02A3
 	)
 
 	switch msg {
@@ -407,6 +408,15 @@ func wizardWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uint
 			return uintptr(w.editBg)
 		}
 
+	case wmCtlColorStatic:
+		if w != nil && lParam == uintptr(w.hEditPath) {
+			hdc := wParam
+			procWizSetBkColor.Call(hdc, uintptr(w.pal.paper2))
+			procWizSetBkMode.Call(hdc, 2) // OPAQUE
+			procWizSetTextColor.Call(hdc, uintptr(w.pal.ink2))
+			return uintptr(w.editBg)
+		}
+
 	case wmTimer:
 		if w != nil && wParam == wizProgressTimer && w.working {
 			w.progTick = (w.progTick + 1) % 40
@@ -458,16 +468,34 @@ func (w *wizardState) initEditControl() {
 	inY := w.editBoxR.top + w.s(6)
 	inW := (w.editBoxR.right - w.editBoxR.left) - w.s(16)
 	inH := (w.editBoxR.bottom - w.editBoxR.top) - w.s(12)
+	var exStyle uintptr
+	if w.acrylic {
+		exStyle = 0x00080000 // WS_EX_LAYERED
+	}
 	h, _, _ := procWizCreateWindowExW.Call(
-		0,
+		exStyle,
 		uintptr(unsafe.Pointer(wizUTF16Ptr("EDIT"))),
 		uintptr(unsafe.Pointer(wizUTF16Ptr(w.defaultDir))),
 		0x50010080,
 		uintptr(inX), uintptr(inY), uintptr(inW), uintptr(inH),
 		uintptr(w.hwnd), wizIDPathEdit, hInstRaw, 0,
 	)
+	if h == 0 && exStyle != 0 {
+		h, _, _ = procWizCreateWindowExW.Call(
+			0,
+			uintptr(unsafe.Pointer(wizUTF16Ptr("EDIT"))),
+			uintptr(unsafe.Pointer(wizUTF16Ptr(w.defaultDir))),
+			0x50010080,
+			uintptr(inX), uintptr(inY), uintptr(inW), uintptr(inH),
+			uintptr(w.hwnd), wizIDPathEdit, hInstRaw, 0,
+		)
+		exStyle = 0
+	}
 	w.hEditPath = syscall.Handle(h)
 	if w.hEditPath != 0 {
+		if w.acrylic && exStyle != 0 {
+			procWizSetLayeredWindowAttributes.Call(h, 0, 255, 0x00000002) // LWA_ALPHA
+		}
 		procWizSendMessageW.Call(h, 0x0030, uintptr(w.fontBody), 1)
 		procWizSendMessageW.Call(h, 0x00D3, 3, uintptr(w.s(2))|uintptr(w.s(2)<<16))
 	}
@@ -667,7 +695,7 @@ func (w *wizardState) drawInstallBody(cv *setupGlassCanvas, cr wizRect) {
 	cv.drawAlphaRoundRect(w.dirCardR, float64(s(12)), w.pal.paper, w.surfaceAlpha(205), w.pal.line, w.surfaceAlpha(220), 1.0)
 	cv.drawAlphaText(w.fontBold, "安装位置", wizRect{w.dirCardR.left + s(14), w.dirCardR.top + s(8), w.dirCardR.right - s(14), w.dirCardR.top + s(28)},
 		0x0020|0x0004, w.pal.ink)
-	cv.drawAlphaRoundRect(w.editBoxR, float64(s(7)), w.pal.paper2, 250, w.pal.line, 255, 1.0)
+	cv.drawAlphaRoundRect(w.editBoxR, float64(s(7)), w.pal.paper2, 255, w.pal.line, 255, 1.0)
 	w.drawButton(cv, w.browseBtnR, "浏览…", false, false, w.hover == wizHoverBrowse)
 
 	// Card 2: Options
