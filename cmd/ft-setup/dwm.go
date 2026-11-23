@@ -51,6 +51,7 @@ var (
 	procWizSetWindowPos          = wizUser32.NewProc("SetWindowPos")
 	procWizSetTimer              = wizUser32.NewProc("SetTimer")
 	procWizKillTimer             = wizUser32.NewProc("KillTimer")
+	procWizDrawTextW             = wizUser32.NewProc("DrawTextW")
 
 	procWizGetModuleHandleW = wizKernel32.NewProc("GetModuleHandleW")
 
@@ -62,7 +63,6 @@ var (
 	procWizSetBkMode                = wizGdi32.NewProc("SetBkMode")
 	procWizSetBkColor               = wizGdi32.NewProc("SetBkColor")
 	procWizSetTextColor             = wizGdi32.NewProc("SetTextColor")
-	procWizDrawTextW                = wizGdi32.NewProc("DrawTextW")
 	procWizCreateDIBSection         = wizGdi32.NewProc("CreateDIBSection")
 	procWizGdiFlush                 = wizGdi32.NewProc("GdiFlush")
 	procWizCreateCompatDC           = wizGdi32.NewProc("CreateCompatibleDC")
