@@ -29,7 +29,10 @@ import (
 )
 
 // DefaultSignalURL is the deployed signaling endpoint.
-const DefaultSignalURL = "wss://ft.cwlindean.cn/signal"
+const DefaultSignalURL = "wss://ferry.cwlindean.cn/signal"
+
+// DefaultWebBaseURL is the public Ferry website and temporary share base URL.
+const DefaultWebBaseURL = "https://ferry.cwlindean.cn"
 
 var (
 	relayMu  sync.Mutex

@@ -44,22 +44,64 @@ type File struct {
 	ModTime int64  `json:"mtime_ms"`
 }
 
+// ScopedOptions configures a mode-scoped LAN web server for temporary share
+// sessions ("send" exposes only SharedFiles; "recv" accepts uploads into
+// RecvDir without exposing pre-existing files; "both" exposes RecvDir).
+type ScopedOptions struct {
+	Mode        string
+	RecvDir     string
+	SharedFiles []string
+	DeviceName  string
+	Token       string
+	Log         *logging.Logger
+	OnUploaded  func(File)
+}
+
 // Server is the LAN web endpoint.
 type Server struct {
-	dir   string
-	token string
-	log   *logging.Logger
+	dir        string
+	token      string
+	mode       string
+	deviceName string
+	log        *logging.Logger
+	onUploaded func(File)
 
-	mu    sync.Mutex
-	files map[string]File // by name
+	mu        sync.Mutex
+	files     map[string]File   // by name
+	filePaths map[string]string // exposed name -> absolute path
 }
 
 // New creates a server rooted at dir (created if needed). A random token is
 // generated unless one is supplied.
 func New(dir, token string, log *logging.Logger) (*Server, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
+	return NewScoped(ScopedOptions{
+		Mode:    "both",
+		RecvDir: dir,
+		Token:   token,
+		Log:     log,
+	})
+}
+
+// NewScoped creates a mode-scoped LAN web server.
+func NewScoped(opts ScopedOptions) (*Server, error) {
+	mode := strings.TrimSpace(opts.Mode)
+	if mode == "" {
+		mode = "both"
 	}
+	switch mode {
+	case "send", "recv", "both":
+	default:
+		return nil, fmt.Errorf("invalid mode %q", mode)
+	}
+	if mode != "send" {
+		if opts.RecvDir == "" {
+			return nil, fmt.Errorf("RecvDir is required for mode %q", mode)
+		}
+		if err := os.MkdirAll(opts.RecvDir, 0o755); err != nil {
+			return nil, err
+		}
+	}
+	token := opts.Token
 	if token == "" {
 		b := make([]byte, TokenLen)
 		if _, err := rand.Read(b); err != nil {
@@ -67,11 +109,61 @@ func New(dir, token string, log *logging.Logger) (*Server, error) {
 		}
 		token = hex.EncodeToString(b)
 	}
-	s := &Server{dir: dir, token: token, log: log, files: map[string]File{}}
-	if err := s.scan(); err != nil {
-		return nil, err
+	s := &Server{
+		dir:        opts.RecvDir,
+		token:      token,
+		mode:       mode,
+		deviceName: opts.DeviceName,
+		log:        opts.Log,
+		onUploaded: opts.OnUploaded,
+		files:      map[string]File{},
+		filePaths:  map[string]string{},
+	}
+	switch mode {
+	case "send":
+		for _, p := range opts.SharedFiles {
+			abs, err := filepath.Abs(p)
+			if err != nil {
+				continue
+			}
+			info, err := os.Stat(abs)
+			if err != nil || !info.Mode().IsRegular() {
+				continue
+			}
+			sum, err := hashFile(abs)
+			if err != nil {
+				continue
+			}
+			name := s.UniqueName(filepath.Base(abs))
+			s.files[name] = File{
+				Name:    name,
+				Size:    info.Size(),
+				SHA256:  sum,
+				ModTime: info.ModTime().UnixMilli(),
+			}
+			s.filePaths[name] = abs
+		}
+	case "recv":
+		// Start with an empty listing so pre-existing files in RecvDir are not exposed.
+	case "both":
+		if err := s.scan(); err != nil {
+			return nil, err
+		}
 	}
 	return s, nil
+}
+
+// Mode returns "send", "recv", or "both".
+func (s *Server) Mode() string { return s.mode }
+
+// AllowUpload reports whether this session accepts browser/peer uploads.
+func (s *Server) AllowUpload() bool { return s.mode != "send" }
+
+// NotifyUploaded triggers the OnUploaded callback when a file is stored via relay.
+func (s *Server) NotifyUploaded(f File) {
+	if s.onUploaded != nil {
+		s.onUploaded(f)
+	}
 }
 
 // Token returns the URL path component guarding the page.
@@ -183,19 +275,23 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	s.mu.Lock()
-	out := make([]File, 0, len(s.files))
-	for _, f := range s.files {
-		out = append(out, f)
-	}
-	s.mu.Unlock()
+	out := s.Snapshot()
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"files": out})
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"mode":         s.mode,
+		"name":         s.deviceName,
+		"allow_upload": s.AllowUpload(),
+		"files":        out,
+	})
 }
 
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.AllowUpload() {
+		http.Error(w, "upload disabled in send-only mode", http.StatusForbidden)
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, MaxUpload)
@@ -232,6 +328,9 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		s.files[f.Name] = f
 	}
 	s.mu.Unlock()
+	for _, f := range saved {
+		s.NotifyUploaded(f)
+	}
 	if s.log != nil {
 		for _, f := range saved {
 			s.log.Event("lanweb.upload", map[string]any{"file": f.Name, "size": f.Size, "sha256": f.SHA256})
@@ -288,12 +387,13 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, name str
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	name = cleanName(name)
-	if name == "" {
+	p := s.Path(name)
+	if p == "" {
 		http.NotFound(w, r)
 		return
 	}
-	f, err := os.Open(filepath.Join(s.dir, name))
+	clean := cleanName(name)
+	f, err := os.Open(p)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -306,8 +406,8 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, name str
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", fmt.Sprint(info.Size()))
-	w.Header().Set("Content-Disposition", "attachment; filename=\""+name+"\"")
-	http.ServeContent(w, r, name, info.ModTime(), f)
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+clean+"\"")
+	http.ServeContent(w, r, clean, info.ModTime(), f)
 }
 
 // cleanName reduces a browser-supplied name to a safe base name.
@@ -337,9 +437,36 @@ func (s *Server) Snapshot() []File {
 	return out
 }
 
-// Path resolves a browser-supplied name to a path inside the directory. It
-// returns "" when the name is unsafe or outside the root.
+// Path resolves a browser-supplied name to a path inside the allowed scope. It
+// returns "" when the name is unsafe or outside the session scope.
 func (s *Server) Path(name string) string {
+	name = cleanName(name)
+	if name == "" {
+		return ""
+	}
+	s.mu.Lock()
+	if p, ok := s.filePaths[name]; ok {
+		s.mu.Unlock()
+		return p
+	}
+	_, inFiles := s.files[name]
+	s.mu.Unlock()
+	if s.mode == "send" {
+		return ""
+	}
+	if s.mode == "recv" && !inFiles {
+		return ""
+	}
+	return filepath.Join(s.dir, name)
+}
+
+// RecvPath resolves a safe destination path inside RecvDir for an incoming
+// upload when uploads are permitted; returns "" in send-only mode or for
+// unsafe names.
+func (s *Server) RecvPath(name string) string {
+	if !s.AllowUpload() || s.dir == "" {
+		return ""
+	}
 	name = cleanName(name)
 	if name == "" {
 		return ""

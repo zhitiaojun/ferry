@@ -120,15 +120,19 @@ import mobile.Mobile;
  */
 public class MainActivity extends Activity {
     private static final String TAG = "ft";
-    private static final String SIGNAL_URL = "wss://ft.cwlindean.cn/signal";
+    private static final String SIGNAL_URL = "wss://ferry.cwlindean.cn/signal";
+    private static final String WEB_BASE_URL = "https://ferry.cwlindean.cn";
     private static final int PICK_FILES = 42;
     private static final int PICK_PAIR_FILE = 43;
     private static final int REQ_CAMERA = 44;
     private static final int PICK_DOWNLOAD_DIR = 45;
+    private static final int PICK_TEMP_SEND = 46;
+    private static final int PICK_TEMP_UPLOAD = 47;
     private static final int PAIR_TTL_SEC = 600;
     private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
     private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
     private static final Pattern HEX64 = Pattern.compile("^[0-9a-fA-F]{64}$");
+    private static final Pattern TEMP_SHARE_URL = Pattern.compile("^https?://[^/]+/s/[A-Za-z0-9_-]+(?:[?#].*)?$");
 
     // Theme tokens (v2 light/dark aesthetic matching ferry_mobile_redesign.html)
     private int cPrimary, cPrimaryPressed, cOnPrimary, cPrimaryContainer, cOnPrimaryContainer;
@@ -148,6 +152,12 @@ public class MainActivity extends Activity {
     private String webShareUrl = "";
     private boolean recvRunning;
     private boolean webRunning;
+    private Dialog tempShareDialog;
+    private Dialog tempJoinDialog;
+    private String pendingTempJoinUrl = "";
+    private File tempSendStageDir;
+    private TextView tempTtlTv;
+    private TextView tempUploadTv;
     private boolean lanSearching;
     private String signalState = "offline";
     private final Set<String> cloudOnlineSet = new HashSet<>();
@@ -714,7 +724,7 @@ public class MainActivity extends Activity {
         homeSigText.setEllipsize(TextUtils.TruncateAt.END);
         homeSignalBar.addView(homeSigText, new LinearLayout.LayoutParams(0, WRAP, 1f));
 
-        homeSigHost = label("ft.cwlindean.cn", 11, cOnSurfaceVariant, false);
+        homeSigHost = label("ferry.cwlindean.cn", 11, cOnSurfaceVariant, false);
         homeSigHost.setTypeface(Typeface.MONOSPACE);
         LinearLayout.LayoutParams hsHostLp = new LinearLayout.LayoutParams(WRAP, WRAP);
         hsHostLp.leftMargin = dp(8);
@@ -916,8 +926,35 @@ public class MainActivity extends Activity {
         unpairedCard.addView(upLinks, ulLp);
 
         LinearLayout.LayoutParams ucLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        ucLp.bottomMargin = dp(20);
+        ucLp.bottomMargin = dp(16);
         root.addView(unpairedCard, ucLp);
+
+        // 3b. Unified Temporary Share Card (HTTPS QR + 6-digit code for Browser or App)
+        LinearLayout tempCard = new LinearLayout(this);
+        tempCard.setOrientation(LinearLayout.HORIZONTAL);
+        tempCard.setGravity(Gravity.CENTER_VERTICAL);
+        tempCard.setPadding(dp(16), dp(14), dp(16), dp(14));
+        tempCard.setBackground(ripple(roundBox(cCard, cBorder, 16), 16));
+        tempCard.setOnClickListener(v -> openTempShareSheet());
+
+        LinearLayout tempCol = new LinearLayout(this);
+        tempCol.setOrientation(LinearLayout.VERTICAL);
+        tempCol.addView(label("临时快传（免配对 · 一码双用）", 14, cOnSurface, true),
+                new LinearLayout.LayoutParams(MATCH, WRAP));
+        TextView tempSub = label("生成 HTTPS 二维码，对方用浏览器或轻渡扫码即可收发", 12, cOnSurfaceVariant, false);
+        LinearLayout.LayoutParams ts2Lp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        ts2Lp.topMargin = dp(3);
+        tempCol.addView(tempSub, ts2Lp);
+        tempCard.addView(tempCol, new LinearLayout.LayoutParams(0, WRAP, 1f));
+
+        TextView tempArrow = label("发起 ›", 13, cPrimary, true);
+        LinearLayout.LayoutParams taLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        taLp.leftMargin = dp(10);
+        tempCard.addView(tempArrow, taLp);
+
+        LinearLayout.LayoutParams tcLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        tcLp.bottomMargin = dp(20);
+        root.addView(tempCard, tcLp);
 
         // 4. Recent Transfers Section Header + Filters
         LinearLayout recHdr = new LinearLayout(this);
@@ -1336,14 +1373,14 @@ public class MainActivity extends Activity {
 
         grp1.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
 
-        setWebBtn = smallOutlineBtn("开启", v -> toggleWebShare());
-        grp1.addView(settingActionRow("网页快传", "临时给未安装软件的设备传文件", setWebBtn, v -> toggleWebShare()),
+        setWebBtn = smallOutlineBtn("打开", v -> openTempShareSheet());
+        grp1.addView(settingActionRow("临时快传（网页 / 扫码）", "生成 HTTPS 二维码或 6 位码，免装软件即可收发", setWebBtn, v -> openTempShareSheet()),
                 new LinearLayout.LayoutParams(MATCH, WRAP));
 
         setWebUrlView = label("", 12, cPrimary, true);
         setWebUrlView.setPadding(dp(16), dp(4), dp(16), dp(14));
         setWebUrlView.setVisibility(View.GONE);
-        setWebUrlView.setOnClickListener(v -> copyText("网页分享地址", webShareUrl, "已复制局域网网址，请在浏览器打开"));
+        setWebUrlView.setOnClickListener(v -> copyText("临时快传链接", webShareUrl, "已复制临时快传链接"));
         grp1.addView(setWebUrlView, new LinearLayout.LayoutParams(MATCH, WRAP));
 
         grp1.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
@@ -2388,6 +2425,11 @@ public class MainActivity extends Activity {
 
     private void handleScannedQR(final String payload) {
         stopCamera();
+        if (payload != null && TEMP_SHARE_URL.matcher(payload.trim()).matches()) {
+            closePairSheet();
+            openTempJoinSheet(payload.trim());
+            return;
+        }
         if (scanStatusLabel != null) {
             scanStatusLabel.setText("已识别二维码，正在配对…");
         }
@@ -2609,57 +2651,461 @@ public class MainActivity extends Activity {
         }).start();
     }
 
-    private void toggleWebShare() {
-        if (setWebBtn != null) {
-            setWebBtn.setEnabled(false);
-        }
-        if (webRunning) {
-            new Thread(() -> {
+    private final Runnable tempPollTask = new Runnable() {
+        @Override
+        public void run() {
+            if (tempShareDialog == null || !tempShareDialog.isShowing()) {
+                return;
+            }
+            ioPool.execute(() -> {
                 try {
-                    Mobile.stopWebShare();
-                } catch (Exception e) {
-                    Log.w(TAG, "stopWebShare", e);
-                }
-                ui.post(() -> {
-                    if (setWebBtn != null) {
-                        setWebBtn.setEnabled(true);
-                    }
-                    webRunning = false;
-                    webShareUrl = "";
-                    if (!recvRunning) {
-                        stopKeepAlive();
-                    }
-                    refreshReceiveUi();
-                });
-            }).start();
-            return;
-        }
-        new Thread(() -> {
-            try {
-                String info = Mobile.startWebShare(webShareDir().getAbsolutePath(), 0L, lanHint());
-                String url = info;
-                try {
-                    url = new JSONObject(info).optString("url", info);
+                    String raw = Mobile.tempShareStatus();
+                    JSONObject o = new JSONObject(raw);
+                    final boolean active = o.optBoolean("active", false);
+                    final int ttl = o.optInt("ttl_s", 0);
+                    final int upCount = o.optInt("uploaded_count", 0);
+                    final String last = o.optString("last_file", "");
+                    ui.post(() -> {
+                        if (tempShareDialog == null || !tempShareDialog.isShowing()) {
+                            return;
+                        }
+                        if (!active) {
+                            webRunning = false;
+                            webShareUrl = "";
+                            refreshReceiveUi();
+                            return;
+                        }
+                        if (tempTtlTv != null) {
+                            tempTtlTv.setText(String.format(Locale.US, "10 分钟有效 · 剩余 %02d:%02d", ttl / 60, ttl % 60));
+                        }
+                        if (tempUploadTv != null && upCount > 0) {
+                            tempUploadTv.setText("已收到 " + upCount + " 个文件" + (last.isEmpty() ? "" : " · " + last));
+                            tempUploadTv.setVisibility(View.VISIBLE);
+                            pollReceivedOnce();
+                        }
+                    });
                 } catch (Exception ignored) {
                 }
-                final String shown = url;
+            });
+            ui.postDelayed(this, 2000);
+        }
+    };
+
+    private void openTempShareSheet() {
+        if (tempShareDialog != null && tempShareDialog.isShowing()) {
+            tempShareDialog.dismiss();
+        }
+        JSONObject activeStatus = null;
+        try {
+            JSONObject o = new JSONObject(Mobile.tempShareStatus());
+            if (o.optBoolean("active", false)) {
+                activeStatus = o;
+            }
+        } catch (Exception ignored) {
+        }
+
+        Dialog dlg = new Dialog(this);
+        dlg.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        dlg.setCanceledOnTouchOutside(true);
+        tempShareDialog = dlg;
+
+        LinearLayout sheet = new LinearLayout(this);
+        sheet.setOrientation(LinearLayout.VERTICAL);
+        sheet.setPadding(dp(20), dp(18), dp(20), dp(20));
+        sheet.setBackground(roundBox(cSheetBg, cBorder, 20));
+
+        LinearLayout topRow = new LinearLayout(this);
+        topRow.setOrientation(LinearLayout.HORIZONTAL);
+        topRow.setGravity(Gravity.CENTER_VERTICAL);
+        topRow.addView(label("临时快传", 18, cOnSurface, true), new LinearLayout.LayoutParams(0, WRAP, 1f));
+        TextView closeTv = label("关闭", 13, cOnSurfaceVariant, false);
+        closeTv.setPadding(dp(8), dp(4), dp(8), dp(4));
+        closeTv.setOnClickListener(v -> dlg.dismiss());
+        topRow.addView(closeTv, new LinearLayout.LayoutParams(WRAP, WRAP));
+        sheet.addView(topRow, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        if (activeStatus == null) {
+            TextView sub = label("生成 10 分钟有效的 HTTPS 二维码与 6 位码，对方用浏览器或轻渡扫码即可收发，不留设备记录。", 12, cOnSurfaceVariant, false);
+            LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+            sLp.topMargin = dp(6);
+            sLp.bottomMargin = dp(16);
+            sheet.addView(sub, sLp);
+
+            Button sendModeBtn = filledBtn("我要发文件（选择要分享的文件）", cPrimaryPressed, cOnPrimary);
+            sendModeBtn.setOnClickListener(v -> {
+                dlg.dismiss();
+                Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+                i.setType("*/*");
+                i.addCategory(Intent.CATEGORY_OPENABLE);
+                i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                startActivityForResult(i, PICK_TEMP_SEND);
+            });
+            LinearLayout.LayoutParams b1Lp = new LinearLayout.LayoutParams(MATCH, dp(46));
+            b1Lp.bottomMargin = dp(10);
+            sheet.addView(sendModeBtn, b1Lp);
+
+            Button recvModeBtn = smallOutlineBtn("我要收文件（对方上传到本机）", v -> {
+                dlg.dismiss();
+                startTempShareAsync("recv", new JSONArray(), null);
+            });
+            sheet.addView(recvModeBtn, new LinearLayout.LayoutParams(MATCH, dp(46)));
+        } else {
+            final String shareUrl = activeStatus.optString("url", "");
+            final String code = activeStatus.optString("code", "");
+            final String mode = activeStatus.optString("mode", "recv");
+            final int fileCount = activeStatus.optInt("file_count", 0);
+            final int ttl = activeStatus.optInt("ttl_s", 600);
+            final int upCount = activeStatus.optInt("uploaded_count", 0);
+            final String lastFile = activeStatus.optString("last_file", "");
+
+            TextView modeDesc = label(
+                    "send".equals(mode)
+                            ? ("当前模式：仅分享已选中的 " + fileCount + " 个文件")
+                            : "当前模式：等待对方上传文件到本机",
+                    12, cPrimary, true);
+            LinearLayout.LayoutParams mdLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+            mdLp.topMargin = dp(4);
+            mdLp.bottomMargin = dp(12);
+            sheet.addView(modeDesc, mdLp);
+
+            FrameLayout qrBox = new FrameLayout(this);
+            qrBox.setBackground(roundBox(Color.WHITE, cBorder, 16));
+            qrBox.setPadding(dp(12), dp(12), dp(12), dp(12));
+            final ImageView qrImg = new ImageView(this);
+            qrImg.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            qrBox.addView(qrImg, new FrameLayout.LayoutParams(MATCH, MATCH));
+            LinearLayout.LayoutParams qbLp = new LinearLayout.LayoutParams(dp(208), dp(208));
+            qbLp.gravity = Gravity.CENTER_HORIZONTAL;
+            sheet.addView(qrBox, qbLp);
+
+            ioPool.execute(() -> {
+                try {
+                    byte[] png = Mobile.generateQRPNG(shareUrl, 512);
+                    final Bitmap bmp = BitmapFactory.decodeByteArray(png, 0, png.length);
+                    ui.post(() -> {
+                        if (dlg.isShowing() && bmp != null) {
+                            qrImg.setImageBitmap(bmp);
+                        }
+                    });
+                } catch (Exception ignored) {
+                }
+            });
+
+            String spaced = code.length() == 6 ? (code.substring(0, 3) + " " + code.substring(3)) : code;
+            TextView codeTv = label(spaced, 26, cOnSurface, true);
+            codeTv.setTypeface(Typeface.MONOSPACE);
+            codeTv.setGravity(Gravity.CENTER);
+            LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+            cLp.topMargin = dp(12);
+            sheet.addView(codeTv, cLp);
+
+            tempTtlTv = label(String.format(Locale.US, "10 分钟有效 · 剩余 %02d:%02d", ttl / 60, ttl % 60), 12, cOnSurfaceVariant, false);
+            tempTtlTv.setGravity(Gravity.CENTER);
+            LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+            tLp.topMargin = dp(4);
+            sheet.addView(tempTtlTv, tLp);
+
+            TextView urlTv = label(shareUrl, 11, cOnSurfaceVariant, false);
+            urlTv.setTypeface(Typeface.MONOSPACE);
+            urlTv.setGravity(Gravity.CENTER);
+            LinearLayout.LayoutParams uLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+            uLp.topMargin = dp(4);
+            sheet.addView(urlTv, uLp);
+
+            tempUploadTv = label("", 12, cPrimary, true);
+            tempUploadTv.setGravity(Gravity.CENTER);
+            tempUploadTv.setVisibility(upCount > 0 ? View.VISIBLE : View.GONE);
+            if (upCount > 0) {
+                tempUploadTv.setText("已收到 " + upCount + " 个文件" + (lastFile.isEmpty() ? "" : " · " + lastFile));
+            }
+            LinearLayout.LayoutParams upLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+            upLp.topMargin = dp(6);
+            sheet.addView(tempUploadTv, upLp);
+
+            LinearLayout btnRow = new LinearLayout(this);
+            btnRow.setOrientation(LinearLayout.HORIZONTAL);
+            LinearLayout.LayoutParams brLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+            brLp.topMargin = dp(14);
+
+            Button copyBtn = smallOutlineBtn("复制链接", v -> copyText("临时快传链接", shareUrl, "已复制临时快传链接"));
+            LinearLayout.LayoutParams cpLp = new LinearLayout.LayoutParams(0, dp(42), 1f);
+            cpLp.rightMargin = dp(8);
+            btnRow.addView(copyBtn, cpLp);
+
+            Button stopBtn = filledBtn("结束快传", cError, cOnError);
+            stopBtn.setOnClickListener(v -> {
+                dlg.dismiss();
+                stopTempShareSession();
+            });
+            btnRow.addView(stopBtn, new LinearLayout.LayoutParams(0, dp(42), 1f));
+            sheet.addView(btnRow, brLp);
+
+            ui.removeCallbacks(tempPollTask);
+            ui.postDelayed(tempPollTask, 2000);
+        }
+
+        dlg.setOnDismissListener(d -> ui.removeCallbacks(tempPollTask));
+        dlg.setContentView(sheet);
+        Window w = dlg.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            w.setLayout((int) (getResources().getDisplayMetrics().widthPixels * 0.92), WRAP);
+        }
+        dlg.show();
+    }
+
+    private void startTempSendFromUris(final List<Uri> uris) {
+        toast("正在准备 " + uris.size() + " 个文件…");
+        new Thread(() -> {
+            File stageDir = new File(new File(getCacheDir(), "temp-send"), String.valueOf(System.nanoTime()));
+            List<File> copied = new ArrayList<>();
+            try {
+                JSONArray arr = new JSONArray();
+                for (int i = 0; i < uris.size(); i++) {
+                    File f = copyToCache(uris.get(i), new File(stageDir, String.valueOf(i)));
+                    copied.add(f);
+                    arr.put(f.getAbsolutePath());
+                }
+                startTempShareSync("send", arr, stageDir);
+            } catch (Exception e) {
+                for (File f : copied) {
+                    deleteTree(f, f.getParentFile());
+                }
+                stageDir.delete();
+                ui.post(() -> toast("准备文件失败：" + e.getMessage()));
+            }
+        }).start();
+    }
+
+    private void startTempShareAsync(final String mode, final JSONArray paths, final File stageDir) {
+        toast("正在创建临时快传…");
+        new Thread(() -> startTempShareSync(mode, paths, stageDir)).start();
+    }
+
+    private void startTempShareSync(final String mode, final JSONArray paths, final File stageDir) {
+        try {
+            cleanupTempStageDir();
+            tempSendStageDir = stageDir;
+            String raw = Mobile.startTempShare(
+                    WEB_BASE_URL,
+                    keyFile().getAbsolutePath(),
+                    deviceName,
+                    mode,
+                    paths.toString(),
+                    inboxDir().getAbsolutePath(),
+                    lanHint());
+            final String url = new JSONObject(raw).optString("url", "");
+            ui.post(() -> {
+                webRunning = true;
+                webShareUrl = url;
+                startKeepAlive("临时快传中");
+                refreshReceiveUi();
+                openTempShareSheet();
+            });
+        } catch (Exception e) {
+            Log.e(TAG, "startTempShare", e);
+            cleanupTempStageDir();
+            ui.post(() -> toast("创建临时快传失败：" + e.getMessage()));
+        }
+    }
+
+    private void stopTempShareSession() {
+        ui.removeCallbacks(tempPollTask);
+        new Thread(() -> {
+            try {
+                Mobile.stopTempShare();
+            } catch (Exception e) {
+                Log.w(TAG, "stopTempShare", e);
+            }
+            cleanupTempStageDir();
+            ui.post(() -> {
+                webRunning = false;
+                webShareUrl = "";
+                if (!recvRunning) {
+                    stopKeepAlive();
+                }
+                refreshReceiveUi();
+                toast("已结束临时快传");
+            });
+        }).start();
+    }
+
+    private void cleanupTempStageDir() {
+        File d = tempSendStageDir;
+        tempSendStageDir = null;
+        if (d != null && d.exists()) {
+            deleteTree(d, d.getParentFile());
+        }
+    }
+
+    private void openTempJoinSheet(final String shareUrl) {
+        if (tempJoinDialog != null && tempJoinDialog.isShowing()) {
+            tempJoinDialog.dismiss();
+        }
+        Dialog dlg = new Dialog(this);
+        dlg.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        dlg.setCanceledOnTouchOutside(true);
+        tempJoinDialog = dlg;
+
+        LinearLayout sheet = new LinearLayout(this);
+        sheet.setOrientation(LinearLayout.VERTICAL);
+        sheet.setPadding(dp(20), dp(18), dp(20), dp(20));
+        sheet.setBackground(roundBox(cSheetBg, cBorder, 20));
+
+        LinearLayout topRow = new LinearLayout(this);
+        topRow.setOrientation(LinearLayout.HORIZONTAL);
+        topRow.setGravity(Gravity.CENTER_VERTICAL);
+        topRow.addView(label("临时快传", 18, cOnSurface, true), new LinearLayout.LayoutParams(0, WRAP, 1f));
+        TextView closeTv = label("关闭", 13, cOnSurfaceVariant, false);
+        closeTv.setPadding(dp(8), dp(4), dp(8), dp(4));
+        closeTv.setOnClickListener(v -> dlg.dismiss());
+        topRow.addView(closeTv, new LinearLayout.LayoutParams(WRAP, WRAP));
+        sheet.addView(topRow, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        final TextView statusTv = label("正在连接对方会话…", 13, cOnSurfaceVariant, false);
+        LinearLayout.LayoutParams stLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        stLp.topMargin = dp(8);
+        stLp.bottomMargin = dp(12);
+        sheet.addView(statusTv, stLp);
+
+        final LinearLayout bodyBox = new LinearLayout(this);
+        bodyBox.setOrientation(LinearLayout.VERTICAL);
+        sheet.addView(bodyBox, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        dlg.setContentView(sheet);
+        Window w = dlg.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            w.setLayout((int) (getResources().getDisplayMetrics().widthPixels * 0.92), WRAP);
+        }
+        dlg.show();
+
+        new Thread(() -> {
+            try {
+                String raw = Mobile.resolveTempShare(shareUrl);
+                JSONObject o = new JSONObject(raw);
+                final String peerName = o.optString("name", "对方设备");
+                final String mode = o.optString("mode", "recv");
+                final String via = o.optString("via", "relay");
+                final JSONArray files = o.optJSONArray("files");
+                final String viaLabel = "lan".equals(via) ? "局域网直连" : "云端中继";
                 ui.post(() -> {
-                    if (setWebBtn != null) {
-                        setWebBtn.setEnabled(true);
+                    if (!dlg.isShowing()) {
+                        return;
                     }
-                    webRunning = true;
-                    webShareUrl = shown;
-                    startKeepAlive("网页快传中");
-                    refreshReceiveUi();
+                    statusTv.setText("已连接：" + peerName + "（" + viaLabel + "）");
+                    statusTv.setTextColor(cPrimary);
+                    bodyBox.removeAllViews();
+
+                    if ("send".equals(mode)) {
+                        int count = files == null ? 0 : files.length();
+                        TextView info = label("对方分享了 " + count + " 个文件：", 13, cOnSurface, true);
+                        bodyBox.addView(info, new LinearLayout.LayoutParams(MATCH, WRAP));
+                        if (files != null) {
+                            int showMax = Math.min(count, 6);
+                            for (int i = 0; i < showMax; i++) {
+                                JSONObject f = files.optJSONObject(i);
+                                if (f != null) {
+                                    TextView item = label("• " + f.optString("name", ""), 12, cOnSurfaceVariant, false);
+                                    LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(MATCH, WRAP);
+                                    ilp.topMargin = dp(4);
+                                    bodyBox.addView(item, ilp);
+                                }
+                            }
+                            if (count > showMax) {
+                                bodyBox.addView(label("…等共 " + count + " 个文件", 12, cOnSurfaceVariant, false));
+                            }
+                        }
+                        final Button dlBtn = filledBtn("全部下载到手机", cPrimaryPressed, cOnPrimary);
+                        dlBtn.setEnabled(count > 0);
+                        dlBtn.setOnClickListener(v -> {
+                            dlBtn.setEnabled(false);
+                            dlBtn.setText("正在下载…");
+                            new Thread(() -> {
+                                try {
+                                    String res = Mobile.tempShareDownloadAll(shareUrl, inboxDir().getAbsolutePath());
+                                    JSONObject rj = new JSONObject(res);
+                                    JSONArray saved = rj.optJSONArray("files");
+                                    int n = saved == null ? 0 : saved.length();
+                                    pollReceivedOnce();
+                                    ui.post(() -> {
+                                        toast("已通过" + viaLabel + "下载 " + n + " 个文件");
+                                        if (dlg.isShowing()) {
+                                            dlg.dismiss();
+                                        }
+                                    });
+                                } catch (Exception e) {
+                                    ui.post(() -> {
+                                        dlBtn.setEnabled(true);
+                                        dlBtn.setText("全部下载到手机");
+                                        toast("下载失败：" + e.getMessage());
+                                    });
+                                }
+                            }).start();
+                        });
+                        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(MATCH, dp(44));
+                        dlp.topMargin = dp(14);
+                        bodyBox.addView(dlBtn, dlp);
+                    } else {
+                        TextView info = label("对方正在等待接收文件，上传后不会保存设备配对记录。", 13, cOnSurfaceVariant, false);
+                        bodyBox.addView(info, new LinearLayout.LayoutParams(MATCH, WRAP));
+                        Button pickBtn = filledBtn("选择文件发送给对方", cPrimaryPressed, cOnPrimary);
+                        pickBtn.setOnClickListener(v -> {
+                            pendingTempJoinUrl = shareUrl;
+                            Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+                            i.setType("*/*");
+                            i.addCategory(Intent.CATEGORY_OPENABLE);
+                            i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                            startActivityForResult(i, PICK_TEMP_UPLOAD);
+                        });
+                        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(MATCH, dp(44));
+                        plp.topMargin = dp(14);
+                        bodyBox.addView(pickBtn, plp);
+                    }
                 });
             } catch (Exception e) {
-                Log.e(TAG, "startWebShare", e);
                 ui.post(() -> {
-                    if (setWebBtn != null) {
-                        setWebBtn.setEnabled(true);
+                    if (dlg.isShowing()) {
+                        statusTv.setText("连接失败：" + e.getMessage());
+                        statusTv.setTextColor(cError);
                     }
-                    toast("网页快传启动失败：" + e.getMessage());
                 });
+            }
+        }).start();
+    }
+
+    private void uploadTempJoinUris(final List<Uri> uris) {
+        final String shareUrl = pendingTempJoinUrl;
+        if (shareUrl == null || shareUrl.isEmpty()) {
+            return;
+        }
+        toast("正在发送 " + uris.size() + " 个文件…");
+        new Thread(() -> {
+            File stageDir = new File(new File(getCacheDir(), "temp-upload"), String.valueOf(System.nanoTime()));
+            List<File> copied = new ArrayList<>();
+            try {
+                JSONArray arr = new JSONArray();
+                for (int i = 0; i < uris.size(); i++) {
+                    File f = copyToCache(uris.get(i), new File(stageDir, String.valueOf(i)));
+                    copied.add(f);
+                    arr.put(f.getAbsolutePath());
+                }
+                String raw = Mobile.tempShareUploadFiles(shareUrl, arr.toString());
+                JSONObject o = new JSONObject(raw);
+                String viaLabel = "lan".equals(o.optString("via", "")) ? "局域网直连" : "云端中继";
+                ui.post(() -> {
+                    toast("已通过" + viaLabel + "发送 " + uris.size() + " 个文件");
+                    if (tempJoinDialog != null && tempJoinDialog.isShowing()) {
+                        tempJoinDialog.dismiss();
+                    }
+                });
+            } catch (Exception e) {
+                ui.post(() -> toast("发送失败：" + e.getMessage()));
+            } finally {
+                for (File f : copied) {
+                    deleteTree(f, f.getParentFile());
+                }
+                stageDir.delete();
             }
         }).start();
     }
@@ -2772,14 +3218,14 @@ public class MainActivity extends Activity {
                     barBorder = cPrimary;
                     barFg = cOnPrimaryContainer;
                     dotClr = cPrimary;
-                    hostText = "ft.cwlindean.cn";
+                    hostText = "ferry.cwlindean.cn";
                 } else if ("connecting".equals(signalState)) {
                     barText = "信令服务器：重连中…";
                     barBg = cWarnContainer;
                     barBorder = cWarn;
                     barFg = cWarn;
                     dotClr = cWarn;
-                    hostText = "ft.cwlindean.cn";
+                    hostText = "ferry.cwlindean.cn";
                 } else {
                     barText = "信令服务器：未连接（仅局域网）";
                     barBg = cCard;
@@ -2804,7 +3250,7 @@ public class MainActivity extends Activity {
             setRecvBtn.setTextColor(recvRunning ? cOnPrimaryContainer : cOnSurfaceVariant);
         }
         if (setWebBtn != null) {
-            setWebBtn.setText(webRunning ? "已开启" : "开启");
+            setWebBtn.setText(webRunning ? "进行中" : "打开");
             setWebBtn.setBackground(ripple(roundBox(
                     webRunning ? cPrimaryContainer : cSurface,
                     webRunning ? cPrimary : cBorder, 10), 10));
@@ -2812,7 +3258,7 @@ public class MainActivity extends Activity {
         }
         if (setWebUrlView != null) {
             if (webRunning && !webShareUrl.isEmpty()) {
-                setWebUrlView.setText("同一 Wi-Fi 浏览器打开（点击复制）：" + webShareUrl);
+                setWebUrlView.setText("临时快传链接（点击复制）：" + webShareUrl);
                 setWebUrlView.setVisibility(View.VISIBLE);
             } else {
                 setWebUrlView.setVisibility(View.GONE);
@@ -4087,6 +4533,24 @@ public class MainActivity extends Activity {
                         .apply();
                 refreshDownloadDirUi();
                 toast("下载目录已更改为：" + customDownloadLabel);
+            }
+            return;
+        }
+        if (requestCode == PICK_TEMP_SEND || requestCode == PICK_TEMP_UPLOAD) {
+            List<Uri> picked = new ArrayList<>();
+            if (data.getClipData() != null) {
+                for (int i = 0; i < data.getClipData().getItemCount(); i++) {
+                    picked.add(data.getClipData().getItemAt(i).getUri());
+                }
+            } else if (data.getData() != null) {
+                picked.add(data.getData());
+            }
+            if (!picked.isEmpty()) {
+                if (requestCode == PICK_TEMP_SEND) {
+                    startTempSendFromUris(picked);
+                } else {
+                    uploadTempJoinUris(picked);
+                }
             }
             return;
         }

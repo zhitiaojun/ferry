@@ -211,3 +211,77 @@ func TestMaxUpload(t *testing.T) {
 	}
 	_ = fmt.Sprint()
 }
+
+func TestScopedSendAndRecvModes(t *testing.T) {
+	dir := t.TempDir()
+	shared := filepath.Join(dir, "public.txt")
+	hidden := filepath.Join(dir, "private.txt")
+	if err := os.WriteFile(shared, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hidden, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Send mode: only SharedFiles are exposed; unrelated files & uploads are blocked.
+	sSend, err := NewScoped(ScopedOptions{
+		Mode:        "send",
+		SharedFiles: []string{shared},
+		DeviceName:  "Phone",
+		Token:       "toksend",
+		Log:         logging.New(io.Discard),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	sSend.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/toksend/api/list", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "public.txt") || strings.Contains(rec.Body.String(), "private.txt") {
+		t.Fatalf("send list = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	sSend.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/toksend/f/private.txt", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("send leaked unrelated file: %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	sSend.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/toksend/upload", strings.NewReader("x")))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("send upload status = %d, want 403", rec.Code)
+	}
+
+	// Recv mode: starts with empty listing (does not leak existing files in RecvDir).
+	var gotNotify string
+	sRecv, err := NewScoped(ScopedOptions{
+		Mode:       "recv",
+		RecvDir:    dir,
+		DeviceName: "Phone",
+		Token:      "tokrecv",
+		Log:        logging.New(io.Discard),
+		OnUploaded: func(f File) { gotNotify = f.Name },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap := sRecv.Snapshot(); len(snap) != 0 {
+		t.Fatalf("recv initial snapshot = %+v, want empty", snap)
+	}
+	rec = httptest.NewRecorder()
+	sRecv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/tokrecv/f/private.txt", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("recv leaked pre-existing file: %d", rec.Code)
+	}
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	fw, _ := mw.CreateFormFile("file", "in.txt")
+	_, _ = fw.Write([]byte("incoming"))
+	_ = mw.Close()
+	req := httptest.NewRequest(http.MethodPost, "/tokrecv/upload", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec = httptest.NewRecorder()
+	sRecv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || gotNotify != "in.txt" {
+		t.Fatalf("recv upload = %d, notify = %q", rec.Code, gotNotify)
+	}
+}

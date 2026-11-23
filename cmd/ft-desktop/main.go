@@ -26,21 +26,22 @@ import (
 )
 
 var (
-	flagDrop   = flag.Bool("drop", false, "show the drop window instead of the tray receiver")
-	flagDir    = flag.String("dir", "", "receive directory (default: %USERPROFILE%\\Downloads)")
-	flagPort   = flag.Int("port", 18800, "receive port on all interfaces")
-	flagPos    = flag.String("pos", "", "drop window position X,Y (drop mode only)")
-	flagSize   = flag.String("size", "260x90", "drop window size WxH (drop mode only)")
-	flagLog    = flag.String("log", "", "append JSONL events to this file")
-	flagKey    = flag.String("key", "", "device key file (default: %LOCALAPPDATA%\\Ferry\\device.key)")
-	flagPair   = flag.String("paired", "", "trusted device table (default: %LOCALAPPDATA%\\Ferry\\paired.json)")
-	flagSig    = flag.String("signal", "wss://ft.cwlindean.cn/signal", "signaling URL used to send via the relay")
-	flagSend   = flag.String("send", "", "diagnostic: send these comma-separated files to the paired device, then exit")
-	flagAuto   = flag.String("startup", "", "diagnostic: on/off/status for the HKCU Run entry, then exit")
-	flagMain   = flag.Bool("main", false, "open the main window at startup (default behavior unless -silent)")
-	flagSilent = flag.Bool("silent", false, "start minimized to tray without opening the main window")
-	flagSendTo = flag.Bool("install-sendto", false, "install the Explorer \"Send to\" shortcut, then exit")
-	flagPanel  = flag.Bool("panel", true, "show the drop panel while files are dragged")
+	flagDrop    = flag.Bool("drop", false, "show the drop window instead of the tray receiver")
+	flagDir     = flag.String("dir", "", "receive directory (default: %USERPROFILE%\\Downloads)")
+	flagPort    = flag.Int("port", 18800, "receive port on all interfaces")
+	flagPos     = flag.String("pos", "", "drop window position X,Y (drop mode only)")
+	flagSize    = flag.String("size", "260x90", "drop window size WxH (drop mode only)")
+	flagLog     = flag.String("log", "", "append JSONL events to this file")
+	flagKey     = flag.String("key", "", "device key file (default: %LOCALAPPDATA%\\Ferry\\device.key)")
+	flagPair    = flag.String("paired", "", "trusted device table (default: %LOCALAPPDATA%\\Ferry\\paired.json)")
+	flagSig     = flag.String("signal", "wss://ferry.cwlindean.cn/signal", "signaling URL used to send via the relay")
+	flagWebBase = flag.String("web", "https://ferry.cwlindean.cn", "public website and temp share base URL")
+	flagSend    = flag.String("send", "", "diagnostic: send these comma-separated files to the paired device, then exit")
+	flagAuto    = flag.String("startup", "", "diagnostic: on/off/status for the HKCU Run entry, then exit")
+	flagMain    = flag.Bool("main", false, "open the main window at startup (default behavior unless -silent)")
+	flagSilent  = flag.Bool("silent", false, "start minimized to tray without opening the main window")
+	flagSendTo  = flag.Bool("install-sendto", false, "install the Explorer \"Send to\" shortcut, then exit")
+	flagPanel   = flag.Bool("panel", true, "show the drop panel while files are dragged")
 )
 
 func main() {
@@ -85,6 +86,7 @@ func main() {
 		app.pairedPath = defaultPairedPath()
 	}
 	app.signalURL = *flagSig
+	app.webBase = *flagWebBase
 	if *flagLog != "" {
 		f, err := os.OpenFile(*flagLog, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
@@ -227,6 +229,7 @@ type app struct {
 	settingsPath string
 	port         int
 	keyPath      string
+	webBase      string
 	pairedPath   string
 	signalURL    string
 	logOut       *os.File

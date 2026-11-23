@@ -74,7 +74,7 @@ func main() {
 // falls back to this host's relay socket.
 func runShare(args []string) int {
 	fs := flag.NewFlagSet("share", flag.ContinueOnError)
-	base := fs.String("base", "https://ft.cwlindean.cn", "public site base URL")
+	base := fs.String("base", "https://ferry.cwlindean.cn", "public site base URL")
 	password := fs.String("password", os.Getenv("FT_WEB_PASSWORD"), "web password (or FT_WEB_PASSWORD)")
 	dir := fs.String("dir", ".", "directory to share")
 	name := fs.String("name", defaultName(), "device name shown to the browser")

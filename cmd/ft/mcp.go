@@ -23,7 +23,7 @@ import (
 	"github.com/cwlindean/filetransfer/core/proto"
 )
 
-const mcpDefaultSignal = "wss://ft.cwlindean.cn/signal"
+const mcpDefaultSignal = "wss://ferry.cwlindean.cn/signal"
 
 type mcpConfig struct {
 	KeyPath    string

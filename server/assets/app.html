@@ -4,218 +4,203 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>轻渡 · Ferry</title>
+<title>轻渡 Ferry · 网页快传</title>
 <style>
   :root{
     color-scheme: light dark;
-    --paper:#F7F6F0; --paper-2:#F0EEE7; --paper-3:#E6E4DB;
-    --ink:#16211C; --ink-2:#505955; --ink-3:#7E8783;
-    --line:#D6D4CC; --line-soft:#E1E0D8;
-    --accent:#2C5C49; --accent-ink:#FBFAF7; --accent-soft:#D6EDE2;
-    --danger:#B64036; --amber:#915C08; --violet:#665189;
-    --serif:"Iowan Old Style","Palatino Linotype","Songti SC","SimSun",serif;
-    --sans:system-ui,"Segoe UI","Microsoft YaHei UI",sans-serif;
+    --bg:#F7F8F7; --card:#FFFFFF; --card-2:#EFF3F1; --card-3:#E4ECE8;
+    --ink:#111E19; --ink-2:#4B5953; --ink-3:#7A8781;
+    --line:#DCE3DF; --line-soft:#E9EEEC;
+    --accent:#0F8F76; --accent-hover:#0B7862; --accent-ink:#FFFFFF; --accent-soft:#E2F4EE;
+    --violet:#604B8B; --violet-soft:#F0ECF8; --danger:#C24136;
+    --sans:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei UI",sans-serif;
     --mono:ui-monospace,"Cascadia Mono",Consolas,"SF Mono",monospace;
   }
   @media (prefers-color-scheme: dark){
     :root{
-      --paper:#0E1411; --paper-2:#161E1A; --paper-3:#1E2823;
-      --ink:#E8E6DF; --ink-2:#ABA9A1; --ink-3:#7E7C74;
-      --line:#2B3430; --line-soft:#222A26;
-      --accent:#89C7AB; --accent-ink:#111916; --accent-soft:#1B2F26;
-      --danger:#ED8174; --amber:#E3B667; --violet:#BEA3DF;
+      --bg:#0C110F; --card:#131B18; --card-2:#19231F; --card-3:#21302A;
+      --ink:#ECF2EF; --ink-2:#A4B3AC; --ink-3:#74847D;
+      --line:#23302B; --line-soft:#1B2521;
+      --accent:#2BB598; --accent-hover:#37C7A9; --accent-ink:#081410; --accent-soft:#132E27;
+      --violet:#B79CE2; --violet-soft:#241D32; --danger:#EF7E74;
     }
   }
   *{box-sizing:border-box}
   html,body{margin:0}
-  body{font-family:var(--sans);font-size:13px;line-height:19px;color:var(--ink);
-       background:var(--paper);-webkit-font-smoothing:antialiased}
-  .wrap{width:min(1080px,100% - 48px);margin:0 auto;padding:26px 0 48px}
+  body{font-family:var(--sans);font-size:14px;line-height:1.55;color:var(--ink);
+       background:var(--bg);-webkit-font-smoothing:antialiased}
   [hidden]{display:none!important}
+  .wrap{width:min(960px,100% - 32px);margin:0 auto;padding:20px 0 56px}
 
-  /* masthead */
-  .sheet{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;
-         padding-bottom:14px;border-bottom:1px solid var(--line)}
-  h1{font-family:var(--serif);font-weight:500;font-size:21px;line-height:28px;margin:0;letter-spacing:.02em}
-  .sheet p{margin:6px 0 0;max-width:58ch;color:var(--ink-2);font-size:12px;line-height:17px}
-  .state{display:flex;flex-direction:column;align-items:flex-end;gap:6px;white-space:nowrap}
-  #peer{font-family:var(--mono);font-size:11px;line-height:16px;letter-spacing:.04em;color:var(--ink-3)}
-  #peer:empty{display:none}
+  /* Top bar */
+  .top{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;
+       padding:14px 18px;background:var(--card);border:1px solid var(--line);border-radius:14px}
+  .brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit}
+  .logo{width:32px;height:32px;border-radius:9px;background:var(--accent);color:var(--accent-ink);
+        display:grid;place-items:center;flex:none}
+  .brand-title{font-weight:700;font-size:15px}
+  .brand-sub{font-size:12px;color:var(--ink-2)}
+  .top-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;
+        border:1px solid var(--line);background:var(--card-2);color:var(--ink-2);
+        font-size:12px;font-weight:600;white-space:nowrap}
+  .pill i{width:7px;height:7px;border-radius:50%;background:currentColor}
+  .pill.relay{border-color:var(--violet);background:var(--violet-soft);color:var(--violet)}
+  .pill.failed{border-color:var(--danger);color:var(--danger)}
+  .ttl{font-family:var(--mono);font-size:12px;color:var(--ink-3)}
 
-  /* path stamp: colour + 1px border + word */
-  .badge{display:inline-flex;align-items:center;gap:6px;height:18px;padding:0 6px;
-         border:1px solid var(--line);border-radius:3px;font-family:var(--mono);
-         font-size:11px;line-height:16px;letter-spacing:.06em;text-transform:uppercase;
-         color:var(--ink-3);white-space:nowrap}
-  .badge::before{content:"";width:6px;height:6px;border-radius:50%;
-         border:1px solid currentColor;flex:none}
-  .badge.lan{color:var(--accent);border-color:var(--accent)}
-  .badge.relay{color:var(--violet);border-color:var(--violet)}
-  .badge.failed{color:var(--danger);border-color:var(--danger)}
-  .badge.lan::before,.badge.relay::before{border:0;background:currentColor;
-         animation:breathe 1.6s ease-in-out infinite}
-  @keyframes breathe{0%,100%{opacity:1}50%{opacity:.55}}
-  @media (prefers-reduced-motion:reduce){
-    .badge.lan::before,.badge.relay::before{animation:none}
-  }
-
-  /* sections */
-  .panes{display:grid;grid-template-columns:1fr 1fr;gap:26px 34px;margin-top:22px}
-  h2{font-family:var(--mono);font-size:11px;line-height:16px;font-weight:500;
-     letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);
-     margin:0 0 10px;display:flex;justify-content:space-between;align-items:baseline;gap:10px}
-  h2 span{letter-spacing:.06em;opacity:.72}
-
-  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-  #code{flex:1 1 8em;min-width:0;font-family:var(--mono);font-size:13px;line-height:19px;
-        letter-spacing:.24em;padding:8px 12px;border:1px solid var(--line);border-radius:6px;
-        background:var(--paper-2);color:var(--ink)}
-  #code::placeholder{font-family:var(--sans);letter-spacing:.02em;color:var(--ink-3)}
-  #code:focus{outline:0;border-color:var(--accent);background:var(--paper)}
-  .btn{font:inherit;font-size:13px;padding:8px 14px;border:1px solid var(--line);border-radius:6px;
-       background:var(--paper-2);color:var(--ink);cursor:pointer;white-space:nowrap}
-  .btn:hover{background:var(--paper-3)}
+  /* Code Entry Card */
+  .entry{margin:34px auto 0;max-width:460px;background:var(--card);border:1px solid var(--line);
+         border-radius:18px;padding:28px;text-align:center}
+  .entry h1{margin:0;font-size:22px;font-weight:700}
+  .entry p{margin:8px 0 20px;font-size:13px;color:var(--ink-2)}
+  .code-row{display:flex;gap:10px}
+  #code{flex:1;min-width:0;font-family:var(--mono);font-size:20px;font-weight:700;text-align:center;
+        letter-spacing:.26em;padding:11px 12px;border:1px solid var(--line);border-radius:10px;
+        background:var(--card-2);color:var(--ink)}
+  #code:focus{outline:0;border-color:var(--accent);background:var(--card)}
+  .btn{font:inherit;font-size:14px;font-weight:600;padding:10px 18px;border:1px solid var(--line);
+       border-radius:10px;background:var(--card-2);color:var(--ink);cursor:pointer;white-space:nowrap}
+  .btn:hover{background:var(--card-3)}
   .btn.primary{border-color:var(--accent);background:var(--accent);color:var(--accent-ink)}
-  .btn.primary:hover{filter:brightness(1.07)}
-  .btn:disabled{opacity:.5;cursor:progress}
+  .btn.primary:hover{background:var(--accent-hover)}
+  .btn:disabled{opacity:.55;cursor:progress}
+  .entry-note{margin-top:16px;padding-top:14px;border-top:1px solid var(--line-soft);
+              font-size:12px;color:var(--ink-3);text-align:left}
 
-  .status{margin-top:10px;min-height:19px;font-size:12px;line-height:17px;
-          color:var(--ink-2);white-space:pre-wrap}
-  .status:empty::before{content:"输入 6 位码开始";color:var(--ink-3)}
+  /* LAN Jump Banner (Route A) */
+  .lan-banner{margin-top:16px;padding:14px 18px;border-radius:14px;
+              border:1px solid color-mix(in srgb,var(--accent) 45%,var(--line));
+              background:var(--accent-soft);display:flex;align-items:center;
+              justify-content:space-between;gap:14px;flex-wrap:wrap}
+  .lan-banner b{display:block;font-size:14px;color:var(--ink)}
+  .lan-banner span{font-size:12px;color:var(--ink-2)}
+  .lan-btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:9px;
+           background:var(--accent);color:var(--accent-ink);font-size:13px;font-weight:600;
+           text-decoration:none;white-space:nowrap}
+  .lan-btn:hover{background:var(--accent-hover)}
 
-  .race{list-style:none;margin:14px 0 0;padding:12px 0 0;
-        border-top:1px solid var(--line-soft);display:grid;gap:6px}
-  .race li{display:grid;grid-template-columns:8px 3.4em 1fr;align-items:center;gap:8px;
-           font-size:12px;line-height:17px;color:var(--ink-2)}
-  .race b{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;
-          font-weight:500;color:var(--ink)}
-  .mark{width:6px;height:6px;border-radius:50%;border:1px solid currentColor}
-  .mark.lan{color:var(--accent);background:currentColor}
-  .mark.relay{color:var(--violet);background:currentColor}
-
-  .wait{margin:0;padding:9px 0 0;color:var(--ink-3);font-size:12px;line-height:17px}
-  .panes section:has(#drop:not([hidden])) .wait{display:none}
-
-  #drop{border:1px dashed var(--line);border-radius:7px;background:var(--paper-2);
-        padding:22px 16px;text-align:center;color:var(--ink-2);font-size:12px;
-        line-height:17px;cursor:pointer}
-  #drop b{display:block;font-family:var(--serif);font-weight:500;font-size:16px;
-          line-height:22px;color:var(--ink);margin-bottom:4px}
-  #drop.over{border-style:solid;border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+  /* Workspace */
+  .card{margin-top:16px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px}
+  .status-line{margin-top:12px;font-size:13px;color:var(--ink-2);min-height:20px;white-space:pre-wrap}
+  #drop{border:2px dashed var(--line);border-radius:12px;background:var(--card-2);
+        padding:30px 18px;text-align:center;color:var(--ink-2);cursor:pointer;transition:.15s}
+  #drop:hover,#drop.over{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+  #drop b{display:block;font-size:15px;color:var(--ink);margin-bottom:4px}
   #drop.over b{color:var(--accent)}
-  #upload-row{margin-top:10px}
-  input[type=file]{flex:1 1 12em;min-width:0;font:inherit;font-size:12px;color:var(--ink-2);
-        border:1px solid var(--line);border-radius:6px;background:var(--paper-2);padding:6px 8px}
-  input[type=file]::file-selector-button{font:inherit;font-size:12px;margin-right:10px;
-        padding:4px 10px;border:1px solid var(--line);border-radius:5px;
-        background:var(--paper);color:var(--ink);cursor:pointer}
-  input[type=file]::file-selector-button:hover{background:var(--paper-3)}
+  .pick-pill{display:inline-block;margin-top:12px;padding:8px 18px;border-radius:8px;
+             background:var(--accent);color:var(--accent-ink);font-size:13px;font-weight:600}
 
-  /* ledger */
-  .ledger{margin-top:26px}
+  .hdr{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;flex-wrap:wrap}
+  .hdr h2{margin:0;font-size:15px;font-weight:700}
+  .hdr-right{display:flex;align-items:center;gap:10px}
+  .count{font-family:var(--mono);font-size:12px;color:var(--ink-3)}
   .tw{overflow-x:auto}
   table{width:100%;border-collapse:collapse}
-  thead th{font-family:var(--mono);font-size:11px;line-height:16px;font-weight:500;
-        letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);text-align:left;
-        padding:0 10px 7px;border-bottom:1px solid var(--line)}
-  thead th.n{text-align:right}
-  tbody td{padding:9px 10px;border-bottom:1px solid var(--line-soft);
-        font-size:13px;line-height:19px;vertical-align:middle}
-  tbody tr:hover td{background:var(--paper-2)}
-  tbody td:first-child{word-break:break-all}
-  tbody td:nth-child(2){font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums;
-        color:var(--ink-2);text-align:right;white-space:nowrap}
-  tbody td:nth-child(3){font-family:var(--mono);font-size:11px;letter-spacing:.04em;
-        color:var(--ink-3);white-space:nowrap}
-  tbody td:last-child{text-align:right;white-space:nowrap}
-  a{color:var(--accent);text-decoration:none;border-bottom:1px solid var(--line);padding-bottom:1px}
-  a:hover{border-bottom-color:var(--accent)}
-  tbody button{font:inherit;font-size:12px;padding:5px 10px;border:1px solid var(--line);
-        border-radius:6px;background:var(--paper-2);color:var(--ink);cursor:pointer}
-  tbody button:hover{border-color:var(--accent);color:var(--accent)}
-  .empty{margin:0;padding:22px 12px 16px;text-align:center;color:var(--ink-3);
-        font-size:12px;line-height:17px}
-  .tw:has(#list:not([hidden])) + .empty{display:none}
+  th{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);
+     text-align:left;padding:0 10px 8px;border-bottom:1px solid var(--line)}
+  th.n{text-align:right}
+  td{padding:11px 10px;border-bottom:1px solid var(--line-soft);font-size:13px;vertical-align:middle}
+  tbody tr:hover td{background:var(--card-2)}
+  td:first-child{word-break:break-all;font-weight:500}
+  td:nth-child(2){font-family:var(--mono);font-size:12px;color:var(--ink-2);text-align:right;white-space:nowrap}
+  td:nth-child(3){font-family:var(--mono);font-size:11px;color:var(--ink-3);white-space:nowrap}
+  td:last-child{text-align:right;white-space:nowrap}
+  .dl-btn{font:inherit;font-size:12px;font-weight:600;padding:6px 14px;border:0;border-radius:8px;
+          background:var(--accent);color:var(--accent-ink);cursor:pointer}
+  .dl-btn:hover{background:var(--accent-hover)}
+  .empty{margin:0;padding:24px 12px;text-align:center;color:var(--ink-3);font-size:13px}
+  .card:has(#list:not([hidden])) .empty{display:none}
 
-  .foot{margin-top:28px;padding-top:12px;border-top:1px solid var(--line-soft);
-        display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;
-        font-family:var(--mono);font-size:11px;line-height:16px;letter-spacing:.06em;
-        text-transform:uppercase;color:var(--ink-3)}
-
-  @media (max-width:720px){
-    .wrap{width:min(1080px,100% - 32px);padding:20px 0 40px}
-    .panes{grid-template-columns:1fr;gap:22px}
-    .sheet{flex-direction:column;gap:12px}
-    .state{flex-direction:row;align-items:center;gap:10px}
-    h1{font-size:19px;line-height:26px}
+  @media (max-width:560px){
+    .code-row{flex-direction:column}
+    .entry{padding:22px 18px}
   }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <header class="sheet">
-    <div>
-      <h1>轻渡 Ferry</h1>
-      <p>输入设备上显示的 6 位码。页面同时尝试局域网直连与服务器中继，先连通的那条生效。</p>
-    </div>
-    <div class="state">
-      <span class="badge" id="mode">未连接</span>
-      <span id="peer"></span>
+  <header class="top">
+    <a class="brand" href="/">
+      <span class="logo" aria-hidden="true">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l4-10h8l4 10"/><path d="M2 19h20"/></svg>
+      </span>
+      <div>
+        <div class="brand-title">轻渡 Ferry · 网页快传</div>
+        <div class="brand-sub" id="peer">无需安装客户端，扫码或输入 6 位码即可收发</div>
+      </div>
+    </a>
+    <div class="top-right">
+      <span class="ttl" id="ttl"></span>
+      <span class="pill" id="mode"><i aria-hidden="true"></i><span id="mode-txt">未连接</span></span>
     </div>
   </header>
 
-  <div class="panes">
-    <section>
-      <h2>配对<span>PAIR</span></h2>
-      <div class="row">
-        <input id="code" maxlength="6" inputmode="numeric" placeholder="6 位码" autocomplete="one-time-code">
-        <button id="go" class="btn primary">连接</button>
-      </div>
-      <div class="status" id="status"></div>
-      <ul class="race">
-        <li><span class="mark lan" aria-hidden="true"></span><b>LAN</b><span>同一局域网，毫秒级直连</span></li>
-        <li><span class="mark relay" aria-hidden="true"></span><b>中继</b><span>打洞不通时由服务器转发</span></li>
-      </ul>
-    </section>
-
-    <section>
-      <h2>发送<span>SEND</span></h2>
-      <p class="wait">连接设备后即可发送文件。</p>
-      <div id="drop" hidden><b>把文件拖到这里</b>或点击这里、用下方按钮选择文件</div>
-      <input type="file" id="drop-pick" multiple hidden>
-      <div class="row" id="upload-row" hidden>
-        <input type="file" id="file" multiple>
-        <button id="upload" class="btn primary">上传</button>
-      </div>
-    </section>
-  </div>
-
-  <section class="ledger">
-    <h2>设备上的文件<span>FILES</span></h2>
-    <div class="tw">
-      <table id="list" hidden>
-        <thead><tr><th>文件</th><th class="n">大小</th><th>SHA-256</th><th></th></tr></thead>
-        <tbody></tbody>
-      </table>
+  <section class="entry" id="entry-card">
+    <h1>输入 6 位临时码</h1>
+    <p>在发起快传的手机或电脑端查看 6 位临时码，或直接用手机扫描对方二维码。</p>
+    <div class="code-row">
+      <input id="code" maxlength="6" inputmode="numeric" placeholder="000000" autocomplete="one-time-code">
+      <button id="go" class="btn primary">连接设备</button>
     </div>
-    <p class="empty">还没有文件 · 连接设备后即可发送</p>
+    <div class="status-line" id="entry-status"></div>
+    <div class="entry-note">为防滥用，临时会话仅由轻渡手机端或 Windows 桌面端创建，有效期 10 分钟。</div>
   </section>
 
-  <footer class="foot">
-    <span>轻渡 · Ferry 浏览器端</span>
-    <span>LAN 优先 · 中继兜底</span>
-  </footer>
+  <div id="workspace" hidden>
+    <div class="lan-banner" id="lan-banner" hidden>
+      <div>
+        <b>与对方在同一个 Wi-Fi？可切换局域网极速直连</b>
+        <span>点击后将跳转到发起设备的局域网 HTTP 地址，满速传输且不消耗中继流量</span>
+      </div>
+      <a class="lan-btn" id="lan-jump" href="#">同 Wi-Fi 极速直连 →</a>
+    </div>
+
+    <section class="card" id="send-card">
+      <div id="drop">
+        <b>把文件拖到这里，或点击选择文件上传</b>
+        <div>通过加密通道直传到对方接收目录，自动 SHA-256 校验</div>
+        <span class="pick-pill">选择文件上传</span>
+        <input type="file" id="drop-pick" multiple hidden>
+      </div>
+      <div class="status-line" id="status"></div>
+    </section>
+
+    <section class="card">
+      <div class="hdr">
+        <h2 id="list-title">会话文件</h2>
+        <div class="hdr-right">
+          <span class="count" id="file-count">0 个文件</span>
+          <button class="btn" id="reconnect" hidden>重新连接</button>
+        </div>
+      </div>
+      <div class="tw">
+        <table id="list" hidden>
+          <thead><tr><th>文件名</th><th class="n">大小</th><th>SHA-256</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="empty" id="empty-tip">等待加载文件列表…</p>
+      <div class="status-line" id="recv-status"></div>
+    </section>
+  </div>
 </div>
+
 <script>
 (function () {
   var $ = function (id) { return document.getElementById(id); };
-  var state = { base: null, mode: null, ws: null, room: null, files: [], get: null, put: null };
+  var state = { ws: null, info: null, files: [], get: null, put: null, putNext: null, ttlTimer: null };
 
-  function setMode(m, text) {
+  function setBadge(kind, text) {
     var el = $('mode');
-    el.className = 'badge ' + (m || '');
-    el.textContent = m === 'lan' ? 'LAN' : m === 'relay' ? '中继' : '未连接';
-    if (text) $('status').textContent = text;
+    el.className = 'pill ' + (kind || '');
+    $('mode-txt').textContent = text;
+  }
+
+  function setStatus(msg) {
+    $('status').textContent = msg;
+    $('recv-status').textContent = msg;
+    $('entry-status').textContent = msg;
   }
 
   function fmtSize(n) {
@@ -225,167 +210,119 @@
     return (n / 1073741824).toFixed(2) + ' GB';
   }
 
+  function startTTL(sec) {
+    if (state.ttlTimer) clearInterval(state.ttlTimer);
+    var rem = sec || 0;
+    var tick = function () {
+      if (rem <= 0) { $('ttl').textContent = '已过期'; clearInterval(state.ttlTimer); return; }
+      var m = Math.floor(rem / 60), s = rem % 60;
+      $('ttl').textContent = '剩余 ' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+      rem--;
+    };
+    tick();
+    state.ttlTimer = setInterval(tick, 1000);
+  }
+
   function closeRelay() {
     var old = state.ws;
-    state.ws = null;
-    state.get = null;
-    state.put = null;
-    state.putNext = null;
+    state.ws = null; state.get = null; state.put = null; state.putNext = null;
     if (old) {
-      old.onopen = null;
-      old.onmessage = null;
-      old.onerror = null;
-      old.onclose = null;
+      old.onopen = old.onmessage = old.onerror = old.onclose = null;
       try { old.close(); } catch (e) {}
     }
   }
 
-  function lanReady(base, ms) {
+  function dialRelay(info) {
     return new Promise(function (resolve, reject) {
-      var ctl = new AbortController();
-      var t = setTimeout(function () { ctl.abort(); reject(new Error('lan timeout')); }, ms);
-      fetch(base + '/api/list', { signal: ctl.signal, cache: 'no-store' })
-        .then(function (r) {
-          clearTimeout(t);
-          if (!r.ok) throw new Error('lan ' + r.status);
-          return r.json();
-        })
-        .then(function (j) { resolve({ base: base, files: j.files || [] }); })
-        .catch(function (e) { clearTimeout(t); reject(e); });
-    });
-  }
-
-  function relayConnect(room) {
-    return new Promise(function (resolve, reject) {
-      var url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/web/' + room + '?role=guest';
+      var url = (location.protocol === 'https:' ? 'wss://' : 'ws://')
+        + location.host + '/web/' + encodeURIComponent(info.room)
+        + '?role=guest&token=' + encodeURIComponent(info.guest_token || '');
       var ws = new WebSocket(url);
-      var t = setTimeout(function () { try { ws.close(); } catch (e) {} reject(new Error('relay timeout')); }, 2500);
+      var t = setTimeout(function () { try { ws.close(); } catch (e) {} reject(new Error('连接超时，请检查发起端是否在线')); }, 4000);
       ws.onopen = function () { clearTimeout(t); resolve(ws); };
-      ws.onerror = function () { clearTimeout(t); reject(new Error('relay error')); };
+      ws.onerror = function () { clearTimeout(t); reject(new Error('WebSocket 连接失败')); };
     });
   }
 
-  function connect() {
-    var code = ($('code').value || '').trim();
-    if (!/^\d{6}$/.test(code)) { $('status').textContent = '请输入 6 位数字码'; return; }
+  function applySession(info) {
+    state.info = info;
+    $('entry-card').hidden = true;
+    $('workspace').hidden = false;
+    $('peer').textContent = (info.name ? '已连接：' + info.name : '已连接临时会话') + (info.mode === 'send' ? '（仅接收对方分享的文件）' : '（可向对方上传文件）');
+    startTTL(info.ttl_s || 600);
+
+    if (info.lan && info.lan.length) {
+      $('lan-jump').href = info.lan[0];
+      $('lan-banner').hidden = false;
+    } else {
+      $('lan-banner').hidden = true;
+    }
+
+    var allowUpload = info.mode !== 'send';
+    $('send-card').hidden = !allowUpload;
+    $('list-title').textContent = allowUpload ? '已上传 / 可下载文件' : '对方分享的文件';
+    $('empty-tip').textContent = allowUpload ? '还没有文件 · 可在上方拖入文件上传' : '对方未选择文件或已清空';
+
+    return dialRelay(info).then(function (ws) {
+      state.ws = ws;
+      $('reconnect').hidden = true;
+      wireRelay(ws);
+      setBadge('relay', '云端中继已连接');
+      setStatus(allowUpload ? '已连接，可以开始上传或下载' : '已连接，点击下方按钮下载文件');
+      relaySend({ t: 'list' });
+    });
+  }
+
+  function resolveAndConnect(query) {
     closeRelay();
-    state.base = null;
-    state.mode = null;
     $('go').disabled = true;
-    setMode('', '正在查找设备…');
-    fetch('/api/resolve?code=' + encodeURIComponent(code), { cache: 'no-store' })
-      .then(function (r) { if (!r.ok) throw new Error('码不正确或已过期'); return r.json(); })
-      .then(function (info) {
-        state.room = info.room;
-        $('peer').textContent = info.name || '';
-        var forceRelay = /[#&]relay=1/.test(location.hash || '');
-        var lanAttempts = forceRelay ? [] : (info.lan || []).map(function (u) {
-          return lanReady(u.replace(/\/$/, ''), 1200);
-        });
-        var relayAttempt = info.relay ? relayConnect(info.room).then(function (ws) {
-          return { mode: 'relay', ws: ws };
-        }) : null;
-        if (!lanAttempts.length && !relayAttempt) throw new Error('设备没有可用的连接方式');
-        // Both paths start together, but LAN wins whenever it answers inside
-        // the window: a reachable LAN is always faster than the relay.
-        var grace = new Promise(function (resolve) { setTimeout(resolve, 1200); });
-        var first = lanAttempts.length
-          ? Promise.race([Promise.any(lanAttempts).catch(function () { return null; }), grace])
-          : Promise.resolve(null);
-        return first.then(function (lan) {
-          if (lan) {
-            if (relayAttempt) {
-              relayAttempt.then(function (r) { if (r && r.ws) r.ws.close(); }).catch(function () {});
-            }
-            return lan;
-          }
-          if (relayAttempt) return relayAttempt;
-          throw new Error('局域网与中继都没连上');
-        });
-      })
-      .then(function (win) {
-        if (win.ws) {
-          state.mode = 'relay'; state.ws = win.ws;
-          state.files = [];
-          wireRelay(win.ws);
-          setMode('relay', '已通过服务器中继连接');
-          $('go').disabled = false;
-          $('upload-row').hidden = false;
-          $('drop').hidden = false;
-          relayList();
-          return;
-        }
-        state.mode = 'lan'; state.base = win.base;
-        setMode('lan', '已直连设备，速度取决于局域网');
-        $('go').disabled = false;
-        $('upload-row').hidden = false;
-        $('drop').hidden = false;
-        render(win.files);
-      })
+    setBadge('', '连接中…');
+    setStatus('正在查找会话…');
+    fetch('/api/temp/resolve?' + query, { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('链接或 6 位码无效，或已超过 10 分钟过期'); return r.json(); })
+      .then(applySession)
       .catch(function (e) {
-        $('go').disabled = false;
-        setMode('', '连接失败：' + (e && e.message ? e.message : e));
-      });
+        setBadge('failed', '连接失败');
+        setStatus(e && e.message ? e.message : String(e));
+        $('reconnect').hidden = !state.info;
+      })
+      .finally(function () { $('go').disabled = false; });
+  }
+
+  function connectByCode() {
+    var code = ($('code').value || '').trim();
+    if (!/^\d{6}$/.test(code)) { setStatus('请输入 6 位数字码'); return; }
+    resolveAndConnect('code=' + encodeURIComponent(code));
   }
 
   function render(files) {
+    state.files = files || [];
+    $('file-count').textContent = state.files.length + ' 个文件';
     var tb = document.querySelector('#list tbody');
     tb.innerHTML = '';
-    files.forEach(function (f) {
+    state.files.forEach(function (f) {
       var tr = document.createElement('tr');
       var name = document.createElement('td'); name.textContent = f.name;
       var size = document.createElement('td'); size.textContent = fmtSize(f.size);
       var sha = document.createElement('td'); sha.textContent = (f.sha256 || '').slice(0, 12) + '…';
       var act = document.createElement('td');
-      if (state.mode === 'relay') {
-        var btn = document.createElement('button');
-        btn.textContent = '下载';
-        btn.onclick = function () { relayDownload(f.name); };
-        act.appendChild(btn);
-      } else {
-        var a = document.createElement('a');
-        a.href = state.base + '/f/' + encodeURIComponent(f.name);
-        a.textContent = '下载';
-        act.appendChild(a);
-      }
+      var btn = document.createElement('button');
+      btn.className = 'dl-btn';
+      btn.textContent = '下载';
+      btn.onclick = function () { relayDownload(f.name); };
+      act.appendChild(btn);
       tr.appendChild(name); tr.appendChild(size); tr.appendChild(sha); tr.appendChild(act);
       tb.appendChild(tr);
     });
-    $('list').hidden = files.length === 0;
+    $('list').hidden = state.files.length === 0;
   }
 
-  function refresh() {
-    if (state.mode === 'relay') return relayList();
-    if (!state.base) return;
-    fetch(state.base + '/api/list', { cache: 'no-store' })
-      .then(function (r) { return r.json(); })
-      .then(function (j) { render(j.files || []); });
-  }
-
-  function upload(files) {
-    if (state.mode === 'relay') { relayUploadAll(files); return; }
-    if (!state.base || !files.length) return;
-    var fd = new FormData();
-    for (var i = 0; i < files.length; i++) fd.append('file', files[i], files[i].name);
-    $('status').textContent = '上传中…';
-    fetch(state.base + '/upload', { method: 'POST', body: fd })
-      .then(function (r) { if (!r.ok) throw new Error('upload ' + r.status); return r.json(); })
-      .then(function () { $('status').textContent = '上传完成'; refresh(); })
-      .catch(function (e) { $('status').textContent = '上传失败：' + e.message; });
-  }
-
-
-  function relaySend(obj) {
-    if (!state.ws) return;
-    state.ws.send(JSON.stringify(obj));
-  }
+  function relaySend(obj) { if (state.ws) state.ws.send(JSON.stringify(obj)); }
 
   function sha256Hex(buf) {
     if (!window.crypto || !crypto.subtle) return Promise.resolve(null);
     return crypto.subtle.digest('SHA-256', buf).then(function (d) {
-      return Array.from(new Uint8Array(d)).map(function (x) {
-        return x.toString(16).padStart(2, '0');
-      }).join('');
+      return Array.from(new Uint8Array(d)).map(function (x) { return x.toString(16).padStart(2, '0'); }).join('');
     });
   }
 
@@ -397,14 +334,10 @@
     };
     ws.onclose = function () {
       if (state.ws !== ws) return;
-      state.ws = null;
-      state.get = null;
-      state.put = null;
-      state.putNext = null;
-      if (state.mode === 'relay') {
-        state.mode = null;
-        setMode('', '中继连接已断开');
-      }
+      state.ws = null; state.get = null; state.put = null; state.putNext = null;
+      setBadge('failed', '连接已断开');
+      setStatus('与发起端的连接已断开，如对方仍在线可点击「重新连接」');
+      $('reconnect').hidden = false;
     };
   }
 
@@ -414,7 +347,7 @@
     if (msg.t === 'files') { render(msg.files || []); return; }
     if (msg.t === 'get.begin') {
       state.get = { name: msg.name, size: msg.size, chunks: [], have: 0 };
-      $('status').textContent = '下载中：' + msg.name;
+      setStatus('下载中：' + msg.name);
       return;
     }
     if (msg.t === 'get.end') {
@@ -423,9 +356,8 @@
       var blob = new Blob(g.chunks);
       blob.arrayBuffer().then(function (buf) {
         return sha256Hex(buf).then(function (h) {
-          var note = !h ? '（非 HTTPS 环境未校验）'
-            : (msg.sha256 && msg.sha256 !== h ? '，哈希不一致！' : '，哈希校验通过');
-          $('status').textContent = '下载完成：' + g.name + '（' + fmtSize(buf.byteLength) + '）' + note;
+          var note = !h ? '' : (msg.sha256 && msg.sha256 !== h ? '（哈希不一致！）' : '（SHA-256 校验通过）');
+          setStatus('下载完成：' + g.name + ' · ' + fmtSize(buf.byteLength) + note);
           var url = URL.createObjectURL(blob);
           var a = document.createElement('a');
           a.href = url; a.download = g.name; document.body.appendChild(a); a.click();
@@ -434,95 +366,69 @@
       });
       return;
     }
-    if (msg.t === 'put.ready') {
-      if (state.put) { state.put.name = msg.name; pumpPut(); }
-      return;
-    }
+    if (msg.t === 'put.ready') { if (state.put) { state.put.name = msg.name; pumpPut(); } return; }
     if (msg.t === 'put.ok') {
       state.put = null;
-      $('status').textContent = '上传完成：' + msg.name + '，SHA-256 ' + msg.sha256.slice(0, 12) + '…';
-      relayList();
-      if (state.putNext) {
-        var next = state.putNext;
-        next();
-      }
+      setStatus('上传完成：' + msg.name + '（SHA-256 ' + msg.sha256.slice(0, 12) + '…）');
+      relaySend({ t: 'list' });
+      if (state.putNext) state.putNext();
       return;
     }
     if (msg.t === 'err') {
-      state.get = null;
-      state.put = null;
-      state.putNext = null;
-      $('status').textContent = '传输失败：' + msg.msg;
+      state.get = null; state.put = null; state.putNext = null;
+      setStatus('传输失败：' + msg.msg);
     }
-  }
-
-  function relayList() {
-    relaySend({ t: 'list' });
   }
 
   function relayDownload(name) {
     if (!state.ws) return;
-    if (state.get) { $('status').textContent = '已有文件正在下载，请稍候'; return; }
+    if (state.get) { setStatus('已有文件正在下载，请稍候'); return; }
     state.get = { name: name, size: 0, chunks: [], have: 0 };
-    $('status').textContent = '请求下载：' + name;
+    setStatus('正在请求下载：' + name);
     relaySend({ t: 'get', name: name });
   }
 
-  function relayUploadAll(files) {
-    if (state.put) { $('status').textContent = '已有文件正在上传，请稍候'; return; }
+  function uploadFiles(files) {
+    if (!state.ws) { setStatus('尚未连接'); return; }
+    if (state.put) { setStatus('已有文件正在上传，请稍候'); return; }
     var list = Array.prototype.slice.call(files || []);
-    if (!list.length || !state.ws) return;
+    if (!list.length) return;
     var total = list.length;
     var next = function () {
       var f = list.shift();
       if (!f) {
         state.putNext = null;
-        if (total > 1) $('status').textContent = '全部上传完成（共 ' + total + ' 个）';
+        if (total > 1) setStatus('全部上传完成（共 ' + total + ' 个文件）');
         return;
       }
-      startPut(f);
+      var job = { file: f, buf: null, off: 0, name: null };
+      state.put = job;
+      setStatus('准备上传：' + f.name);
+      f.arrayBuffer().then(function (buf) {
+        if (state.put !== job || !state.ws) return;
+        job.buf = buf;
+        setStatus('上传中：' + f.name);
+        relaySend({ t: 'put.begin', name: f.name, size: f.size });
+      }).catch(function (e) {
+        if (state.put === job) { state.put = null; state.putNext = null; setStatus('读取失败：' + e); }
+      });
     };
     state.putNext = next;
     next();
   }
 
-  function startPut(file) {
-    var job = { file: file, buf: null, off: 0, name: null };
-    state.put = job;
-    $('status').textContent = '准备上传：' + file.name;
-    file.arrayBuffer().then(function (buf) {
-      if (state.put !== job || !state.ws) return;
-      job.buf = buf;
-      $('status').textContent = '上传中：' + file.name;
-      relaySend({ t: 'put.begin', name: file.name, size: file.size });
-    }).catch(function (e) {
-      if (state.put === job) {
-        state.put = null;
-        state.putNext = null;
-        $('status').textContent = '读取文件失败：' + (e && e.message ? e.message : e);
-      }
-    });
-  }
-
   function pumpPut() {
     var p = state.put;
     if (!p) return;
-    var CH = 64 * 1024;
-    var HIGH_WATER = 4 * 1024 * 1024;
-    // Send fixed bursts, then yield to the event loop. A pure microtask chain
-    // starves rendering (and the browser tooling), while a bare setTimeout(0)
-    // between every 64 KiB frame is throttled to ~1 s per chunk in background
-    // tabs; bursting keeps both fast and responsive.
-    var BURST = 32;
+    var CH = 64 * 1024, HIGH_WATER = 4 * 1024 * 1024, BURST = 32;
     var step = function () {
-      if (!state.put) return;
+      if (!state.put || !state.ws) return;
       var sent = 0;
       while (p.off < p.buf.byteLength && state.ws.bufferedAmount < HIGH_WATER && sent < BURST) {
         var end = Math.min(p.off + CH, p.buf.byteLength);
         state.ws.send(p.buf.slice(p.off, end));
-        p.off = end;
-        sent++;
-        $('status').textContent = '上传中：' + p.name + ' ' + Math.round(p.off * 100 / p.buf.byteLength) + '%';
+        p.off = end; sent++;
+        setStatus('上传中：' + p.name + ' ' + Math.round(p.off * 100 / p.buf.byteLength) + '%');
       }
       if (p.off < p.buf.byteLength) { setTimeout(step, 0); return; }
       relaySend({ t: 'put.end' });
@@ -530,27 +436,29 @@
     step();
   }
 
-  var m = /[#&]code=(\d{6})/.exec(location.hash || '');
-  if (m) $('code').value = m[1];
-
-  $('go').addEventListener('click', connect);
-  $('code').addEventListener('keydown', function (e) { if (e.key === 'Enter') connect(); });
+  $('go').addEventListener('click', connectByCode);
+  $('code').addEventListener('keydown', function (e) { if (e.key === 'Enter') connectByCode(); });
+  $('reconnect').addEventListener('click', function () {
+    if (!state.info) return;
+    if (state.info.guest_token) resolveAndConnect('token=' + encodeURIComponent(state.info.guest_token));
+  });
   $('drop').addEventListener('click', function () { $('drop-pick').click(); });
-  $('drop-pick').addEventListener('change', function () {
-    upload($('drop-pick').files);
-    $('drop-pick').value = '';
-  });
-  $('upload').addEventListener('click', function () {
-    upload($('file').files);
-    $('file').value = '';
-  });
+  $('drop-pick').addEventListener('change', function () { uploadFiles($('drop-pick').files); $('drop-pick').value = ''; });
   ['dragenter', 'dragover'].forEach(function (t) {
     $('drop').addEventListener(t, function (e) { e.preventDefault(); $('drop').classList.add('over'); });
   });
   ['dragleave', 'drop'].forEach(function (t) {
     $('drop').addEventListener(t, function (e) { e.preventDefault(); $('drop').classList.remove('over'); });
   });
-  $('drop').addEventListener('drop', function (e) { upload(e.dataTransfer.files); });
+  $('drop').addEventListener('drop', function (e) { uploadFiles(e.dataTransfer.files); });
+
+  var shareMatch = /^\/s\/([A-Za-z0-9_-]+)/.exec(location.pathname);
+  if (shareMatch) {
+    resolveAndConnect('token=' + encodeURIComponent(shareMatch[1]));
+  } else {
+    var m = /[#&]code=(\d{6})/.exec(location.hash || '');
+    if (m) { $('code').value = m[1]; connectByCode(); }
+  }
 })();
 </script>
 </body>

@@ -82,6 +82,7 @@ const (
 	hoverSendBtn
 	hoverSendText
 	hoverSendClip
+	hoverTempShare
 	hoverFltAll
 	hoverFltSend
 	hoverFltRecv
@@ -267,17 +268,18 @@ type mainWin struct {
 	navDevicesR rectT
 	navSetR     rectT
 
-	sendColR    rectT
-	sendCardR   rectT
-	tileFilesR  rectT
-	tileFolderR rectT
-	queueBoxR   rectT
-	queueClearR rectT
-	addDevLinkR rectT
-	peerPickerR rectT
-	sendBtnR    rectT
-	sendTextR   rectT
-	sendClipR   rectT
+	sendColR      rectT
+	sendCardR     rectT
+	tileFilesR    rectT
+	tileFolderR   rectT
+	queueBoxR     rectT
+	queueClearR   rectT
+	addDevLinkR   rectT
+	peerPickerR   rectT
+	sendBtnR      rectT
+	sendTextR     rectT
+	sendClipR     rectT
+	tempShareBtnR rectT
 
 	fltAllR     rectT
 	fltSendR    rectT
@@ -764,7 +766,7 @@ func (w *mainWin) layout(cw, ch int32) {
 
 	// Reset page-specific rects
 	w.tileFilesR, w.tileFolderR, w.queueBoxR, w.queueClearR = rectT{}, rectT{}, rectT{}, rectT{}
-	w.addDevLinkR, w.peerPickerR, w.sendBtnR, w.sendTextR, w.sendClipR = rectT{}, rectT{}, rectT{}, rectT{}, rectT{}
+	w.addDevLinkR, w.peerPickerR, w.sendBtnR, w.sendTextR, w.sendClipR, w.tempShareBtnR = rectT{}, rectT{}, rectT{}, rectT{}, rectT{}, rectT{}
 	w.fltAllR, w.fltSendR, w.fltRecvR, w.openDirR, w.activeTxR = rectT{}, rectT{}, rectT{}, rectT{}, rectT{}
 	w.ledgerRowsR = w.ledgerRowsR[:0]
 	w.devAddBtnR = rectT{}
@@ -816,6 +818,7 @@ func (w *mainWin) layout(cw, ch int32) {
 		footY := w.sendCardR.bottom + p(10)
 		w.sendTextR = rectT{w.sendCardR.left + p(2), footY, w.sendCardR.left + p(56), footY + p(22)}
 		w.sendClipR = rectT{w.sendTextR.right + p(12), footY, w.sendTextR.right + p(78), footY + p(22)}
+		w.tempShareBtnR = rectT{w.sendCardR.left, footY + p(32), w.sendCardR.right, footY + p(68)}
 
 		// Right transfers pane
 		rPad := p(28)
@@ -1226,6 +1229,17 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 	cv.drawAlphaText(w.fontSm, "支持直接拖入文件",
 		rectT{w.sendClipR.right + p(4), w.sendClipR.top, w.sendCardR.right - p(2), w.sendClipR.bottom},
 		dtRight|dtSingleLine|dtVCenter, w.pal.ink3)
+
+	tsFill := w.pal.paper
+	tsEdge := w.pal.line
+	tsFg := w.pal.ink
+	if w.hover == hoverTempShare {
+		tsFill = w.pal.accentSoft
+		tsEdge = w.pal.accent
+		tsFg = w.pal.accent
+	}
+	cv.drawAlphaRoundRect(w.tempShareBtnR, float64(p(9)), tsFill, tileA, tsEdge, w.surfaceAlpha(220), 1.0)
+	cv.drawAlphaText(w.fontSm, "临时快传（生成二维码 / 网页直传）", w.tempShareBtnR, dtCenter|dtSingleLine|dtVCenter, tsFg)
 
 	// Right Transfers Pane
 	paneL := w.sendColR.right + p(28)
@@ -1963,6 +1977,8 @@ func (w *mainWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
 		kind = hoverSendText
 	case w.page == pageHome && ptIn(w.sendClipR, x, y):
 		kind = hoverSendClip
+	case w.page == pageHome && ptIn(w.tempShareBtnR, x, y):
+		kind = hoverTempShare
 	case w.page == pageHome && ptIn(w.fltAllR, x, y):
 		kind = hoverFltAll
 	case w.page == pageHome && ptIn(w.fltSendR, x, y):
@@ -2126,6 +2142,8 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 			w.openSendText(hwnd)
 		case ptIn(w.sendClipR, x, y):
 			w.sendClipboard(hwnd)
+		case ptIn(w.tempShareBtnR, x, y):
+			openTempShareWindow(hwnd, w.app)
 		case ptIn(w.fltAllR, x, y):
 			w.filter = fltAll
 			procInvalidateRect.Call(uintptr(hwnd), 0, 1)

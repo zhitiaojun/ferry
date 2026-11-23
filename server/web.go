@@ -8,6 +8,7 @@
 package server
 
 import (
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -17,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"strconv"
@@ -37,6 +39,9 @@ type WebLimits struct {
 	DeviceTTL      time.Duration // how long a registered code stays resolvable
 	CodeAttempts   int           // resolve attempts per IP per window
 	UnlockAttempts int           // password attempts per IP per window
+	CreateAttempts int           // temp session creations per IP per window
+	MaxRoomsPerPub int           // max active temp sessions per Ed25519 pubkey
+	MaxTotalRooms  int           // max concurrent temp sessions on server
 	AttemptWindow  time.Duration
 	MaxLANURLs     int
 }
@@ -48,19 +53,25 @@ func DefaultWebLimits() WebLimits {
 		DeviceTTL:      10 * time.Minute,
 		CodeAttempts:   20,
 		UnlockAttempts: 8,
+		CreateAttempts: 20,
+		MaxRoomsPerPub: 3,
+		MaxTotalRooms:  200,
 		AttemptWindow:  5 * time.Minute,
 		MaxLANURLs:     4,
 	}
 }
 
 type webDevice struct {
-	Code     string   `json:"code"`
-	Name     string   `json:"name"`
-	Room     string   `json:"room"`
-	Token    string   `json:"-"`
-	LAN      []string `json:"lan"`
-	Expires  time.Time
-	LastSeen time.Time
+	Code       string   `json:"code"`
+	Name       string   `json:"name"`
+	Mode       string   `json:"mode"`
+	Room       string   `json:"room"`
+	Token      string   `json:"-"` // host token
+	ShareToken string   `json:"-"` // guest one-time share token
+	PubKey     string   `json:"-"`
+	LAN        []string `json:"lan"`
+	Expires    time.Time
+	LastSeen   time.Time
 }
 
 type rateBucket struct {
@@ -77,20 +88,33 @@ type Web struct {
 	mu      sync.Mutex
 	devices map[string]*webDevice // by code
 	byRoom  map[string]*webDevice
+	byToken map[string]*webDevice  // by ShareToken
 	limits4 map[string]*rateBucket // rate limits keyed by ip|kind
 	rooms   map[string]*webRoom
 
 	log *logging.Logger
 }
 
-// NewWeb builds the web surface. password may be empty, which disables unlock
-// (the transfer UI stays unreachable) — deployments set FT_WEB_PASSWORD.
+// NewWeb builds the web surface.
 func NewWeb(password string, limits WebLimits, log *logging.Logger) *Web {
+	if limits.CreateAttempts <= 0 {
+		limits.CreateAttempts = 20
+	}
+	if limits.MaxRoomsPerPub <= 0 {
+		limits.MaxRoomsPerPub = 3
+	}
+	if limits.MaxTotalRooms <= 0 {
+		limits.MaxTotalRooms = 200
+	}
+	if limits.AttemptWindow <= 0 {
+		limits.AttemptWindow = 5 * time.Minute
+	}
 	w := &Web{
 		limits:  limits,
 		secret:  make([]byte, 32),
 		devices: map[string]*webDevice{},
 		byRoom:  map[string]*webDevice{},
+		byToken: map[string]*webDevice{},
 		limits4: map[string]*rateBucket{},
 		rooms:   map[string]*webRoom{},
 		log:     log,
@@ -108,15 +132,20 @@ func (w *Web) enabled() bool { return w.password != [32]byte{} }
 
 // registerRoutes attaches the web surface to mux.
 func (w *Web) registerRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/", w.handleDecoy)
-	mux.HandleFunc("/app", w.handleApp)
+	mux.HandleFunc("/", w.handleHome)
+	mux.HandleFunc("/transfer", w.handleTransferPage)
+	mux.HandleFunc("/app", w.handleTransferPage)
+	mux.HandleFunc("/s/", w.handleSharePage)
+	mux.HandleFunc("/api/temp/create", w.handleTempCreate)
+	mux.HandleFunc("/api/temp/resolve", w.handleTempResolve)
+	mux.HandleFunc("/api/temp/close", w.handleTempClose)
 	mux.HandleFunc("/api/unlock", w.handleUnlock)
 	mux.HandleFunc("/api/devices", w.handleDevices)
 	mux.HandleFunc("/api/resolve", w.handleResolve)
 	mux.HandleFunc("/web/", w.handleWebSocket)
 }
 
-func (w *Web) handleDecoy(rw http.ResponseWriter, r *http.Request) {
+func (w *Web) handleHome(rw http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(rw, r)
 		return
@@ -126,14 +155,245 @@ func (w *Web) handleDecoy(rw http.ResponseWriter, r *http.Request) {
 	_, _ = rw.Write(mustAsset("assets/index.html"))
 }
 
-func (w *Web) handleApp(rw http.ResponseWriter, r *http.Request) {
-	if !w.authorized(r) {
-		http.Error(rw, "not found", http.StatusNotFound)
+func (w *Web) handleTransferPage(rw http.ResponseWriter, r *http.Request) {
+	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
+	rw.Header().Set("Cache-Control", "no-store")
+	_, _ = rw.Write(mustAsset("assets/app.html"))
+}
+
+func (w *Web) handleSharePage(rw http.ResponseWriter, r *http.Request) {
+	tok := strings.TrimPrefix(r.URL.Path, "/s/")
+	if tok == "" || strings.Contains(tok, "/") {
+		http.NotFound(rw, r)
 		return
 	}
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	rw.Header().Set("Cache-Control", "no-store")
 	_, _ = rw.Write(mustAsset("assets/app.html"))
+}
+
+func (w *Web) handleTempCreate(rw http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(rw, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	ip := clientIP(r)
+	if !w.allow(ip+"|tempcreate", w.limits.CreateAttempts) {
+		http.Error(rw, "slow down", http.StatusTooManyRequests)
+		return
+	}
+	var body struct {
+		Name      string   `json:"name"`
+		Mode      string   `json:"mode"`
+		LAN       []string `json:"lan"`
+		TS        int64    `json:"ts"`
+		Pub       string   `json:"pub"`
+		Sig       string   `json:"sig"`
+		Room      string   `json:"room"`
+		HostToken string   `json:"host_token"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&body); err != nil {
+		http.Error(rw, "bad json", http.StatusBadRequest)
+		return
+	}
+	mode := strings.TrimSpace(body.Mode)
+	if mode == "" {
+		mode = "recv"
+	}
+	if mode != "send" && mode != "recv" && mode != "both" {
+		http.Error(rw, "invalid mode", http.StatusBadRequest)
+		return
+	}
+	now := time.Now()
+	if body.TS == 0 || now.Unix()-body.TS > 300 || body.TS-now.Unix() > 300 {
+		http.Error(rw, "stale timestamp", http.StatusForbidden)
+		return
+	}
+	pubBytes, err := hex.DecodeString(strings.TrimSpace(body.Pub))
+	if err != nil || len(pubBytes) != ed25519.PublicKeySize {
+		http.Error(rw, "invalid pubkey", http.StatusForbidden)
+		return
+	}
+	sigBytes, err := hex.DecodeString(strings.TrimSpace(body.Sig))
+	if err != nil || len(sigBytes) != ed25519.SignatureSize {
+		http.Error(rw, "invalid signature", http.StatusForbidden)
+		return
+	}
+	canonical := "ferry-temp-v1\n" + strconv.FormatInt(body.TS, 10) + "\n" + mode + "\n" + body.Name
+	if !ed25519.Verify(ed25519.PublicKey(pubBytes), []byte(canonical), sigBytes) {
+		http.Error(rw, "forbidden", http.StatusForbidden)
+		return
+	}
+	if len(body.LAN) > w.limits.MaxLANURLs {
+		body.LAN = body.LAN[:w.limits.MaxLANURLs]
+	}
+	for _, u := range body.LAN {
+		if !validLANURL(u) {
+			http.Error(rw, "invalid lan url", http.StatusBadRequest)
+			return
+		}
+	}
+
+	pubHex := hex.EncodeToString(pubBytes)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.gcLocked()
+
+	if body.Room != "" {
+		d := w.byRoom[body.Room]
+		if d == nil || subtle.ConstantTimeCompare([]byte(d.Token), []byte(body.HostToken)) != 1 {
+			http.Error(rw, "not found", http.StatusNotFound)
+			return
+		}
+		if strings.TrimSpace(body.Name) != "" {
+			d.Name = truncate(strings.TrimSpace(body.Name), 48)
+		}
+		d.LAN = body.LAN
+		d.LastSeen = now
+		d.Expires = now.Add(w.limits.DeviceTTL)
+		rw.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(rw).Encode(map[string]any{
+			"ok":          true,
+			"code":        d.Code,
+			"share_token": d.ShareToken,
+			"room":        d.Room,
+			"host_token":  d.Token,
+			"ttl_s":       int(w.limits.DeviceTTL / time.Second),
+		})
+		return
+	}
+
+	if len(w.byRoom) >= w.limits.MaxTotalRooms {
+		http.Error(rw, "server busy", http.StatusServiceUnavailable)
+		return
+	}
+	activeForPub := 0
+	for _, existing := range w.byRoom {
+		if existing.PubKey == pubHex && !now.After(existing.Expires) {
+			activeForPub++
+		}
+	}
+	if activeForPub >= w.limits.MaxRoomsPerPub {
+		http.Error(rw, "too many active temp sessions for this device", http.StatusTooManyRequests)
+		return
+	}
+
+	code := w.uniqueCodeLocked()
+	d := &webDevice{
+		Code:       code,
+		Name:       truncate(strings.TrimSpace(body.Name), 48),
+		Mode:       mode,
+		Room:       randomHex(8),
+		Token:      randomHex(16),
+		ShareToken: randomHex(16),
+		PubKey:     pubHex,
+		LAN:        body.LAN,
+		LastSeen:   now,
+		Expires:    now.Add(w.limits.DeviceTTL),
+	}
+	w.devices[code] = d
+	w.byRoom[d.Room] = d
+	w.byToken[d.ShareToken] = d
+
+	if w.log != nil {
+		w.log.Event("web.temp_create", map[string]any{"room": d.Room, "mode": d.Mode})
+	}
+	rw.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(rw).Encode(map[string]any{
+		"ok":          true,
+		"code":        d.Code,
+		"share_token": d.ShareToken,
+		"room":        d.Room,
+		"host_token":  d.Token,
+		"ttl_s":       int(w.limits.DeviceTTL / time.Second),
+	})
+}
+
+func (w *Web) handleTempResolve(rw http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(rw, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	tok := strings.TrimSpace(r.URL.Query().Get("token"))
+	code := strings.TrimSpace(r.URL.Query().Get("code"))
+	if tok == "" && code == "" {
+		http.Error(rw, "missing token or code", http.StatusBadRequest)
+		return
+	}
+	if code != "" {
+		ip := clientIP(r)
+		if !w.allow(ip+"|tempcode", w.limits.CodeAttempts) {
+			http.Error(rw, "slow down", http.StatusTooManyRequests)
+			return
+		}
+	}
+	w.mu.Lock()
+	w.gcLocked()
+	var d *webDevice
+	if tok != "" {
+		d = w.byToken[tok]
+	} else {
+		d = w.devices[code]
+	}
+	w.mu.Unlock()
+	if d == nil || time.Now().After(d.Expires) {
+		if code != "" {
+			time.Sleep(200 * time.Millisecond)
+		}
+		http.Error(rw, "not found", http.StatusNotFound)
+		return
+	}
+	mode := d.Mode
+	if mode == "" {
+		mode = "both"
+	}
+	rw.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(rw).Encode(map[string]any{
+		"ok":          true,
+		"name":        d.Name,
+		"mode":        mode,
+		"lan":         d.LAN,
+		"room":        d.Room,
+		"guest_token": d.ShareToken,
+		"ttl_s":       int(time.Until(d.Expires) / time.Second),
+		"relay":       true,
+		"version":     "1",
+	})
+}
+
+func (w *Web) handleTempClose(rw http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(rw, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Room      string `json:"room"`
+		HostToken string `json:"host_token"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body); err != nil {
+		http.Error(rw, "bad json", http.StatusBadRequest)
+		return
+	}
+	w.mu.Lock()
+	d := w.byRoom[body.Room]
+	if d == nil || subtle.ConstantTimeCompare([]byte(d.Token), []byte(body.HostToken)) != 1 {
+		w.mu.Unlock()
+		http.Error(rw, "forbidden", http.StatusForbidden)
+		return
+	}
+	delete(w.devices, d.Code)
+	delete(w.byRoom, d.Room)
+	if d.ShareToken != "" {
+		delete(w.byToken, d.ShareToken)
+	}
+	wr := w.rooms[d.Room]
+	delete(w.rooms, d.Room)
+	w.mu.Unlock()
+	if wr != nil {
+		wr.closeAll()
+	}
+	rw.Header().Set("Content-Type", "application/json")
+	_, _ = rw.Write([]byte(`{"ok":true}`))
 }
 
 func (w *Web) handleUnlock(rw http.ResponseWriter, r *http.Request) {
@@ -304,7 +564,9 @@ func (w *Web) handleWebSocket(rw http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "guest":
-		if !w.authorized(r) {
+		tok := r.URL.Query().Get("token")
+		okToken := d.ShareToken != "" && subtle.ConstantTimeCompare([]byte(tok), []byte(d.ShareToken)) == 1
+		if !okToken && !w.authorized(r) {
 			http.Error(rw, "forbidden", http.StatusForbidden)
 			return
 		}
@@ -396,6 +658,9 @@ func (w *Web) gcLocked() {
 		if now.After(d.Expires.Add(5 * time.Minute)) {
 			delete(w.devices, code)
 			delete(w.byRoom, d.Room)
+			if d.ShareToken != "" {
+				delete(w.byToken, d.ShareToken)
+			}
 			delete(w.rooms, d.Room)
 		}
 	}
@@ -404,6 +669,20 @@ func (w *Web) gcLocked() {
 			delete(w.limits4, k)
 		}
 	}
+}
+
+func (w *Web) uniqueCodeLocked() string {
+	for i := 0; i < 32; i++ {
+		n, err := rand.Int(rand.Reader, big.NewInt(900000))
+		if err != nil {
+			continue
+		}
+		code := fmt.Sprintf("%06d", n.Int64()+100000)
+		if _, exists := w.devices[code]; !exists {
+			return code
+		}
+	}
+	return fmt.Sprintf("%06d", time.Now().UnixNano()%900000+100000)
 }
 
 func mustAsset(name string) []byte {

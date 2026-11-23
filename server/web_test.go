@@ -3,10 +3,14 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -57,35 +61,99 @@ func doJSON(t *testing.T, method, url string, body any, ck *http.Cookie) (*http.
 	return resp, out
 }
 
-func TestWebDecoyHidesTransferUI(t *testing.T) {
-	w, hs := newWebTest(t)
+func TestWebPublicSiteAndTempRoutes(t *testing.T) {
+	_, hs := newWebTest(t)
 
 	resp, page := doJSON(t, "GET", hs.URL+"/", nil, nil)
 	if resp.StatusCode != 200 {
-		t.Fatalf("decoy status = %d", resp.StatusCode)
+		t.Fatalf("home status = %d", resp.StatusCode)
 	}
-	if !strings.Contains(string(page), "山径笔记") {
-		t.Fatalf("decoy page is not the disguise")
-	}
-	if strings.Contains(string(page), "传文件") {
-		t.Fatalf("decoy must not mention the transfer UI")
+	if !strings.Contains(string(page), "轻渡 Ferry") || !strings.Contains(string(page), "/transfer") {
+		t.Fatalf("home page missing brand or /transfer link")
 	}
 
-	if resp, _ := doJSON(t, "GET", hs.URL+"/app", nil, nil); resp.StatusCode != 404 {
-		t.Fatalf("app without cookie = %d, want 404", resp.StatusCode)
+	if resp, _ := doJSON(t, "GET", hs.URL+"/transfer", nil, nil); resp.StatusCode != 200 {
+		t.Fatalf("/transfer without cookie = %d, want 200", resp.StatusCode)
 	}
-	if resp, _ := doJSON(t, "GET", hs.URL+"/app", nil, cookieFor(w)); resp.StatusCode != 200 {
-		t.Fatalf("app with cookie = %d, want 200", resp.StatusCode)
+	if resp, _ := doJSON(t, "GET", hs.URL+"/s/abc123", nil, nil); resp.StatusCode != 200 {
+		t.Fatalf("/s/abc123 without cookie = %d, want 200", resp.StatusCode)
+	}
+	if resp, _ := doJSON(t, "GET", hs.URL+"/s/", nil, nil); resp.StatusCode != 404 {
+		t.Fatalf("/s/ empty token = %d, want 404", resp.StatusCode)
 	}
 
-	// The wrong password is rejected slowly enough to make guessing boring.
-	start := time.Now()
-	resp, _ = doJSON(t, "POST", hs.URL+"/api/unlock", map[string]string{"password": "nope"}, nil)
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("bad unlock = %d", resp.StatusCode)
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if el := time.Since(start); el < 300*time.Millisecond {
-		t.Fatalf("bad unlock returned in %s, want a deliberate delay", el)
+	ts := time.Now().Unix()
+	canonical := "ferry-temp-v1\n" + strconv.FormatInt(ts, 10) + "\nsend\nMyPhone"
+	sig := hex.EncodeToString(ed25519.Sign(priv, []byte(canonical)))
+
+	// Invalid signature must be rejected.
+	if resp, _ := doJSON(t, "POST", hs.URL+"/api/temp/create", map[string]any{
+		"name": "MyPhone", "mode": "send", "ts": ts,
+		"pub": hex.EncodeToString(pub), "sig": strings.Repeat("00", 64),
+	}, nil); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("bad sig = %d, want 403", resp.StatusCode)
+	}
+
+	resp, body := doJSON(t, "POST", hs.URL+"/api/temp/create", map[string]any{
+		"name": "MyPhone", "mode": "send", "lan": []string{"http://192.168.1.20:8080/tok/"},
+		"ts": ts, "pub": hex.EncodeToString(pub), "sig": sig,
+	}, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("temp create = %d %s", resp.StatusCode, body)
+	}
+	var created struct {
+		Code       string `json:"code"`
+		ShareToken string `json:"share_token"`
+		Room       string `json:"room"`
+		HostToken  string `json:"host_token"`
+	}
+	if err := json.Unmarshal(body, &created); err != nil || len(created.Code) != 6 || created.ShareToken == "" {
+		t.Fatalf("create body = %s", body)
+	}
+
+	// Resolve by share token and by 6-digit code without cookie.
+	resp, rbody := doJSON(t, "GET", hs.URL+"/api/temp/resolve?token="+created.ShareToken, nil, nil)
+	if resp.StatusCode != 200 || !strings.Contains(string(rbody), created.Room) {
+		t.Fatalf("resolve token = %d %s", resp.StatusCode, rbody)
+	}
+	resp, rbody = doJSON(t, "GET", hs.URL+"/api/temp/resolve?code="+created.Code, nil, nil)
+	if resp.StatusCode != 200 || !strings.Contains(string(rbody), created.ShareToken) {
+		t.Fatalf("resolve code = %d %s", resp.StatusCode, rbody)
+	}
+
+	// Guest WebSocket authorized by ?token=ShareToken (no cookie needed).
+	wsURL := strings.Replace(hs.URL, "http://", "ws://", 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	hostWS, _, err := websocket.Dial(ctx, wsURL+"/web/"+created.Room+"?role=host&token="+created.HostToken, nil)
+	if err != nil {
+		t.Fatalf("host ws dial: %v", err)
+	}
+	defer hostWS.Close(websocket.StatusNormalClosure, "")
+	guestWS, _, err := websocket.Dial(ctx, wsURL+"/web/"+created.Room+"?role=guest&token="+created.ShareToken, nil)
+	if err != nil {
+		t.Fatalf("guest ws dial: %v", err)
+	}
+	defer guestWS.Close(websocket.StatusNormalClosure, "")
+	if err := hostWS.Write(ctx, websocket.MessageText, []byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	if _, got, err := guestWS.Read(ctx); err != nil || string(got) != "ping" {
+		t.Fatalf("guest read = %q %v", got, err)
+	}
+
+	// Close room invalidates resolve.
+	if resp, _ := doJSON(t, "POST", hs.URL+"/api/temp/close", map[string]string{
+		"room": created.Room, "host_token": created.HostToken,
+	}, nil); resp.StatusCode != 200 {
+		t.Fatalf("temp close = %d", resp.StatusCode)
+	}
+	if resp, _ := doJSON(t, "GET", hs.URL+"/api/temp/resolve?token="+created.ShareToken, nil, nil); resp.StatusCode != 404 {
+		t.Fatalf("resolve after close = %d, want 404", resp.StatusCode)
 	}
 }
 
