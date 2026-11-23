@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -172,8 +173,21 @@ func (r *receiver) handle(ctx context.Context, nc net.Conn) {
 		return
 	}
 	defer s.Close()
+	peerName := pairing.SanitizeName(s.Peer.Name)
+	if peerName == "" {
+		peerName = "局域网设备"
+	}
+	txSeq := beginActiveTransfer("recv", peerName, "", 0, 0)
+	defer endActiveTransfer(txSeq)
+	updateActiveTransfer(txSeq, "transferring", "lan", "", "", 0, 0, -1, 0)
+
 	r.logger.Event("session.ready", map[string]any{"peer": s.Peer.Name, "path": "lan"})
-	res, err := transfer.Receive(s, r.outDir, transfer.Config{Log: r.logger})
+	res, err := transfer.Receive(s, r.outDir, transfer.Config{
+		Log: r.logger,
+		OnDetailProgress: func(snap transfer.ProgressSnapshot) {
+			updateActiveTransfer(txSeq, snap.Stage, "lan", "", snap.FileName, snap.FileIndex, snap.FileCount, snap.BytesDone, snap.BytesTotal)
+		},
+	})
 	if err != nil {
 		r.logger.Event("transfer.error", map[string]any{"error": err.Error()})
 		return
@@ -250,6 +264,15 @@ func SendFiles(peerAddr, name, pathsJSON string) (string, error) {
 		res.Error = "peerAddr and at least one path are required"
 		return marshalSummary(res), fmt.Errorf("%s", res.Error)
 	}
+	var totalBytes int64
+	for _, p := range paths {
+		if st, serr := os.Stat(p); serr == nil {
+			totalBytes += st.Size()
+		}
+	}
+	txSeq := beginActiveTransfer("send", peerAddr, filepath.Base(paths[0]), len(paths), totalBytes)
+	defer endActiveTransfer(txSeq)
+
 	d := pathmgr.NewTCPDial(peerAddr)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -269,7 +292,12 @@ func SendFiles(peerAddr, name, pathsJSON string) (string, error) {
 		return marshalSummary(res), err
 	}
 	defer s.Close()
-	out, err := transfer.Send(s, paths, transfer.Config{})
+	updateActiveTransfer(txSeq, "transferring", "lan", pairing.SanitizeName(s.Peer.Name), "", 0, 0, -1, 0)
+	out, err := transfer.Send(s, paths, transfer.Config{
+		OnDetailProgress: func(snap transfer.ProgressSnapshot) {
+			updateActiveTransfer(txSeq, snap.Stage, "lan", "", snap.FileName, snap.FileIndex, snap.FileCount, snap.BytesDone, snap.BytesTotal)
+		},
+	})
 	if err != nil {
 		res.Error = err.Error()
 		return marshalSummary(res), err

@@ -105,6 +105,15 @@ func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error)
 	if len(files) == 0 {
 		return client.Result{}, fmt.Errorf("所选文件夹内没有可发送的文件")
 	}
+	var totalBytes int64
+	for _, fp := range files {
+		if st, serr := os.Stat(fp); serr == nil {
+			totalBytes += st.Size()
+		}
+	}
+	txID := a.beginTransfer("send", peerLabel(peer), filepath.Base(files[0]), len(files), totalBytes)
+	defer a.endTransfer(txID)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	res, err := client.SendFiles(ctx, client.Options{
@@ -112,6 +121,13 @@ func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error)
 		KeyPath:    a.keyPath,
 		PairedPath: a.pairedPath,
 		Name:       a.deviceName(),
+		OnStatus: func(st client.Status) {
+			ch := ""
+			if st.Channel == "relay" {
+				ch = "中继"
+			}
+			a.updateTransfer(txID, st.Stage, ch, "", st.FileName, st.FileIndex, st.FileCount, st.BytesDone, st.BytesTotal)
+		},
 	}, peer.ID, files)
 	if err != nil {
 		a.event("desktop.send_error", map[string]any{"to": truncID(peer.ID), "error": err.Error()})
@@ -120,6 +136,7 @@ func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error)
 	}
 	if res.PeerName != "" && res.PeerName != peer.Name {
 		peer.Name = res.PeerName
+		a.updateTransfer(txID, "", "", res.PeerName, "", 0, 0, -1, 0)
 		if thePanel != nil {
 			thePanel.reloadPeers()
 		}

@@ -142,6 +142,36 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 	cur := startIdx
 	var received int64
 	chunks := 0
+	batchTotal := int64(totalSize(m.Files))
+	var totalWritten int64
+	for i := range files {
+		totalWritten += int64(files[i].written)
+	}
+	emitProgress := func(stage string, idx int) {
+		if cfg.OnDetailProgress == nil {
+			return
+		}
+		fname := ""
+		fileIdx := 0
+		if len(files) > 0 {
+			if idx < 0 {
+				idx = 0
+			} else if idx >= len(files) {
+				idx = len(files) - 1
+			}
+			fileIdx = idx + 1
+			fname = files[idx].entry.Name
+		}
+		cfg.OnDetailProgress(ProgressSnapshot{
+			Stage:      stage,
+			FileIndex:  fileIdx,
+			FileCount:  len(files),
+			FileName:   fname,
+			BytesDone:  totalWritten,
+			BytesTotal: batchTotal,
+		})
+	}
+	emitProgress("transferring", cur)
 
 	for {
 		frame, err := s.Recv(cfg.timeout())
@@ -210,6 +240,7 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 				_, _ = rf.h.Write(d.Data)
 				rf.written = end
 				received += int64(len(d.Data))
+				totalWritten += int64(len(d.Data))
 				chunks++
 			case end == rf.written:
 				// Duplicate chunk (our ACK was lost); ACK again.
@@ -224,6 +255,7 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 			}); err != nil {
 				return nil, err
 			}
+			emitProgress("transferring", cur)
 
 		case proto.TypeFin:
 			fin, err := proto.ParseFin(frame.Payload)
@@ -231,6 +263,8 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 				_ = s.SendError(proto.CodePayloadInvalid, "malformed FIN")
 				return nil, err
 			}
+			totalWritten = batchTotal
+			emitProgress("verifying", len(files)-1)
 			for cur < len(files) && files[cur].written == files[cur].entry.Size {
 				if err := files[cur].finish(); err != nil {
 					return nil, err

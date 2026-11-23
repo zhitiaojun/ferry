@@ -419,3 +419,76 @@ func TestDisconnectMidTransfer(t *testing.T) {
 		t.Fatalf("partial file should remain for resume: %v", err)
 	}
 }
+
+func TestDetailProgressSendAndReceive(t *testing.T) {
+	srcDir := t.TempDir()
+	outDir := t.TempDir()
+	f1 := filepath.Join(srcDir, "one.bin")
+	f2 := filepath.Join(srcDir, "two.bin")
+	writePattern(t, f1, 70*1024)
+	writePattern(t, f2, 40*1024)
+	wantTotal := int64(110 * 1024)
+
+	sa, sb := sessionPair(t)
+	var sendSnaps, recvSnaps []ProgressSnapshot
+
+	recvCh := make(chan error, 1)
+	go func() {
+		_, err := Receive(sb, outDir, Config{
+			ChunkSize: 32 * 1024,
+			Timeout:   10 * time.Second,
+			OnDetailProgress: func(s ProgressSnapshot) {
+				recvSnaps = append(recvSnaps, s)
+			},
+		})
+		recvCh <- err
+	}()
+
+	_, err := Send(sa, []string{f1, f2}, Config{
+		ChunkSize: 32 * 1024,
+		Timeout:   10 * time.Second,
+		OnDetailProgress: func(s ProgressSnapshot) {
+			sendSnaps = append(sendSnaps, s)
+		},
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if rerr := <-recvCh; rerr != nil {
+		t.Fatalf("Receive: %v", rerr)
+	}
+
+	checkSnaps := func(side string, snaps []ProgressSnapshot) {
+		t.Helper()
+		if len(snaps) < 3 {
+			t.Fatalf("%s too few snapshots: %d", side, len(snaps))
+		}
+		var prev int64 = -1
+		sawTransferring := false
+		sawVerifying := false
+		for _, s := range snaps {
+			if s.BytesTotal != wantTotal {
+				t.Fatalf("%s BytesTotal = %d, want %d", side, s.BytesTotal, wantTotal)
+			}
+			if s.BytesDone < prev || s.BytesDone > wantTotal {
+				t.Fatalf("%s non-monotonic BytesDone: prev=%d cur=%d", side, prev, s.BytesDone)
+			}
+			prev = s.BytesDone
+			if s.FileCount != 2 || s.FileIndex < 1 || s.FileIndex > 2 {
+				t.Fatalf("%s invalid file counts: %+v", side, s)
+			}
+			if s.Stage == "transferring" {
+				sawTransferring = true
+			}
+			if s.Stage == "verifying" {
+				sawVerifying = true
+			}
+		}
+		last := snaps[len(snaps)-1]
+		if !sawTransferring || !sawVerifying || last.BytesDone != wantTotal {
+			t.Fatalf("%s missing stage or incomplete final: trans=%v verify=%v last=%+v", side, sawTransferring, sawVerifying, last)
+		}
+	}
+	checkSnaps("send", sendSnaps)
+	checkSnaps("recv", recvSnaps)
+}

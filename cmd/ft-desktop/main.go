@@ -203,6 +203,21 @@ func parsePos(s string) (*[2]int32, error) {
 	return &[2]int32{x, y}, nil
 }
 
+// activeTransfer tracks the currently running send or receive session for live UI progress.
+type activeTransfer struct {
+	id         uint64
+	dir        string // "send" | "recv"
+	peer       string
+	stage      string // "connecting" | "waiting" | "transferring" | "verifying"
+	channel    string // "" | "LAN" | "打洞" | "中继"
+	fileName   string
+	fileIndex  int
+	fileCount  int
+	bytesDone  int64
+	bytesTotal int64
+	startedAt  time.Time
+}
+
 // app holds state shared by tray and drop modes.
 type app struct {
 	dir          string
@@ -215,8 +230,118 @@ type app struct {
 	logOut       *os.File
 	showMain     bool
 
-	mu     sync.Mutex
-	recent []string
+	mu        sync.Mutex
+	recent    []string
+	txSeq     uint64
+	tx        *activeTransfer
+	lastPaint time.Time
+}
+
+func (a *app) beginTransfer(dir, peer, fileName string, fileCount int, total int64) uint64 {
+	if a == nil {
+		return 0
+	}
+	a.mu.Lock()
+	a.txSeq++
+	id := a.txSeq
+	a.tx = &activeTransfer{
+		id:         id,
+		dir:        dir,
+		peer:       peer,
+		stage:      "connecting",
+		fileName:   fileName,
+		fileIndex:  1,
+		fileCount:  fileCount,
+		bytesTotal: total,
+		startedAt:  time.Now(),
+	}
+	a.lastPaint = time.Now()
+	a.mu.Unlock()
+	if h := existingMainWindow(); h != 0 {
+		procPostMessageW.Call(uintptr(h), wmAppPaint, 0, 0)
+	}
+	return id
+}
+
+func (a *app) updateTransfer(id uint64, stage, channel, peer, fileName string, fileIdx, fileCnt int, done, total int64) {
+	if a == nil || id == 0 {
+		return
+	}
+	now := time.Now()
+	a.mu.Lock()
+	if a.tx == nil || a.tx.id != id {
+		a.mu.Unlock()
+		return
+	}
+	changedMajor := false
+	if stage != "" && stage != a.tx.stage {
+		a.tx.stage = stage
+		changedMajor = true
+	}
+	if channel != "" && channel != a.tx.channel {
+		a.tx.channel = channel
+		changedMajor = true
+	}
+	if peer != "" && peer != a.tx.peer {
+		a.tx.peer = peer
+		changedMajor = true
+	}
+	if fileName != "" {
+		a.tx.fileName = fileName
+	}
+	if fileIdx > 0 {
+		a.tx.fileIndex = fileIdx
+	}
+	if fileCnt > 0 {
+		a.tx.fileCount = fileCnt
+	}
+	if done >= 0 {
+		a.tx.bytesDone = done
+	}
+	if total > 0 {
+		a.tx.bytesTotal = total
+	}
+	shouldPaint := changedMajor || now.Sub(a.lastPaint) >= 80*time.Millisecond
+	if shouldPaint {
+		a.lastPaint = now
+	}
+	a.mu.Unlock()
+	if shouldPaint {
+		if h := existingMainWindow(); h != 0 {
+			procPostMessageW.Call(uintptr(h), wmAppPaint, 0, 0)
+		}
+	}
+}
+
+func (a *app) endTransfer(id uint64) {
+	if a == nil || id == 0 {
+		return
+	}
+	a.mu.Lock()
+	cleared := false
+	if a.tx != nil && a.tx.id == id {
+		a.tx = nil
+		cleared = true
+	}
+	a.mu.Unlock()
+	if cleared {
+		if h := existingMainWindow(); h != 0 {
+			procPostMessageW.Call(uintptr(h), wmAppPaint, 0, 0)
+		}
+	}
+}
+
+func (a *app) currentTransfer() *activeTransfer {
+	if a == nil {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.tx == nil {
+		return nil
+	}
+	cp := *a.tx
+	return &cp
 }
 
 // deviceID returns the short id of this device, or "" when the key is not

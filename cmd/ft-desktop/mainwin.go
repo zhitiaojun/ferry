@@ -11,10 +11,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/cwlindean/filetransfer/core/client"
 	"github.com/cwlindean/filetransfer/core/identity"
+	"github.com/cwlindean/filetransfer/core/pairing"
 )
 
 const (
@@ -87,6 +89,8 @@ const (
 	hoverLedgerRow
 	hoverDevAddBtn
 	hoverDevSendBtn
+	hoverDevRenameBtn
+	hoverDevDeleteBtn
 	hoverSetRecv
 	hoverSetResetDir
 	hoverSetChangeDir
@@ -279,10 +283,13 @@ type mainWin struct {
 	fltSendR    rectT
 	fltRecvR    rectT
 	openDirR    rectT
+	activeTxR   rectT
 	ledgerRowsR []rectT
 
-	devAddBtnR   rectT
-	devSendBtnsR []rectT
+	devAddBtnR     rectT
+	devSendBtnsR   []rectT
+	devRenameBtnsR []rectT
+	devDeleteBtnsR []rectT
 
 	setRecvBtnR   rectT
 	setResetDirR  rectT
@@ -758,10 +765,12 @@ func (w *mainWin) layout(cw, ch int32) {
 	// Reset page-specific rects
 	w.tileFilesR, w.tileFolderR, w.queueBoxR, w.queueClearR = rectT{}, rectT{}, rectT{}, rectT{}
 	w.addDevLinkR, w.peerPickerR, w.sendBtnR, w.sendTextR, w.sendClipR = rectT{}, rectT{}, rectT{}, rectT{}, rectT{}
-	w.fltAllR, w.fltSendR, w.fltRecvR, w.openDirR = rectT{}, rectT{}, rectT{}, rectT{}
+	w.fltAllR, w.fltSendR, w.fltRecvR, w.openDirR, w.activeTxR = rectT{}, rectT{}, rectT{}, rectT{}, rectT{}
 	w.ledgerRowsR = w.ledgerRowsR[:0]
 	w.devAddBtnR = rectT{}
 	w.devSendBtnsR = w.devSendBtnsR[:0]
+	w.devRenameBtnsR = w.devRenameBtnsR[:0]
+	w.devDeleteBtnsR = w.devDeleteBtnsR[:0]
 	w.setRecvBtnR, w.setResetDirR, w.setChangeDirR, w.setOpenDirR, w.setAutoBtnR, w.setRenameBtnR, w.setCopyIDRowR = rectT{}, rectT{}, rectT{}, rectT{}, rectT{}, rectT{}, rectT{}
 
 	switch w.page {
@@ -819,6 +828,10 @@ func (w *mainWin) layout(cw, ch int32) {
 		w.openDirR = rectT{paneR - p(104), tabY, paneR, tabY + p(28)}
 
 		ry := w.fltAllR.bottom + p(8)
+		if w.app != nil && w.app.currentTransfer() != nil {
+			w.activeTxR = rectT{paneL, ry, paneR, ry + p(92)}
+			ry = w.activeTxR.bottom + p(10)
+		}
 		rowH := p(54)
 		for range w.filteredLedger() {
 			if ry+rowH > ch-p(36) {
@@ -833,12 +846,20 @@ func (w *mainWin) layout(cw, ch int32) {
 		paneR := cw - pad
 		w.devAddBtnR = rectT{paneR - p(96), topH + p(24), paneR, topH + p(58)}
 		y := topH + p(94)
-		rowH := p(58)
+		rowH := p(62)
+		btnGap := p(8)
 		for range w.peers {
-			if y+rowH > ch-pad {
+			if y+rowH > ch-p(36) {
 				break
 			}
-			w.devSendBtnsR = append(w.devSendBtnsR, rectT{paneR - p(88), y + p(13), paneR - p(16), y + rowH - p(13)})
+			topB := y + p(15)
+			botB := y + rowH - p(15)
+			delR := rectT{paneR - p(70), topB, paneR - p(16), botB}
+			renR := rectT{delR.left - btnGap - p(62), topB, delR.left - btnGap, botB}
+			sendR := rectT{renR.left - btnGap - p(74), topB, renR.left - btnGap, botB}
+			w.devDeleteBtnsR = append(w.devDeleteBtnsR, delR)
+			w.devRenameBtnsR = append(w.devRenameBtnsR, renR)
+			w.devSendBtnsR = append(w.devSendBtnsR, sendR)
 			y += rowH
 		}
 
@@ -1236,8 +1257,12 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 	}
 	cv.drawAlphaText(w.fontSm, "打开接收文件夹", w.openDirR, dtRight|dtSingleLine|dtVCenter, openClr)
 
+	if tx := w.app.currentTransfer(); tx != nil && w.activeTxR.bottom > w.activeTxR.top {
+		w.drawActiveTransferCard(cv, w.activeTxR, tx)
+	}
+
 	rows := w.filteredLedger()
-	if len(rows) == 0 {
+	if len(rows) == 0 && w.app.currentTransfer() == nil {
 		midY := (w.fltAllR.bottom + cr.bottom) / 2
 		cv.drawAlphaText(w.fontBold, "还没有传输记录", rectT{paneL, midY - p(24), paneR, midY},
 			dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
@@ -1249,7 +1274,8 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 				break
 			}
 			r := rows[i]
-			if w.hover == hoverLedgerRow && w.hoverIdx == i {
+			hovered := w.hover == hoverLedgerRow && w.hoverIdx == i
+			if hovered {
 				cv.fillColorAlpha(rr, w.pal.paper2, w.surfaceAlpha(190))
 			}
 			title := r.files
@@ -1264,26 +1290,39 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 			if r.size != "" {
 				subParts = append(subParts, r.size)
 			}
+			if r.dur != "" {
+				subParts = append(subParts, r.dur)
+			}
 			if r.time != "" {
 				subParts = append(subParts, r.time)
 			}
-			if r.path == "失败" {
-				subParts = append(subParts, "失败")
-			}
 			sub := strings.Join(subParts, " · ")
 
-			rightActionW := p(72)
+			rightLimit := rr.right - p(4)
+			if hovered {
+				openW := p(66)
+				cv.drawAlphaText(w.fontSm, "打开位置",
+					rectT{rr.right - openW, rr.top, rr.right - p(4), rr.bottom},
+					dtRight|dtSingleLine|dtVCenter, w.pal.accent)
+				rightLimit = rr.right - openW - p(6)
+			}
+			if chLabel, chBg, chFg := channelDisplayLabel(r.path, w.pal, w.dark); chLabel != "" {
+				badgeW := textWidth(cv.memDC, w.fontSm, chLabel) + p(16)
+				if badgeW < p(54) {
+					badgeW = p(54)
+				}
+				badgeR := rectT{rightLimit - badgeW, rr.top + p(15), rightLimit, rr.bottom - p(15)}
+				cv.drawAlphaRoundRect(badgeR, float64(p(11)), chBg, w.surfaceAlpha(235), 0, 0, 0)
+				cv.drawAlphaText(w.fontSm, chLabel, badgeR, dtCenter|dtSingleLine|dtVCenter, chFg)
+				rightLimit = badgeR.left - p(10)
+			}
+
 			cv.drawAlphaText(w.fontBold, title,
-				rectT{rr.left + p(4), rr.top + p(6), rr.right - rightActionW, rr.top + p(28)},
+				rectT{rr.left + p(4), rr.top + p(6), rightLimit, rr.top + p(28)},
 				dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink)
 			cv.drawAlphaText(w.fontSm, sub,
-				rectT{rr.left + p(4), rr.top + p(28), rr.right - rightActionW, rr.bottom - p(6)},
+				rectT{rr.left + p(4), rr.top + p(28), rightLimit, rr.bottom - p(6)},
 				dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
-			if w.hover == hoverLedgerRow && w.hoverIdx == i {
-				cv.drawAlphaText(w.fontSm, "打开位置",
-					rectT{rr.right - rightActionW, rr.top, rr.right - p(4), rr.bottom},
-					dtRight|dtSingleLine|dtVCenter, w.pal.accent)
-			}
 			cv.fillColorAlpha(rectT{rr.left, rr.bottom - 1, rr.right, rr.bottom}, w.pal.lineSoft, w.surfaceAlpha(175))
 		}
 	}
@@ -1293,6 +1332,169 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 			rectT{paneL, cr.bottom - p(32), paneR, cr.bottom - p(8)},
 			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
 	}
+}
+
+func (w *mainWin) drawActiveTransferCard(cv *glassCanvas, r rectT, tx *activeTransfer) {
+	p := w.px
+	cv.drawAlphaRoundRect(r, float64(p(12)), w.pal.paper, w.surfaceAlpha(215), w.pal.accent, w.surfaceAlpha(160), 1.0)
+
+	inL := r.left + p(14)
+	inR := r.right - p(14)
+
+	dirVerb := "正在发往 "
+	if tx.dir == "recv" {
+		dirVerb = "正在接收来自 "
+	}
+	stageTxt := stageDisplayLabel(tx.stage)
+	headTxt := dirVerb + dashIfEmpty(tx.peer) + " · " + stageTxt
+
+	chLabel, chBg, chFg := channelDisplayLabel(tx.channel, w.pal, w.dark)
+	if chLabel == "" {
+		chLabel = "协商通道"
+		chBg = w.pal.paper3
+		chFg = w.pal.ink2
+	}
+	badgeW := textWidth(cv.memDC, w.fontSm, chLabel) + p(16)
+	if badgeW < p(56) {
+		badgeW = p(56)
+	}
+	badgeR := rectT{inR - badgeW, r.top + p(11), inR, r.top + p(33)}
+	cv.drawAlphaRoundRect(badgeR, float64(p(11)), chBg, w.surfaceAlpha(240), 0, 0, 0)
+	cv.drawAlphaText(w.fontSm, chLabel, badgeR, dtCenter|dtSingleLine|dtVCenter, chFg)
+
+	pctTxt := ""
+	pctRatio := 0.0
+	if tx.bytesTotal > 0 {
+		if tx.bytesDone >= tx.bytesTotal {
+			pctRatio = 1.0
+		} else if tx.bytesDone > 0 {
+			pctRatio = float64(tx.bytesDone) / float64(tx.bytesTotal)
+		}
+		pctTxt = fmt.Sprintf("%d%%", int(pctRatio*100+0.5))
+	}
+	pctW := p(42)
+	if pctTxt != "" {
+		cv.drawAlphaText(w.fontBold, pctTxt,
+			rectT{badgeR.left - p(6) - pctW, r.top + p(10), badgeR.left - p(6), r.top + p(34)},
+			dtRight|dtSingleLine|dtVCenter, w.pal.accent)
+	} else {
+		pctW = 0
+	}
+	cv.drawAlphaText(w.fontBold, headTxt,
+		rectT{inL, r.top + p(10), badgeR.left - p(12) - pctW, r.top + p(34)},
+		dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink)
+
+	// Progress track + fill
+	barR := rectT{inL, r.top + p(42), inR, r.top + p(48)}
+	cv.drawAlphaRoundRect(barR, float64(p(3)), w.pal.paper3, w.surfaceAlpha(235), 0, 0, 0)
+	fillW := int32(float64(barR.right-barR.left) * pctRatio)
+	if tx.bytesTotal == 0 && (tx.stage == "connecting" || tx.stage == "waiting" || tx.stage == "transferring") {
+		fillW = (barR.right - barR.left) * 28 / 100
+	}
+	if fillW > 0 {
+		if fillW < p(6) {
+			fillW = p(6)
+		}
+		if barR.left+fillW > barR.right {
+			fillW = barR.right - barR.left
+		}
+		cv.drawAlphaRoundRect(rectT{barR.left, barR.top, barR.left + fillW, barR.bottom}, float64(p(3)), w.pal.accent, 255, 0, 0, 0)
+	}
+
+	// Bottom file + bytes + elapsed/ETA metadata
+	fileInfo := tx.fileName
+	if tx.fileCount > 1 && tx.fileIndex > 0 {
+		fileInfo = fmt.Sprintf("第 %d/%d 个 · %s", tx.fileIndex, tx.fileCount, tx.fileName)
+	}
+	if fileInfo == "" {
+		fileInfo = "准备文件信息…"
+	}
+	rightInfo := formatTransferMetrics(tx.startedAt, tx.bytesDone, tx.bytesTotal)
+	rw := textWidth(cv.memDC, w.fontSm, rightInfo) + p(8)
+	if rw > (inR-inL)/2 {
+		rw = (inR - inL) / 2
+	}
+	cv.drawAlphaText(w.fontSm, fileInfo, rectT{inL, r.top + p(58), inR - rw - p(8), r.bottom - p(10)},
+		dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
+	cv.drawAlphaText(w.fontSm, rightInfo, rectT{inR - rw, r.top + p(58), inR, r.bottom - p(10)},
+		dtRight|dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
+}
+
+func stageDisplayLabel(stage string) string {
+	switch stage {
+	case "connecting":
+		return "连接中"
+	case "waiting":
+		return "等待接收方"
+	case "racing":
+		return "协商直连路径"
+	case "transferring":
+		return "传输中"
+	case "verifying":
+		return "校验写入中"
+	default:
+		return "传输中"
+	}
+}
+
+func channelDisplayLabel(ch string, pal palette, dark bool) (string, uint32, uint32) {
+	switch strings.ToLower(strings.TrimSpace(ch)) {
+	case "lan", "lan 直连":
+		return "LAN 直连", pal.accentSoft, pal.accent
+	case "打洞", "punch", "udp 打洞":
+		if dark {
+			return "UDP 打洞", col(0x45, 0x1A, 0x03), pal.amber
+		}
+		return "UDP 打洞", col(0xFE, 0xF3, 0xC7), pal.amber
+	case "中继", "relay", "服务器中继":
+		return "服务器中继", pal.paper3, pal.ink2
+	case "失败", "failed", "error":
+		if dark {
+			return "失败", col(0x7F, 0x1D, 0x1D), pal.danger
+		}
+		return "失败", col(0xFE, 0xE2, 0xE2), pal.danger
+	default:
+		return "", 0, 0
+	}
+}
+
+func formatTransferMetrics(startedAt time.Time, done, total int64) string {
+	var parts []string
+	if total > 0 {
+		parts = append(parts, humanBytes(done)+" / "+humanBytes(total))
+	} else if done > 0 {
+		parts = append(parts, humanBytes(done))
+	}
+	if !startedAt.IsZero() {
+		elapsed := time.Since(startedAt)
+		if elapsed < time.Second {
+			elapsed = time.Second
+		}
+		parts = append(parts, fmt.Sprintf("已用 %ds", int(elapsed.Seconds())))
+		if eta := formatETA(elapsed, done, total); eta != "" {
+			parts = append(parts, eta)
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
+func formatETA(elapsed time.Duration, done, total int64) string {
+	if total <= 0 || done <= 0 || done >= total || elapsed < time.Second {
+		return ""
+	}
+	sec := elapsed.Seconds()
+	rate := float64(done) / sec
+	if rate <= 0 {
+		return ""
+	}
+	remSec := int(float64(total-done)/rate + 0.5)
+	if remSec < 1 {
+		remSec = 1
+	}
+	if remSec >= 60 {
+		return fmt.Sprintf("剩余约 %dm%ds", remSec/60, remSec%60)
+	}
+	return fmt.Sprintf("剩余约 %ds", remSec)
 }
 
 func (w *mainWin) drawFolderGlyph(cv *glassCanvas, r rectT, color uint32) {
@@ -1344,7 +1546,7 @@ func (w *mainWin) drawDevices(cv *glassCanvas, cr rectT) {
 		return
 	}
 
-	rowH := p(58)
+	rowH := p(62)
 	top := topH + p(94)
 	box := rectT{paneL, top, paneR, top + int32(len(w.devSendBtnsR))*rowH}
 	cv.drawAlphaRoundRect(box, float64(p(12)), w.pal.paper, w.surfaceAlpha(195), w.pal.line, w.surfaceAlpha(200), 1.0)
@@ -1352,10 +1554,10 @@ func (w *mainWin) drawDevices(cv *glassCanvas, cr rectT) {
 		ry := top + int32(i)*rowH
 		peer := w.peers[i]
 		cv.drawAlphaText(w.fontBold, peerLabel(peer),
-			rectT{paneL + p(16), ry + p(8), br.left - p(12), ry + p(30)},
+			rectT{paneL + p(16), ry + p(9), br.left - p(12), ry + p(31)},
 			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink)
 		cv.drawAlphaText(w.fontSm, "设备 ID "+truncID(peer.ID),
-			rectT{paneL + p(16), ry + p(30), br.left - p(12), ry + p(50)},
+			rectT{paneL + p(16), ry + p(31), br.left - p(12), ry + p(52)},
 			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
 
 		bFill := w.pal.paper2
@@ -1364,9 +1566,37 @@ func (w *mainWin) drawDevices(cv *glassCanvas, cr rectT) {
 		}
 		cv.drawAlphaRoundRect(br, float64(p(6)), bFill, w.surfaceAlpha(210), w.pal.line, w.surfaceAlpha(200), 1.0)
 		cv.drawAlphaText(w.fontSm, "发送文件", br, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
+
+		if i < len(w.devRenameBtnsR) {
+			rr := w.devRenameBtnsR[i]
+			rFill := w.pal.paper2
+			if w.hover == hoverDevRenameBtn && w.hoverIdx == i {
+				rFill = w.pal.paper3
+			}
+			cv.drawAlphaRoundRect(rr, float64(p(6)), rFill, w.surfaceAlpha(210), w.pal.line, w.surfaceAlpha(200), 1.0)
+			cv.drawAlphaText(w.fontSm, "重命名", rr, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
+		}
+		if i < len(w.devDeleteBtnsR) {
+			dr := w.devDeleteBtnsR[i]
+			dFill := w.pal.paper2
+			dEdge := w.pal.line
+			dFg := w.pal.danger
+			if w.hover == hoverDevDeleteBtn && w.hoverIdx == i {
+				dFill = w.pal.danger
+				dEdge = w.pal.danger
+				dFg = w.pal.accentInk
+			}
+			cv.drawAlphaRoundRect(dr, float64(p(6)), dFill, w.surfaceAlpha(220), dEdge, w.surfaceAlpha(220), 1.0)
+			cv.drawAlphaText(w.fontSm, "删除", dr, dtCenter|dtSingleLine|dtVCenter, dFg)
+		}
 		if i+1 < len(w.devSendBtnsR) {
 			cv.fillColorAlpha(rectT{paneL + p(16), ry + rowH - 1, paneR - p(16), ry + rowH}, w.pal.lineSoft, w.surfaceAlpha(175))
 		}
+	}
+	if w.status != "" {
+		cv.drawAlphaText(w.fontSm, w.status,
+			rectT{paneL, cr.bottom - p(32), paneR, cr.bottom - p(8)},
+			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
 	}
 }
 
@@ -1618,7 +1848,7 @@ func isDurationToken(s string) bool {
 
 func isPathToken(s string) bool {
 	switch strings.ToLower(s) {
-	case "lan", "打洞", "punch", "中继", "relay", "失败", "failed", "error", "未配对":
+	case "lan", "lan 直连", "打洞", "punch", "udp 打洞", "中继", "relay", "服务器中继", "失败", "failed", "error", "未配对":
 		return true
 	}
 	return false
@@ -1708,6 +1938,22 @@ func (w *mainWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
 				if ptIn(br, x, y) {
 					kind, idx = hoverDevSendBtn, i
 					break
+				}
+			}
+			if kind == hoverNone {
+				for i, rr := range w.devRenameBtnsR {
+					if ptIn(rr, x, y) {
+						kind, idx = hoverDevRenameBtn, i
+						break
+					}
+				}
+			}
+			if kind == hoverNone {
+				for i, dr := range w.devDeleteBtnsR {
+					if ptIn(dr, x, y) {
+						kind, idx = hoverDevDeleteBtn, i
+						break
+					}
 				}
 			}
 		}
@@ -1852,6 +2098,18 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 				return
 			}
 		}
+		for i, rr := range w.devRenameBtnsR {
+			if ptIn(rr, x, y) && i < len(w.peers) {
+				w.openPeerRenameDialog(hwnd, w.peers[i])
+				return
+			}
+		}
+		for i, dr := range w.devDeleteBtnsR {
+			if ptIn(dr, x, y) && i < len(w.peers) {
+				w.removeSavedPeer(hwnd, w.peers[i])
+				return
+			}
+		}
 
 	case pageSettings:
 		switch {
@@ -1987,6 +2245,63 @@ func (w *mainWin) openRenameDialog(hwnd syscall.Handle) {
 			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 		},
 	})
+}
+
+func (w *mainWin) openPeerRenameDialog(hwnd syscall.Handle, peer client.Peer) {
+	if w.app == nil {
+		return
+	}
+	openTextInputDialog(textInputOpts{
+		Owner:       hwnd,
+		Title:       "重命名已保存设备",
+		Subtitle:    "仅修改本机显示的设备备注名（设备 ID " + truncID(peer.ID) + "）",
+		Initial:     peer.Name,
+		ConfirmText: "保存",
+		Multiline:   false,
+		AllowEmpty:  true,
+		OnSubmit: func(text string) {
+			clean := pairing.SanitizeName(text)
+			ok, err := identity.RenamePeer(w.app.pairedPath, peer.ID, clean)
+			mainMu.Lock()
+			if mw := mainWins[hwnd]; mw != nil {
+				if err != nil {
+					mw.status = "重命名失败：" + err.Error()
+				} else if ok {
+					mw.loadPeers()
+					shown := clean
+					if shown == "" {
+						shown = truncID(peer.ID)
+					}
+					mw.status = "已将设备重命名为 " + shown
+				}
+			}
+			mainMu.Unlock()
+			if thePanel != nil {
+				thePanel.reloadPeers()
+			}
+			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+		},
+	})
+}
+
+func (w *mainWin) removeSavedPeer(hwnd syscall.Handle, peer client.Peer) {
+	if w.app == nil {
+		return
+	}
+	if !confirmBox(hwnd, "移除设备", fmt.Sprintf("确定移除已保存的设备「%s」吗？\n移除后需重新配对才能向该设备收发文件。", peerLabel(peer))) {
+		return
+	}
+	ok, err := identity.RemovePeer(w.app.pairedPath, peer.ID)
+	if err != nil {
+		w.status = "移除失败：" + err.Error()
+	} else if ok {
+		w.loadPeers()
+		if thePanel != nil {
+			thePanel.reloadPeers()
+		}
+		w.status = "已移除设备 " + peerLabel(peer)
+	}
+	procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 }
 
 func (w *mainWin) pickAndSend(hwnd syscall.Handle) {

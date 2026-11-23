@@ -149,3 +149,62 @@ func TestUpdatePeerName(t *testing.T) {
 		t.Fatal("unpaired peer was unexpectedly trusted")
 	}
 }
+
+func TestRenameAndRemovePeer(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "paired.json")
+	store, err := LoadPaired(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := GenerateKey()
+	unknown, _ := GenerateKey()
+	if err := store.Add(PairedDevice{
+		DeviceID: a.IDHex(),
+		Name:     "旧手机",
+		PubKey:   hex.EncodeToString(a.Public()),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	ok, err := RenamePeer(path, unknown.IDHex(), "none")
+	if err != nil || ok {
+		t.Fatalf("RenamePeer unknown = (%v, %v), want (false, nil)", ok, err)
+	}
+	ok, err = RenamePeer(path, a.IDHex(), "  新手机  ")
+	if err != nil || !ok {
+		t.Fatalf("RenamePeer = (%v, %v), want (true, nil)", ok, err)
+	}
+	reloaded, err := LoadPaired(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dev, exists := reloaded.Get(a.IDHex()); !exists || dev.Name != "新手机" {
+		t.Fatalf("after rename: %+v exists=%v", dev, exists)
+	}
+	// Clearing alias to empty string resets fallback to device id.
+	ok, err = RenamePeer(path, a.IDHex(), " ")
+	if err != nil || !ok {
+		t.Fatalf("RenamePeer clear = (%v, %v), want (true, nil)", ok, err)
+	}
+	reloaded, _ = LoadPaired(path)
+	if dev, _ := reloaded.Get(a.IDHex()); dev.Name != "" {
+		t.Fatalf("expected empty name after clear, got %q", dev.Name)
+	}
+
+	ok, err = RemovePeer(path, unknown.IDHex())
+	if err != nil || ok {
+		t.Fatalf("RemovePeer unknown = (%v, %v), want (false, nil)", ok, err)
+	}
+	ok, err = RemovePeer(path, a.IDHex())
+	if err != nil || !ok {
+		t.Fatalf("RemovePeer = (%v, %v), want (true, nil)", ok, err)
+	}
+	reloaded, _ = LoadPaired(path)
+	if len(reloaded.List()) != 0 {
+		t.Fatalf("expected 0 peers after RemovePeer, got %d", len(reloaded.List()))
+	}
+}

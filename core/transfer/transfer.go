@@ -16,6 +16,16 @@ import (
 	"github.com/cwlindean/filetransfer/core/proto"
 )
 
+// ProgressSnapshot reports detailed batch transfer state and byte counts.
+type ProgressSnapshot struct {
+	Stage      string // "transferring" | "verifying"
+	FileIndex  int    // 1-based current file index
+	FileCount  int    // total files in batch
+	FileName   string // current file base name
+	BytesDone  int64  // total confirmed bytes across batch
+	BytesTotal int64  // total bytes across batch
+}
+
 // Config tunes a transfer. Zero values select the protocol defaults.
 type Config struct {
 	ChunkSize uint32
@@ -28,6 +38,8 @@ type Config struct {
 	// number of bytes the peer confirmed for the current file. It is meant for
 	// path switching decisions (relay -> punch upgrade) and diagnostics.
 	OnProgress func(bytes int64)
+	// OnDetailProgress, when set, reports batch stage, active file, and total progress.
+	OnDetailProgress func(ProgressSnapshot)
 }
 
 func (c Config) chunkSize() int {

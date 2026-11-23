@@ -324,8 +324,15 @@ func (t *tray) handle(nc net.Conn) {
 		nc.Close()
 		return
 	}
+	txID := t.app.beginTransfer("recv", peerName, "等待发送清单…", 0, 0)
+	defer t.app.endTransfer(txID)
+
 	outDir := t.app.receiveDir()
-	res, err := transfer.Receive(sess, outDir, transfer.Config{})
+	res, err := transfer.Receive(sess, outDir, transfer.Config{
+		OnDetailProgress: func(s transfer.ProgressSnapshot) {
+			t.app.updateTransfer(txID, s.Stage, "LAN", "", s.FileName, s.FileIndex, s.FileCount, s.BytesDone, s.BytesTotal)
+		},
+	})
 	if err != nil {
 		t.app.event("desktop.transfer_error", map[string]any{"peer": peer, "error": err.Error()})
 		t.app.note(fmt.Sprintf("%s  ← %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerName)))

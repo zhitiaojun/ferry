@@ -85,12 +85,19 @@ func main() {
 		return
 	}
 	if *uninstall {
-		if err := remove(*dir); err != nil {
+		if !*quiet {
+			os.Exit(runUninstallWizard(*dir))
+		}
+		needSelfDel, err := remove(*dir)
+		if err != nil {
 			if os.IsPermission(err) && elevateSelf() {
 				return
 			}
 			finish("卸载失败", err)
 			return
+		}
+		if needSelfDel {
+			scheduleSelfDelete(*dir)
 		}
 		finish("轻渡 (Ferry) 已卸载", nil)
 		return
@@ -326,7 +333,7 @@ func readInstallLocation() string {
 	return strings.TrimSpace(v)
 }
 
-func remove(dir string) error {
+func remove(dir string) (bool, error) {
 	for _, proc := range []string{"ferry-desktop.exe", "ft-desktop.exe", "ferry.exe", "ft.exe"} {
 		stopRunningProcess(proc)
 	}
@@ -348,18 +355,34 @@ func remove(dir string) error {
 	_ = removeShellMenu()
 	removeShortcuts()
 
-	if err := os.RemoveAll(dir); err != nil {
+	cleanDir := filepath.Clean(dir)
+	self, serr := os.Executable()
+	selfInside := serr == nil && strings.HasPrefix(strings.ToLower(self), strings.ToLower(cleanDir)+string(filepath.Separator))
+
+	if err := os.RemoveAll(cleanDir); err != nil {
 		// When launched via the Start Menu / Settings uninstall entry from
 		// inside dir, the running binary locks its own file until exit.
-		if self, serr := os.Executable(); serr == nil && strings.HasPrefix(strings.ToLower(self), strings.ToLower(filepath.Clean(dir))+string(filepath.Separator)) {
-			cmd := exec.Command("cmd.exe", "/C", fmt.Sprintf(`ping 127.0.0.1 -n 2 >NUL & rmdir /S /Q "%s"`, dir))
-			cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
-			_ = cmd.Start()
-			return nil
+		if selfInside {
+			if entries, rerr := os.ReadDir(cleanDir); rerr == nil {
+				for _, e := range entries {
+					p := filepath.Join(cleanDir, e.Name())
+					if strings.EqualFold(filepath.Clean(p), filepath.Clean(self)) {
+						continue
+					}
+					_ = os.RemoveAll(p)
+				}
+			}
+			return true, nil
 		}
-		return err
+		return false, err
 	}
-	return nil
+	return false, nil
+}
+
+func scheduleSelfDelete(dir string) {
+	cmd := exec.Command("cmd.exe", "/C", fmt.Sprintf(`ping 127.0.0.1 -n 3 >NUL & rmdir /S /Q "%s"`, filepath.Clean(dir)))
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+	_ = cmd.Start()
 }
 
 // writeContextMenu adds a first-level Explorer verb so a single file can be

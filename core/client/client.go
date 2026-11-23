@@ -24,6 +24,17 @@ import (
 	"github.com/cwlindean/filetransfer/core/transfer"
 )
 
+// Status reports live progress stages for relay file transfers.
+type Status struct {
+	Stage      string // "connecting" | "waiting" | "transferring" | "verifying"
+	Channel    string // "" | "relay"
+	FileIndex  int
+	FileCount  int
+	FileName   string
+	BytesDone  int64
+	BytesTotal int64
+}
+
 // Options configures one relay transfer.
 type Options struct {
 	SignalURL  string
@@ -34,6 +45,7 @@ type Options struct {
 	Timeout    time.Duration
 	NoTLS      bool
 	Log        *logging.Logger
+	OnStatus   func(Status)
 }
 
 // Result summarises a completed transfer.
@@ -73,6 +85,27 @@ func Peers(pairedPath string) ([]Peer, error) {
 // SendFiles logs in, asks toID to accept, books a relay room and runs the file
 // transfer over the spliced stream (protocol §8.5).
 func SendFiles(ctx context.Context, o Options, toID string, files []string) (Result, error) {
+	if len(files) == 0 {
+		return Result{}, fmt.Errorf("no files to send")
+	}
+	infos, total, err := describeFiles(files)
+	if err != nil {
+		return Result{}, err
+	}
+	firstName := infos[0].Name
+	emitStatus := func(st Status) {
+		if o.OnStatus != nil {
+			o.OnStatus(st)
+		}
+	}
+	emitStatus(Status{
+		Stage:      "connecting",
+		FileIndex:  1,
+		FileCount:  len(infos),
+		FileName:   firstName,
+		BytesTotal: total,
+	})
+
 	key, err := identity.LoadOrCreateKey(o.KeyPath)
 	if err != nil {
 		return Result{}, fmt.Errorf("device key %s: %w", o.KeyPath, err)
@@ -83,13 +116,6 @@ func SendFiles(ctx context.Context, o Options, toID string, files []string) (Res
 	}
 	defer cl.Close()
 
-	if len(files) == 0 {
-		return Result{}, fmt.Errorf("no files to send")
-	}
-	infos, total, err := describeFiles(files)
-	if err != nil {
-		return Result{}, err
-	}
 	sessionID, err := randomHex16()
 	if err != nil {
 		return Result{}, err
@@ -124,6 +150,13 @@ func SendFiles(ctx context.Context, o Options, toID string, files []string) (Res
 	if err := cl.Send(ctx, signaling.TypeSendRequest, req); err != nil {
 		return Result{}, fmt.Errorf("send_request: %w", err)
 	}
+	emitStatus(Status{
+		Stage:      "waiting",
+		FileIndex:  1,
+		FileCount:  len(infos),
+		FileName:   firstName,
+		BytesTotal: total,
+	})
 	var answer signaling.SendResponse
 	select {
 	case answer = <-respCh:
@@ -174,11 +207,30 @@ func SendFiles(ctx context.Context, o Options, toID string, files []string) (Res
 	if peerName != "" {
 		identity.UpdatePeerName(o.PairedPath, toID, peerName)
 	}
+	emitStatus(Status{
+		Stage:      "transferring",
+		Channel:    "relay",
+		FileIndex:  1,
+		FileCount:  len(infos),
+		FileName:   firstName,
+		BytesTotal: total,
+	})
 
 	start := time.Now()
 	res, err := transfer.Send(s, files, transfer.Config{
 		ChunkSize: uint32(o.Chunk), Timeout: o.Timeout, Log: o.Log,
 		TransferID: hex16(transferID),
+		OnDetailProgress: func(snap transfer.ProgressSnapshot) {
+			emitStatus(Status{
+				Stage:      snap.Stage,
+				Channel:    "relay",
+				FileIndex:  snap.FileIndex,
+				FileCount:  snap.FileCount,
+				FileName:   snap.FileName,
+				BytesDone:  snap.BytesDone,
+				BytesTotal: snap.BytesTotal,
+			})
+		},
 	})
 	if err != nil {
 		return Result{}, err

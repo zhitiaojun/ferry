@@ -49,3 +49,28 @@ func TestStateLogPath(t *testing.T) {
 		t.Fatalf("state dir not created: %v", err)
 	}
 }
+
+func TestActiveTransferStatusLifecycle(t *testing.T) {
+	seq := beginActiveTransfer("send", "办公室电脑", "a.bin", 2, 1024)
+	updateActiveTransfer(seq, "transferring", "punch", "", "b.bin", 2, 2, 512, 1024)
+
+	var st ActiveTransfer
+	if err := json.Unmarshal([]byte(ActiveTransferStatus()), &st); err != nil {
+		t.Fatalf("unmarshal active status: %v", err)
+	}
+	if !st.Active || st.Direction != "send" || st.Peer != "办公室电脑" || st.Channel != "punch" ||
+		st.Stage != "transferring" || st.FileName != "b.bin" || st.FileIndex != 2 || st.BytesDone != 512 {
+		t.Fatalf("unexpected active status: %+v", st)
+	}
+
+	// Stale seq must not clobber or end current transfer.
+	endActiveTransfer(seq - 1)
+	if !activeTx.Active {
+		t.Fatal("stale seq ended current transfer")
+	}
+
+	endActiveTransfer(seq)
+	if got := ActiveTransferStatus(); got != `{"active":false}` {
+		t.Fatalf("after end ActiveTransferStatus = %q, want {\"active\":false}", got)
+	}
+}

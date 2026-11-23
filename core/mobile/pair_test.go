@@ -48,4 +48,29 @@ func TestPairedPeersEmptyAndPopulated(t *testing.T) {
 	if len(peers) != 1 || peers[0].ID != k.IDHex() || peers[0].Name != "laptop" {
 		t.Fatalf("peers = %+v, want id=%s name=laptop", peers, k.IDHex())
 	}
+
+	if err := RenamePairedPeer(pairedPath, k.IDHex(), "  家里电脑\n "); err != nil {
+		t.Fatalf("RenamePairedPeer: %v", err)
+	}
+	got, err = PairedPeers(pairedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(got), &peers); err != nil {
+		t.Fatal(err)
+	}
+	if len(peers) != 1 || peers[0].Name != "家里电脑" {
+		t.Fatalf("after rename peers = %+v, want 家里电脑", peers)
+	}
+
+	if err := RemovePairedPeer(pairedPath, k.IDHex()); err != nil {
+		t.Fatalf("RemovePairedPeer: %v", err)
+	}
+	got, err = PairedPeers(pairedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "[]" {
+		t.Fatalf("after remove PairedPeers = %q, want []", got)
+	}
 }

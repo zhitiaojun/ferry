@@ -154,6 +154,17 @@ func (s *PairedStore) Get(id string) (PairedDevice, bool) {
 	return d, ok
 }
 
+// Remove deletes a peer from the store, returning true if it was present.
+func (s *PairedStore) Remove(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.devices[id]; !ok {
+		return false
+	}
+	delete(s.devices, id)
+	return true
+}
+
 // List returns the trusted peers sorted by name then id.
 func (s *PairedStore) List() []PairedDevice {
 	s.mu.Lock()
@@ -229,6 +240,49 @@ func UpdatePeerName(pairedPath, peerID, name string) bool {
 		return false
 	}
 	return store.Save() == nil
+}
+
+// RenamePeer sets or clears the stored display name for a paired peer on disk.
+// Unknown peer IDs return (false, nil).
+func RenamePeer(pairedPath, peerID, name string) (bool, error) {
+	if pairedPath == "" || peerID == "" {
+		return false, nil
+	}
+	store, err := LoadPaired(pairedPath)
+	if err != nil {
+		return false, err
+	}
+	dev, ok := store.Get(peerID)
+	if !ok {
+		return false, nil
+	}
+	dev.Name = strings.TrimSpace(name)
+	if err := store.Add(dev); err != nil {
+		return false, err
+	}
+	if err := store.Save(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// RemovePeer deletes a paired peer from pairedPath and persists the change.
+// Unknown peer IDs return (false, nil).
+func RemovePeer(pairedPath, peerID string) (bool, error) {
+	if pairedPath == "" || peerID == "" {
+		return false, nil
+	}
+	store, err := LoadPaired(pairedPath)
+	if err != nil {
+		return false, err
+	}
+	if !store.Remove(peerID) {
+		return false, nil
+	}
+	if err := store.Save(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // PublicKeyBytes decodes the stored hex public key.

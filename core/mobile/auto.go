@@ -154,6 +154,23 @@ func autoServe(ctx context.Context, key *identity.Key, name, outDir, signalURL, 
 		_ = client.Send(ctx, signaling.TypeError, signaling.ErrorBody{Code: "unauthorized", Message: err.Error()})
 		return err
 	}
+	initPeerName := truncID(req.FromDevice)
+	if store, serr := identity.LoadPaired(pairedPath); serr == nil {
+		if dev, ok := store.Get(req.FromDevice); ok && dev.Name != "" {
+			initPeerName = dev.Name
+		}
+	}
+	var initTotal int64
+	firstFile := ""
+	if len(req.Files) > 0 {
+		firstFile = req.Files[0].Name
+		for _, f := range req.Files {
+			initTotal += f.Size
+		}
+	}
+	txSeq := beginActiveTransfer("recv", initPeerName, firstFile, len(req.Files), initTotal)
+	defer endActiveTransfer(txSeq)
+
 	if err := client.Send(ctx, signaling.TypeSendResp, signaling.SendResponse{
 		ToDevice: req.FromDevice, TransferID: req.TransferID, Accept: true,
 	}); err != nil {
@@ -174,6 +191,7 @@ func autoServe(ctx context.Context, key *identity.Key, name, outDir, signalURL, 
 	}); err != nil {
 		return err
 	}
+	updateActiveTransfer(txSeq, "racing", "", "", "", 0, 0, -1, 0)
 
 	punchAttempt := pathmgr.Attempt[*session.Session]{
 		Name: "punch",
@@ -248,12 +266,16 @@ func autoServe(ctx context.Context, key *identity.Key, name, outDir, signalURL, 
 			peerName = dev.Name
 		}
 	}
+	updateActiveTransfer(txSeq, "transferring", winner, peerName, "", 0, 0, -1, 0)
 	if logger != nil {
 		logger.Event("path.selected", map[string]any{"path": winner, "peer": truncID(req.FromDevice)})
 	}
 	res, err := transfer.Receive(sess, outDir, transfer.Config{
 		ChunkSize: 0, Timeout: 30 * time.Second, Log: logger,
 		TransferID: hex16(req.TransferID),
+		OnDetailProgress: func(s transfer.ProgressSnapshot) {
+			updateActiveTransfer(txSeq, s.Stage, winner, "", s.FileName, s.FileIndex, s.FileCount, s.BytesDone, s.BytesTotal)
+		},
 	})
 	if err != nil {
 		return err
@@ -298,10 +320,23 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 	}
 	defer g.Close()
 
-	files, _, err := describeFiles(paths)
+	files, totalBytes, err := describeFiles(paths)
 	if err != nil {
 		return "", err
 	}
+	targetLabel := truncID(toID)
+	if store, serr := identity.LoadPaired(pairedPath); serr == nil {
+		if dev, ok := store.Get(toID); ok && dev.Name != "" {
+			targetLabel = dev.Name
+		}
+	}
+	firstFile := ""
+	if len(files) > 0 {
+		firstFile = files[0].Name
+	}
+	txSeq := beginActiveTransfer("send", targetLabel, firstFile, len(files), totalBytes)
+	defer endActiveTransfer(txSeq)
+
 	sid, err := randHex16()
 	if err != nil {
 		return "", err
@@ -356,6 +391,7 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 					return "", fmt.Errorf("peer declined: %s", r.Reason)
 				}
 				accepted = true
+				updateActiveTransfer(txSeq, "racing", "", "", "", 0, 0, -1, 0)
 				if err := client.Send(ctx, signaling.TypeCandidates, signaling.Candidates{
 					ToDevice: toID, SessionID: sid, Candidates: signalingCandidates(g.Candidates),
 				}); err != nil {
@@ -427,9 +463,11 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 		return "", fmt.Errorf("race: %w", err)
 	}
 	defer sess.Drain(2 * time.Second)
-	if peerName := pairing.SanitizeName(sess.Peer.Name); peerName != "" {
+	peerName := pairing.SanitizeName(sess.Peer.Name)
+	if peerName != "" {
 		identity.UpdatePeerName(pairedPath, toID, peerName)
 	}
+	updateActiveTransfer(txSeq, "transferring", winner, peerName, "", 0, 0, -1, 0)
 	if logger != nil {
 		logger.Event("path.selected", map[string]any{"path": winner, "peer": truncID(toID)})
 	}
@@ -437,6 +475,9 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 	res, err := transfer.Send(sess, paths, transfer.Config{
 		ChunkSize: 0, Timeout: 30 * time.Second, Log: logger,
 		TransferID: hex16(tid),
+		OnDetailProgress: func(s transfer.ProgressSnapshot) {
+			updateActiveTransfer(txSeq, s.Stage, winner, "", s.FileName, s.FileIndex, s.FileCount, s.BytesDone, s.BytesTotal)
+		},
 	})
 	if err != nil {
 		return "", err

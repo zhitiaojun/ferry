@@ -78,12 +78,24 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 
 	buf := make([]byte, cfg.chunkSize())
 	hashes := make([][32]byte, len(paths))
+	batchTotal := int64(totalSize(entries))
+	var completedBefore int64
 	var total int64
 	chunks := 0
 
 	for i, p := range paths {
 		if entries[i].Size == 0 {
 			hashes[i] = sha256.Sum256(nil)
+			if cfg.OnDetailProgress != nil {
+				cfg.OnDetailProgress(ProgressSnapshot{
+					Stage:      "transferring",
+					FileIndex:  i + 1,
+					FileCount:  len(entries),
+					FileName:   entries[i].Name,
+					BytesDone:  completedBefore,
+					BytesTotal: batchTotal,
+				})
+			}
 			continue
 		}
 		if i < startIdx {
@@ -91,22 +103,44 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 			if err != nil {
 				return nil, err
 			}
+			completedBefore += int64(entries[i].Size)
 			continue
 		}
 		off := uint64(0)
 		if i == startIdx {
 			off = startOff
 		}
-		h, n, c, err := sendFile(s, tid, uint32(i), p, buf, cfg, off)
+		if cfg.OnDetailProgress != nil {
+			cfg.OnDetailProgress(ProgressSnapshot{
+				Stage:      "transferring",
+				FileIndex:  i + 1,
+				FileCount:  len(entries),
+				FileName:   entries[i].Name,
+				BytesDone:  completedBefore + int64(off),
+				BytesTotal: batchTotal,
+			})
+		}
+		h, n, c, err := sendFile(s, tid, uint32(i), len(entries), entries[i].Name, p, buf, cfg, off, completedBefore, batchTotal)
 		if err != nil {
 			_ = s.SendError(proto.CodeIOError, "send %s: %v", entries[i].Name, err)
 			return nil, err
 		}
 		hashes[i] = h
+		completedBefore += int64(entries[i].Size)
 		total += n
 		chunks += c
 	}
 
+	if cfg.OnDetailProgress != nil && len(entries) > 0 {
+		cfg.OnDetailProgress(ProgressSnapshot{
+			Stage:      "verifying",
+			FileIndex:  len(entries),
+			FileCount:  len(entries),
+			FileName:   entries[len(entries)-1].Name,
+			BytesDone:  batchTotal,
+			BytesTotal: batchTotal,
+		})
+	}
 	fin := &proto.Fin{Status: proto.FinOK, TransferID: tid, Hashes: hashes}
 	if err := s.SendMsg(proto.TypeFin, fin); err != nil {
 		return nil, err
@@ -143,7 +177,7 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 }
 
 // sendFile writes every chunk of one file and returns its whole-file hash.
-func sendFile(s *session.Session, tid [16]byte, index uint32, path string, buf []byte, cfg Config, startOffset uint64) ([32]byte, int64, int, error) {
+func sendFile(s *session.Session, tid [16]byte, index uint32, fileCount int, fileName, path string, buf []byte, cfg Config, startOffset uint64, completedBefore, batchTotal int64) ([32]byte, int64, int, error) {
 	var zero [32]byte
 
 	f, err := os.Open(path)
@@ -185,6 +219,16 @@ func sendFile(s *session.Session, tid [16]byte, index uint32, path string, buf [
 			}
 			if cfg.OnProgress != nil {
 				cfg.OnProgress(off)
+			}
+			if cfg.OnDetailProgress != nil {
+				cfg.OnDetailProgress(ProgressSnapshot{
+					Stage:      "transferring",
+					FileIndex:  int(index) + 1,
+					FileCount:  fileCount,
+					FileName:   fileName,
+					BytesDone:  completedBefore + off,
+					BytesTotal: batchTotal,
+				})
 			}
 		}
 		if rerr == io.EOF {

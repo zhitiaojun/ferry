@@ -262,6 +262,18 @@ func messageBox(title, text string) {
 		uintptr(unsafe.Pointer(utf16Ptr(title))), mbOK|mbIconInfo)
 }
 
+func confirmBox(owner syscall.Handle, title, text string) bool {
+	const (
+		mbYesNo      = 0x0004
+		mbIconQuest  = 0x0020
+		idYes        = 6
+		mbDefButton2 = 0x0100
+	)
+	r, _, _ := procMessageBoxW.Call(uintptr(owner), uintptr(unsafe.Pointer(utf16Ptr(text))),
+		uintptr(unsafe.Pointer(utf16Ptr(title))), mbYesNo|mbIconQuest|mbDefButton2)
+	return r == idYes
+}
+
 func shellOpen(path string) {
 	op := utf16Ptr("open")
 	procShellExecuteW.Call(0, uintptr(unsafe.Pointer(op)), uintptr(unsafe.Pointer(utf16Ptr(path))), 0, 0, swShow)

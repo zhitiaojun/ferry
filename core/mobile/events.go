@@ -73,6 +73,101 @@ func PollReceived() string {
 	return string(b)
 }
 
+// ActiveTransfer describes the currently running send or receive transfer.
+type ActiveTransfer struct {
+	Active     bool   `json:"active"`
+	Direction  string `json:"direction,omitempty"` // "send" | "recv"
+	Peer       string `json:"peer,omitempty"`
+	Stage      string `json:"stage,omitempty"`   // "connecting" | "racing" | "transferring" | "verifying"
+	Channel    string `json:"channel,omitempty"` // "" | "lan" | "punch" | "relay"
+	FileIndex  int    `json:"file_index,omitempty"`
+	FileCount  int    `json:"file_count,omitempty"`
+	FileName   string `json:"file_name,omitempty"`
+	BytesDone  int64  `json:"bytes_done,omitempty"`
+	BytesTotal int64  `json:"bytes_total,omitempty"`
+	StartedAt  int64  `json:"started_at,omitempty"`
+}
+
+var (
+	activeTxMu  sync.Mutex
+	activeTxSeq uint64
+	activeTx    ActiveTransfer
+)
+
+func beginActiveTransfer(dir, peer, fileName string, fileCount int, total int64) uint64 {
+	activeTxMu.Lock()
+	defer activeTxMu.Unlock()
+	activeTxSeq++
+	activeTx = ActiveTransfer{
+		Active:     true,
+		Direction:  dir,
+		Peer:       peer,
+		Stage:      "connecting",
+		FileIndex:  1,
+		FileCount:  fileCount,
+		FileName:   fileName,
+		BytesTotal: total,
+		StartedAt:  time.Now().UnixMilli(),
+	}
+	return activeTxSeq
+}
+
+func updateActiveTransfer(seq uint64, stage, channel, peer, fileName string, idx, cnt int, done, total int64) {
+	activeTxMu.Lock()
+	defer activeTxMu.Unlock()
+	if !activeTx.Active || activeTxSeq != seq {
+		return
+	}
+	if stage != "" {
+		activeTx.Stage = stage
+	}
+	if channel != "" {
+		activeTx.Channel = channel
+	}
+	if peer != "" {
+		activeTx.Peer = peer
+	}
+	if fileName != "" {
+		activeTx.FileName = fileName
+	}
+	if idx > 0 {
+		activeTx.FileIndex = idx
+	}
+	if cnt > 0 {
+		activeTx.FileCount = cnt
+	}
+	if done >= 0 {
+		activeTx.BytesDone = done
+	}
+	if total > 0 {
+		activeTx.BytesTotal = total
+	}
+}
+
+func endActiveTransfer(seq uint64) {
+	activeTxMu.Lock()
+	defer activeTxMu.Unlock()
+	if activeTxSeq == seq {
+		activeTx = ActiveTransfer{}
+	}
+}
+
+// ActiveTransferStatus returns the current live transfer state as JSON
+// ({"active":false} when no transfer is in flight).
+func ActiveTransferStatus() string {
+	activeTxMu.Lock()
+	snap := activeTx
+	activeTxMu.Unlock()
+	if !snap.Active {
+		return `{"active":false}`
+	}
+	b, err := json.Marshal(snap)
+	if err != nil {
+		return `{"active":false}`
+	}
+	return string(b)
+}
+
 func stateLogPath(outDir, name string) string {
 	stateDir := filepath.Join(filepath.Dir(filepath.Clean(outDir)), "state")
 	_ = os.MkdirAll(stateDir, 0o755)

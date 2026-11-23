@@ -179,3 +179,28 @@ func PairedPeers(pairedPath string) (string, error) {
 	}
 	return string(raw), nil
 }
+
+// RenamePairedPeer updates the stored friendly name of a paired peer at pairedPath.
+func RenamePairedPeer(pairedPath, peerID, newName string) error {
+	clean := pairing.SanitizeName(newName)
+	ok, err := identity.RenamePeer(pairedPath, peerID, clean)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("peer not found")
+	}
+	return nil
+}
+
+// RemovePairedPeer removes a saved peer from pairedPath.
+func RemovePairedPeer(pairedPath, peerID string) error {
+	ok, err := identity.RemovePeer(pairedPath, peerID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("peer not found")
+	}
+	return nil
+}

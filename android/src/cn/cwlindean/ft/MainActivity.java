@@ -75,6 +75,7 @@ import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -143,7 +144,7 @@ public class MainActivity extends Activity {
     private boolean recvRunning;
     private boolean webRunning;
     private boolean lanSearching;
-    private int activePage; // 0 = Home, 1 = Settings
+    private int activePage; // 0 = 传输, 1 = 设备, 2 = 设置
     private String lanPort = "";
     private String selectedTarget = "";
     private String activeFilter = "all"; // "all" | "recv" | "send"
@@ -152,15 +153,37 @@ public class MainActivity extends Activity {
     private final List<PeerEntry> lanEntries = new ArrayList<>();
     private final List<ReceivedEntry> recentEntries = new ArrayList<>();
 
-    // Top Bar views
+    // Top Bar & Bottom Nav views
     private View backBtn;
     private View brandMarkView;
     private TextView topTitleView;
     private View topActionsWrap;
+    private LinearLayout bottomNavWrap;
+    private final LinearLayout[] navTabs = new LinearLayout[3];
+    private final ImageView[] navIcons = new ImageView[3];
+    private final TextView[] navLabels = new TextView[3];
 
     // Pages
     private ScrollView pageHome;
+    private ScrollView pageDevices;
     private ScrollView pageSettings;
+
+    // Live transfer card & progress polling state
+    private LinearLayout activeTransferCard;
+    private TextView txHeadTv;
+    private TextView txChanBadge;
+    private TextView txSubTv;
+    private ProgressBar txProgressBar;
+    private TextView txMetricsTv;
+    private boolean progressPollingActive;
+    private boolean sendBusyFlag;
+
+    // Devices page views
+    private LinearLayout savedDevicesList;
+    private TextView savedDevicesEmpty;
+    private LinearLayout lanDevicesList;
+    private TextView lanDevicesEmpty;
+    private Button devicesLanBtn;
 
     // Home views
     private HorizontalScrollView peerScroll;
@@ -231,9 +254,21 @@ public class MainActivity extends Activity {
         @Override
         public void run() {
             pollReceivedOnce();
+            pollActiveTransferOnce();
             if (recvRunning) {
                 ui.postDelayed(this, 1500);
             }
+        }
+    };
+
+    private final Runnable progressPollTask = new Runnable() {
+        @Override
+        public void run() {
+            if (!progressPollingActive) {
+                return;
+            }
+            pollActiveTransferOnce();
+            ui.postDelayed(this, 200);
         }
     };
 
@@ -292,7 +327,7 @@ public class MainActivity extends Activity {
             closePairSheet();
             return;
         }
-        if (activePage == 1) {
+        if (activePage != 0) {
             showPage(0);
             return;
         }
@@ -302,6 +337,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         closePairSheet();
+        progressPollingActive = false;
+        ui.removeCallbacks(progressPollTask);
         ui.removeCallbacks(pollTask);
         stopDotPulse();
         releaseMulticastLock();
@@ -462,12 +499,18 @@ public class MainActivity extends Activity {
 
         FrameLayout contentHost = new FrameLayout(this);
         pageHome = buildHomePage();
+        pageDevices = buildDevicesPage();
+        pageDevices.setVisibility(View.GONE);
         pageSettings = buildSettingsPage();
         pageSettings.setVisibility(View.GONE);
         contentHost.addView(pageHome, new FrameLayout.LayoutParams(MATCH, MATCH));
+        contentHost.addView(pageDevices, new FrameLayout.LayoutParams(MATCH, MATCH));
         contentHost.addView(pageSettings, new FrameLayout.LayoutParams(MATCH, MATCH));
 
         scaffold.addView(contentHost, new LinearLayout.LayoutParams(MATCH, 0, 1f));
+        scaffold.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
+        bottomNavWrap = buildBottomNav();
+        scaffold.addView(bottomNavWrap, new LinearLayout.LayoutParams(MATCH, dp(58)));
         showPage(0);
         return scaffold;
     }
@@ -478,7 +521,7 @@ public class MainActivity extends Activity {
         bar.setGravity(Gravity.CENTER_VERTICAL);
         bar.setPadding(dp(20), dp(4), dp(14), dp(4));
 
-        // Left: back button (Settings) + brand mark (Home) + title
+        // Left: back button (unused on top-level tabs) + brand mark + title
         ImageView backImg = new ImageView(this);
         backImg.setImageDrawable(new IconDrawable(IconDrawable.BACK, cOnSurface));
         backImg.setPadding(dp(6), dp(6), dp(6), dp(6));
@@ -501,22 +544,55 @@ public class MainActivity extends Activity {
         topTitleView = label("轻渡", 18, cOnSurface, true);
         bar.addView(topTitleView, new LinearLayout.LayoutParams(0, WRAP, 1f));
 
-        // Right: minimal scan + settings icon actions
+        // Right: quick QR scan action
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
         actions.setGravity(Gravity.CENTER_VERTICAL);
         topActionsWrap = actions;
 
         ImageView scanBtn = iconActionBtn(IconDrawable.SCAN, "扫一扫", v -> openPairSheet(0));
-        LinearLayout.LayoutParams scLp = new LinearLayout.LayoutParams(dp(40), dp(40));
-        scLp.rightMargin = dp(2);
-        actions.addView(scanBtn, scLp);
-
-        ImageView settingsBtn = iconActionBtn(IconDrawable.SETTINGS, "设置", v -> showPage(1));
-        actions.addView(settingsBtn, new LinearLayout.LayoutParams(dp(40), dp(40)));
+        actions.addView(scanBtn, new LinearLayout.LayoutParams(dp(40), dp(40)));
 
         bar.addView(actions, new LinearLayout.LayoutParams(WRAP, WRAP));
         return bar;
+    }
+
+    private LinearLayout buildBottomNav() {
+        LinearLayout nav = new LinearLayout(this);
+        nav.setOrientation(LinearLayout.HORIZONTAL);
+        nav.setGravity(Gravity.CENTER_VERTICAL);
+        nav.setBackgroundColor(cCard);
+        nav.setPadding(dp(12), dp(4), dp(12), dp(4));
+
+        int[] icons = {IconDrawable.TRANSFER, IconDrawable.DEVICES, IconDrawable.SETTINGS};
+        String[] titles = {"传输", "设备", "设置"};
+        for (int i = 0; i < 3; i++) {
+            final int idx = i;
+            LinearLayout tab = new LinearLayout(this);
+            tab.setOrientation(LinearLayout.VERTICAL);
+            tab.setGravity(Gravity.CENTER);
+            tab.setPadding(dp(6), dp(5), dp(6), dp(5));
+            tab.setOnClickListener(v -> showPage(idx));
+
+            ImageView iv = new ImageView(this);
+            iv.setImageDrawable(new IconDrawable(icons[i], cOnSurfaceVariant));
+            LinearLayout.LayoutParams ivLp = new LinearLayout.LayoutParams(dp(22), dp(22));
+            ivLp.bottomMargin = dp(2);
+            tab.addView(iv, ivLp);
+
+            TextView tv = label(titles[i], 11, cOnSurfaceVariant, true);
+            tab.addView(tv, new LinearLayout.LayoutParams(WRAP, WRAP));
+
+            navTabs[i] = tab;
+            navIcons[i] = iv;
+            navLabels[i] = tv;
+            LinearLayout.LayoutParams tabLp = new LinearLayout.LayoutParams(0, MATCH, 1f);
+            if (i < 2) {
+                tabLp.rightMargin = dp(6);
+            }
+            nav.addView(tab, tabLp);
+        }
+        return nav;
     }
 
     private ImageView iconActionBtn(int kind, String desc, View.OnClickListener listener) {
@@ -531,14 +607,32 @@ public class MainActivity extends Activity {
 
     private void showPage(int page) {
         activePage = page;
-        boolean isSet = page == 1;
-        pageHome.setVisibility(isSet ? View.GONE : View.VISIBLE);
-        pageSettings.setVisibility(isSet ? View.VISIBLE : View.GONE);
-        backBtn.setVisibility(isSet ? View.VISIBLE : View.GONE);
-        brandMarkView.setVisibility(isSet ? View.GONE : View.VISIBLE);
-        topActionsWrap.setVisibility(isSet ? View.GONE : View.VISIBLE);
-        topTitleView.setText(isSet ? "设置" : "轻渡");
-        if (isSet) {
+        pageHome.setVisibility(page == 0 ? View.VISIBLE : View.GONE);
+        pageDevices.setVisibility(page == 1 ? View.VISIBLE : View.GONE);
+        pageSettings.setVisibility(page == 2 ? View.VISIBLE : View.GONE);
+        backBtn.setVisibility(View.GONE);
+        brandMarkView.setVisibility(View.VISIBLE);
+        topActionsWrap.setVisibility(page == 2 ? View.GONE : View.VISIBLE);
+        topTitleView.setText(page == 0 ? "轻渡" : (page == 1 ? "设备" : "设置"));
+
+        int[] icons = {IconDrawable.TRANSFER, IconDrawable.DEVICES, IconDrawable.SETTINGS};
+        for (int i = 0; i < 3; i++) {
+            boolean sel = (i == page);
+            if (navIcons[i] != null) {
+                navIcons[i].setImageDrawable(new IconDrawable(icons[i], sel ? cPrimary : cOnSurfaceVariant));
+            }
+            if (navLabels[i] != null) {
+                navLabels[i].setTextColor(sel ? cPrimary : cOnSurfaceVariant);
+            }
+            if (navTabs[i] != null) {
+                navTabs[i].setBackground(ripple(roundBox(
+                        sel ? cPrimaryContainer : Color.TRANSPARENT, 0, 12), 12));
+            }
+        }
+
+        if (page == 1) {
+            renderDevicesPage();
+        } else if (page == 2) {
             refreshSettingsInfo();
         }
     }
@@ -645,8 +739,60 @@ public class MainActivity extends Activity {
         sendCard.addView(sendResultCard, srLp);
 
         LinearLayout.LayoutParams scLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        scLp.bottomMargin = dp(20);
+        scLp.bottomMargin = dp(16);
         root.addView(sendCard, scLp);
+
+        // 2b. Live Active Transfer Progress Card (auto-shown during active send/recv)
+        activeTransferCard = new LinearLayout(this);
+        activeTransferCard.setOrientation(LinearLayout.VERTICAL);
+        activeTransferCard.setPadding(dp(16), dp(14), dp(16), dp(14));
+        activeTransferCard.setBackground(roundBox(cCard, cPrimary, 16));
+        activeTransferCard.setVisibility(View.GONE);
+
+        LinearLayout txTop = new LinearLayout(this);
+        txTop.setOrientation(LinearLayout.HORIZONTAL);
+        txTop.setGravity(Gravity.CENTER_VERTICAL);
+
+        txHeadTv = label("正在传输", 13, cOnSurface, true);
+        txHeadTv.setSingleLine(true);
+        txHeadTv.setEllipsize(TextUtils.TruncateAt.END);
+        txTop.addView(txHeadTv, new LinearLayout.LayoutParams(0, WRAP, 1f));
+
+        txChanBadge = label("", 11, cOnPrimaryContainer, true);
+        txChanBadge.setPadding(dp(8), dp(2), dp(8), dp(2));
+        txChanBadge.setVisibility(View.GONE);
+        LinearLayout.LayoutParams cbLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        cbLp.leftMargin = dp(8);
+        txTop.addView(txChanBadge, cbLp);
+        activeTransferCard.addView(txTop, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        txSubTv = label("连接中…", 12, cOnSurfaceVariant, false);
+        txSubTv.setSingleLine(true);
+        txSubTv.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        LinearLayout.LayoutParams tsLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        tsLp.topMargin = dp(5);
+        activeTransferCard.addView(txSubTv, tsLp);
+
+        txProgressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        txProgressBar.setMax(1000);
+        txProgressBar.setIndeterminate(true);
+        txProgressBar.setProgressTintList(ColorStateList.valueOf(cPrimary));
+        txProgressBar.setIndeterminateTintList(ColorStateList.valueOf(cPrimary));
+        txProgressBar.setProgressBackgroundTintList(ColorStateList.valueOf(cBorder));
+        LinearLayout.LayoutParams pbLp = new LinearLayout.LayoutParams(MATCH, dp(6));
+        pbLp.topMargin = dp(10);
+        activeTransferCard.addView(txProgressBar, pbLp);
+
+        txMetricsTv = label("准备传输数据…", 11, cOnSurfaceVariant, false);
+        txMetricsTv.setSingleLine(true);
+        txMetricsTv.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams tmLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        tmLp.topMargin = dp(8);
+        activeTransferCard.addView(txMetricsTv, tmLp);
+
+        LinearLayout.LayoutParams txLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        txLp.bottomMargin = dp(16);
+        root.addView(activeTransferCard, txLp);
 
         // 3. Unpaired Onboarding Card
         unpairedCard = new LinearLayout(this);
@@ -795,7 +941,281 @@ public class MainActivity extends Activity {
         return tile;
     }
 
-    // ================= Page 1: Settings (Local Device Info lives here) =================
+    // ================= Page 1: Devices (Saved Peers & LAN Discovery) =================
+
+    private ScrollView buildDevicesPage() {
+        ScrollView sv = new ScrollView(this);
+        sv.setFillViewport(true);
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(20), dp(10), dp(20), dp(32));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.CENTER_VERTICAL);
+
+        Button scanBtn = smallFilledBtn("扫码配对", cPrimaryPressed, cOnPrimary, v -> openPairSheet(0));
+        scanBtn.setSingleLine(true);
+        LinearLayout.LayoutParams b1Lp = new LinearLayout.LayoutParams(0, dp(38), 1f);
+        b1Lp.rightMargin = dp(8);
+        actions.addView(scanBtn, b1Lp);
+
+        Button codeBtn = smallOutlineBtn("配对码", v -> openPairSheet(2));
+        codeBtn.setSingleLine(true);
+        LinearLayout.LayoutParams b2Lp = new LinearLayout.LayoutParams(0, dp(38), 1f);
+        b2Lp.rightMargin = dp(8);
+        actions.addView(codeBtn, b2Lp);
+
+        devicesLanBtn = smallOutlineBtn("搜索局域网", v -> discover());
+        devicesLanBtn.setSingleLine(true);
+        actions.addView(devicesLanBtn, new LinearLayout.LayoutParams(0, dp(38), 1f));
+
+        LinearLayout.LayoutParams acLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        acLp.bottomMargin = dp(18);
+        root.addView(actions, acLp);
+
+        TextView savedHdr = label("已保存的设备", 12, cOnSurfaceVariant, true);
+        savedHdr.setPadding(dp(4), 0, dp(4), dp(8));
+        root.addView(savedHdr, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        LinearLayout savedCard = new LinearLayout(this);
+        savedCard.setOrientation(LinearLayout.VERTICAL);
+        savedCard.setBackground(roundBox(cCard, cBorder, 16));
+
+        savedDevicesList = new LinearLayout(this);
+        savedDevicesList.setOrientation(LinearLayout.VERTICAL);
+        savedCard.addView(savedDevicesList, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        savedDevicesEmpty = label("还没有已保存的设备\n点击上方「扫码配对」或「配对码」添加", 13, cOnSurfaceVariant, false);
+        savedDevicesEmpty.setGravity(Gravity.CENTER);
+        savedDevicesEmpty.setPadding(dp(18), dp(24), dp(18), dp(24));
+        savedCard.addView(savedDevicesEmpty, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        LinearLayout.LayoutParams sWrapLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        sWrapLp.bottomMargin = dp(20);
+        root.addView(savedCard, sWrapLp);
+
+        TextView lanHdr = label("同局域网设备", 12, cOnSurfaceVariant, true);
+        lanHdr.setPadding(dp(4), 0, dp(4), dp(8));
+        root.addView(lanHdr, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        LinearLayout lanCard = new LinearLayout(this);
+        lanCard.setOrientation(LinearLayout.VERTICAL);
+        lanCard.setBackground(roundBox(cCard, cBorder, 16));
+
+        lanDevicesList = new LinearLayout(this);
+        lanDevicesList.setOrientation(LinearLayout.VERTICAL);
+        lanCard.addView(lanDevicesList, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        lanDevicesEmpty = label("点击上方「搜索局域网」查找同一 Wi-Fi 下可直连设备", 13, cOnSurfaceVariant, false);
+        lanDevicesEmpty.setGravity(Gravity.CENTER);
+        lanDevicesEmpty.setPadding(dp(18), dp(20), dp(18), dp(20));
+        lanCard.addView(lanDevicesEmpty, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        root.addView(lanCard, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        sv.addView(root, new FrameLayout.LayoutParams(MATCH, WRAP));
+        renderDevicesPage();
+        return sv;
+    }
+
+    private void renderDevicesPage() {
+        if (savedDevicesList == null || savedDevicesEmpty == null
+                || lanDevicesList == null || lanDevicesEmpty == null) {
+            return;
+        }
+        if (devicesLanBtn != null) {
+            devicesLanBtn.setText(lanSearching ? "搜索中…" : "搜索局域网");
+            devicesLanBtn.setEnabled(!lanSearching);
+        }
+
+        savedDevicesList.removeAllViews();
+        if (pairedEntries.isEmpty()) {
+            savedDevicesList.setVisibility(View.GONE);
+            savedDevicesEmpty.setVisibility(View.VISIBLE);
+        } else {
+            savedDevicesList.setVisibility(View.VISIBLE);
+            savedDevicesEmpty.setVisibility(View.GONE);
+            for (int i = 0; i < pairedEntries.size(); i++) {
+                final PeerEntry entry = pairedEntries.get(i);
+                final boolean sel = entry.value.equals(selectedTarget);
+
+                LinearLayout item = new LinearLayout(this);
+                item.setOrientation(LinearLayout.VERTICAL);
+                item.setPadding(dp(16), dp(14), dp(16), dp(14));
+
+                LinearLayout hdr = new LinearLayout(this);
+                hdr.setOrientation(LinearLayout.HORIZONTAL);
+                hdr.setGravity(Gravity.CENTER_VERTICAL);
+
+                TextView nmTv = label(entry.name, 14, cOnSurface, true);
+                nmTv.setSingleLine(true);
+                nmTv.setEllipsize(TextUtils.TruncateAt.END);
+                hdr.addView(nmTv, new LinearLayout.LayoutParams(0, WRAP, 1f));
+
+                if (sel) {
+                    TextView badge = label("当前目标", 10, cOnPrimaryContainer, true);
+                    badge.setPadding(dp(8), dp(2), dp(8), dp(2));
+                    badge.setBackground(roundBox(cPrimaryContainer, 0, 99));
+                    LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+                    bLp.leftMargin = dp(8);
+                    hdr.addView(badge, bLp);
+                }
+                item.addView(hdr, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+                String shortId = entry.value.length() > 16
+                        ? entry.value.substring(0, 16) + "…"
+                        : entry.value;
+                TextView idTv = label("ID · " + shortId + "（点击复制）", 11, cOnSurfaceVariant, false);
+                idTv.setTypeface(Typeface.MONOSPACE);
+                idTv.setPadding(0, dp(3), 0, dp(2));
+                idTv.setOnClickListener(v -> copyText("设备 ID", entry.value, "已复制对方设备 ID"));
+                item.addView(idTv, new LinearLayout.LayoutParams(WRAP, WRAP));
+
+                LinearLayout rowBtns = new LinearLayout(this);
+                rowBtns.setOrientation(LinearLayout.HORIZONTAL);
+                rowBtns.setGravity(Gravity.CENTER_VERTICAL);
+
+                Button useBtn = sel
+                        ? smallOutlineBtn("在传输页发送", v -> {
+                            selectedTarget = entry.value;
+                            saveLastPeer(selectedTarget);
+                            renderPeerSection();
+                            showPage(0);
+                        })
+                        : smallFilledBtn("选为目标", cPrimaryPressed, cOnPrimary, v -> {
+                            selectedTarget = entry.value;
+                            saveLastPeer(selectedTarget);
+                            renderPeerSection();
+                            showPage(0);
+                        });
+                LinearLayout.LayoutParams uLp = new LinearLayout.LayoutParams(WRAP, dp(32));
+                uLp.rightMargin = dp(8);
+                rowBtns.addView(useBtn, uLp);
+
+                Button renBtn = smallOutlineBtn("重命名", v -> showRenamePeerDialog(entry));
+                LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(WRAP, dp(32));
+                rLp.rightMargin = dp(8);
+                rowBtns.addView(renBtn, rLp);
+
+                Button delBtn = smallOutlineBtn("删除", v -> confirmRemovePeer(entry));
+                delBtn.setTextColor(cError);
+                rowBtns.addView(delBtn, new LinearLayout.LayoutParams(WRAP, dp(32)));
+
+                LinearLayout.LayoutParams rbLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+                rbLp.topMargin = dp(10);
+                item.addView(rowBtns, rbLp);
+
+                savedDevicesList.addView(item, new LinearLayout.LayoutParams(MATCH, WRAP));
+                if (i < pairedEntries.size() - 1) {
+                    savedDevicesList.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
+                }
+            }
+        }
+
+        lanDevicesList.removeAllViews();
+        if (lanEntries.isEmpty()) {
+            lanDevicesList.setVisibility(View.GONE);
+            lanDevicesEmpty.setVisibility(View.VISIBLE);
+        } else {
+            lanDevicesList.setVisibility(View.VISIBLE);
+            lanDevicesEmpty.setVisibility(View.GONE);
+            for (int i = 0; i < lanEntries.size(); i++) {
+                final PeerEntry entry = lanEntries.get(i);
+                final boolean sel = entry.value.equals(selectedTarget);
+
+                LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding(dp(16), dp(13), dp(16), dp(13));
+
+                LinearLayout col = new LinearLayout(this);
+                col.setOrientation(LinearLayout.VERTICAL);
+                TextView nmTv = label(entry.name, 14, cOnSurface, true);
+                nmTv.setSingleLine(true);
+                nmTv.setEllipsize(TextUtils.TruncateAt.END);
+                col.addView(nmTv, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+                TextView addrTv = label(entry.value, 11, cOnSurfaceVariant, false);
+                addrTv.setTypeface(Typeface.MONOSPACE);
+                LinearLayout.LayoutParams aLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+                aLp.topMargin = dp(2);
+                col.addView(addrTv, aLp);
+                row.addView(col, new LinearLayout.LayoutParams(0, WRAP, 1f));
+
+                Button useBtn = smallOutlineBtn(sel ? "去传输" : "选为目标", v -> {
+                    selectedTarget = entry.value;
+                    saveLastPeer(selectedTarget);
+                    renderPeerSection();
+                    showPage(0);
+                });
+                LinearLayout.LayoutParams uLp = new LinearLayout.LayoutParams(WRAP, dp(32));
+                uLp.leftMargin = dp(10);
+                row.addView(useBtn, uLp);
+
+                lanDevicesList.addView(row, new LinearLayout.LayoutParams(MATCH, WRAP));
+                if (i < lanEntries.size() - 1) {
+                    lanDevicesList.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
+                }
+            }
+        }
+    }
+
+    private void showRenamePeerDialog(final PeerEntry entry) {
+        final EditText input = modalInput("输入备注名（留空恢复默认）");
+        input.setText(entry.name);
+        input.setSelection(entry.name.length());
+
+        FrameLayout wrap = new FrameLayout(this);
+        wrap.setPadding(dp(20), dp(10), dp(20), 0);
+        wrap.addView(input, new FrameLayout.LayoutParams(MATCH, dp(44)));
+
+        new AlertDialog.Builder(this)
+                .setTitle("重命名设备")
+                .setView(wrap)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("保存", (d, w) -> {
+                    final String newName = trimToUtf8Bytes(input.getText().toString().trim(), 64);
+                    ioPool.execute(() -> {
+                        try {
+                            Mobile.renamePairedPeer(pairedFile().getAbsolutePath(), entry.value, newName);
+                            ui.post(() -> {
+                                loadPairedPeers();
+                                toast(newName.isEmpty() ? "已恢复默认显示名" : "已重命名为 " + newName);
+                            });
+                        } catch (Exception e) {
+                            ui.post(() -> toast("重命名失败：" + e.getMessage()));
+                        }
+                    });
+                })
+                .show();
+    }
+
+    private void confirmRemovePeer(final PeerEntry entry) {
+        new AlertDialog.Builder(this)
+                .setTitle("删除已保存设备")
+                .setMessage("确定要删除「" + entry.name + "」吗？删除后将无法自动互传，需重新扫码配对。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("删除", (d, w) -> ioPool.execute(() -> {
+                    try {
+                        Mobile.removePairedPeer(pairedFile().getAbsolutePath(), entry.value);
+                        ui.post(() -> {
+                            if (entry.value.equals(selectedTarget)) {
+                                selectedTarget = "";
+                                saveLastPeer("");
+                            }
+                            loadPairedPeers();
+                            toast("已删除设备");
+                        });
+                    } catch (Exception e) {
+                        ui.post(() -> toast("删除失败：" + e.getMessage()));
+                    }
+                }))
+                .show();
+    }
+
+    // ================= Page 2: Settings (Local Device Info lives here) =================
 
     private ScrollView buildSettingsPage() {
         ScrollView sv = new ScrollView(this);
@@ -2583,13 +3003,29 @@ public class MainActivity extends Activity {
             col.addView(nm, new LinearLayout.LayoutParams(MATCH, WRAP));
 
             String dirPrefix = isSend
-                    ? (r.peer == null || r.peer.isEmpty() ? "已发出" : "发往 " + r.peer)
-                    : (r.peer == null || r.peer.isEmpty() ? "已收到" : "来自 " + r.peer);
+                    ? (r.peer == null || r.peer.isEmpty() ? "已发出" : "发往 " + displayPeerLabel(r.peer))
+                    : (r.peer == null || r.peer.isEmpty() ? "已收到" : "来自 " + displayPeerLabel(r.peer));
             String timeStr = r.ts > 0 ? " · " + sdf.format(new Date(r.ts)) : "";
+
+            LinearLayout metaRow = new LinearLayout(this);
+            metaRow.setOrientation(LinearLayout.HORIZONTAL);
+            metaRow.setGravity(Gravity.CENTER_VERTICAL);
+            if (r.via != null && !r.via.trim().isEmpty()) {
+                TextView chanBadge = label("", 10, cOnSurface, true);
+                chanBadge.setPadding(dp(6), dp(2), dp(6), dp(2));
+                stylePathBadge(chanBadge, r.via.trim());
+                LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+                bLp.rightMargin = dp(6);
+                metaRow.addView(chanBadge, bLp);
+            }
             TextView mt = label(dirPrefix + " · " + fmtBytes(r.bytes) + timeStr, 12, cOnSurfaceVariant, false);
+            mt.setSingleLine(true);
+            mt.setEllipsize(TextUtils.TruncateAt.END);
+            metaRow.addView(mt, new LinearLayout.LayoutParams(0, WRAP, 1f));
+
             LinearLayout.LayoutParams mtLp = new LinearLayout.LayoutParams(MATCH, WRAP);
-            mtLp.topMargin = dp(2);
-            col.addView(mt, mtLp);
+            mtLp.topMargin = dp(3);
+            col.addView(metaRow, mtLp);
             row.addView(col, new LinearLayout.LayoutParams(0, WRAP, 1f));
 
             TextView actionHint = label(isSend ? "已发" : "打开", 12, isSend ? cOnSurfaceVariant : cPrimary, false);
@@ -2823,6 +3259,7 @@ public class MainActivity extends Activity {
     }
 
     private void setSendBusy(boolean busy, String msg) {
+        sendBusyFlag = busy;
         if (sendPickTile != null) {
             sendPickTile.setEnabled(!busy);
             sendPickTile.setAlpha(busy ? 0.6f : 1f);
@@ -2838,7 +3275,150 @@ public class MainActivity extends Activity {
         if (busy) {
             startKeepAlive(msg);
             showSendBanner("", msg, false);
+            startProgressPolling();
+        } else {
+            pollActiveTransferOnce();
         }
+    }
+
+    private void startProgressPolling() {
+        if (progressPollingActive) {
+            return;
+        }
+        progressPollingActive = true;
+        ui.removeCallbacks(progressPollTask);
+        ui.post(progressPollTask);
+    }
+
+    private void stopProgressPolling() {
+        progressPollingActive = false;
+        ui.removeCallbacks(progressPollTask);
+    }
+
+    private void pollActiveTransferOnce() {
+        ioPool.execute(() -> {
+            try {
+                final String raw = Mobile.activeTransferStatus();
+                ui.post(() -> applyActiveTransferJson(raw));
+            } catch (Exception e) {
+                Log.w(TAG, "activeTransferStatus", e);
+            }
+        });
+    }
+
+    private void applyActiveTransferJson(String raw) {
+        if (activeTransferCard == null || raw == null || raw.trim().isEmpty()) {
+            return;
+        }
+        try {
+            JSONObject o = new JSONObject(raw);
+            boolean active = o.optBoolean("active", false);
+            if (!active) {
+                activeTransferCard.setVisibility(View.GONE);
+                if (!sendBusyFlag) {
+                    stopProgressPolling();
+                }
+                return;
+            }
+            if (!progressPollingActive) {
+                startProgressPolling();
+            }
+
+            String dir = o.optString("direction", "send");
+            String peer = o.optString("peer", "");
+            String stage = o.optString("stage", "");
+            String channel = o.optString("channel", "");
+            int fIdx = o.optInt("file_index", 0);
+            int fCnt = o.optInt("file_count", 0);
+            String fName = o.optString("file_name", "");
+            long done = o.optLong("bytes_done", 0);
+            long total = o.optLong("bytes_total", 0);
+            long startedAt = o.optLong("started_at", 0);
+
+            String head = "recv".equals(dir) ? "正在接收" : "正在发送";
+            if (!peer.isEmpty()) {
+                head += " · " + displayPeerLabel(peer);
+            }
+            txHeadTv.setText(head);
+
+            if (!channel.isEmpty()) {
+                txChanBadge.setVisibility(View.VISIBLE);
+                stylePathBadge(txChanBadge, channel);
+            } else {
+                txChanBadge.setVisibility(View.GONE);
+            }
+
+            StringBuilder sb = new StringBuilder(stageLabel(stage));
+            if (fCnt > 1 && fIdx > 0) {
+                sb.append(" · 第 ").append(fIdx).append("/").append(fCnt).append(" 个");
+            }
+            if (!fName.isEmpty()) {
+                sb.append(" · ").append(fName);
+            }
+            txSubTv.setText(sb.toString());
+
+            boolean determinate = total > 0 && ("transferring".equals(stage) || "verifying".equals(stage) || done > 0);
+            if (determinate) {
+                txProgressBar.setIndeterminate(false);
+                int p = (int) Math.max(0, Math.min(1000, (done * 1000L) / total));
+                txProgressBar.setProgress(p);
+            } else {
+                txProgressBar.setIndeterminate(true);
+            }
+
+            long nowMs = System.currentTimeMillis();
+            long elapsedMs = startedAt > 0 && nowMs > startedAt ? nowMs - startedAt : 0L;
+            StringBuilder mb = new StringBuilder();
+            if (total > 0) {
+                int pct = (int) Math.max(0, Math.min(100, (done * 100L) / total));
+                mb.append(pct).append("% · ").append(fmtBytes(done)).append(" / ").append(fmtBytes(total));
+            } else if (done > 0) {
+                mb.append("已传输 ").append(fmtBytes(done));
+            } else {
+                mb.append("正在建立传输通道…");
+            }
+            if (elapsedMs >= 1000L) {
+                mb.append(" · 已用 ").append(formatDurationSec(elapsedMs / 1000L));
+            }
+            if (total > 0 && done > 0 && done < total && elapsedMs >= 1200L) {
+                long remSec = ((total - done) * elapsedMs) / (done * 1000L);
+                if (remSec >= 0L && remSec < 86400L) {
+                    mb.append(" · 预计剩余 ").append(formatDurationSec(remSec));
+                }
+            }
+            txMetricsTv.setText(mb.toString());
+            activeTransferCard.setVisibility(View.VISIBLE);
+        } catch (Exception e) {
+            Log.w(TAG, "applyActiveTransferJson", e);
+        }
+    }
+
+    private static String stageLabel(String stage) {
+        if ("connecting".equals(stage)) {
+            return "连接中";
+        }
+        if ("waiting".equals(stage)) {
+            return "等待对方确认";
+        }
+        if ("racing".equals(stage)) {
+            return "协商直连路径";
+        }
+        if ("transferring".equals(stage)) {
+            return "传输中";
+        }
+        if ("verifying".equals(stage)) {
+            return "校验写入中";
+        }
+        return "处理中";
+    }
+
+    private static String formatDurationSec(long sec) {
+        long m = sec / 60L;
+        long s = sec % 60L;
+        if (m >= 60L) {
+            return String.format(Locale.US, "%d:%02d:%02d", m / 60L, m % 60L, s);
+        }
+        return String.format(Locale.US, "%02d:%02d", m, s);
     }
 
     private void onSendSucceeded(final String raw, final String targetName) {
@@ -3105,6 +3685,27 @@ public class MainActivity extends Activity {
         lanBtn.setBackground(ripple(roundBox(cCard, cBorder, 99), 99));
         lanBtn.setOnClickListener(v -> discover());
         peerChipRow.addView(lanBtn, new LinearLayout.LayoutParams(WRAP, WRAP));
+        renderDevicesPage();
+    }
+
+    private String displayPeerLabel(String peer) {
+        if (peer == null || peer.isEmpty()) {
+            return "";
+        }
+        for (PeerEntry e : pairedEntries) {
+            if (e.value.equals(peer)) {
+                return e.name;
+            }
+        }
+        for (PeerEntry e : lanEntries) {
+            if (e.value.equals(peer)) {
+                return e.name;
+            }
+        }
+        if (HEX64.matcher(peer).matches()) {
+            return "设备 " + peer.substring(0, 12);
+        }
+        return peer;
     }
 
     private String resolveTargetName(String target) {
@@ -3369,6 +3970,8 @@ public class MainActivity extends Activity {
         static final int UPLOAD = 3;
         static final int CLIP = 4;
         static final int TEXT = 5;
+        static final int TRANSFER = 6;
+        static final int DEVICES = 7;
 
         private final int kind;
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -3380,6 +3983,16 @@ public class MainActivity extends Activity {
             paint.setStrokeWidth(dp(1.8f));
             paint.setStrokeCap(Paint.Cap.ROUND);
             paint.setStrokeJoin(Paint.Join.ROUND);
+        }
+
+        @Override
+        public int getIntrinsicWidth() {
+            return dp(24);
+        }
+
+        @Override
+        public int getIntrinsicHeight() {
+            return dp(24);
         }
 
         @Override
@@ -3403,15 +4016,45 @@ public class MainActivity extends Activity {
                 p.moveTo(w * 0.25f, h * 0.50f); p.lineTo(w * 0.75f, h * 0.50f);
                 c.drawPath(p, paint);
             } else if (kind == SETTINGS) {
-                c.drawCircle(w * 0.5f, h * 0.5f, w * 0.14f, paint);
+                float cx = w * 0.5f, cy = h * 0.5f;
+                float rIn = w * 0.27f, rOut = w * 0.39f;
+                double da1 = 0.22, da2 = 0.13;
                 for (int i = 0; i < 8; i++) {
                     double a = i * Math.PI / 4.0;
-                    float x1 = w * 0.5f + (float) Math.cos(a) * w * 0.25f;
-                    float y1 = h * 0.5f + (float) Math.sin(a) * h * 0.25f;
-                    float x2 = w * 0.5f + (float) Math.cos(a) * w * 0.34f;
-                    float y2 = h * 0.5f + (float) Math.sin(a) * h * 0.34f;
-                    c.drawLine(x1, y1, x2, y2, paint);
+                    float x0 = cx + (float) Math.cos(a - da1) * rIn;
+                    float y0 = cy + (float) Math.sin(a - da1) * rIn;
+                    float x1 = cx + (float) Math.cos(a - da2) * rOut;
+                    float y1 = cy + (float) Math.sin(a - da2) * rOut;
+                    float x2 = cx + (float) Math.cos(a + da2) * rOut;
+                    float y2 = cy + (float) Math.sin(a + da2) * rOut;
+                    float x3 = cx + (float) Math.cos(a + da1) * rIn;
+                    float y3 = cy + (float) Math.sin(a + da1) * rIn;
+                    if (i == 0) {
+                        p.moveTo(x0, y0);
+                    } else {
+                        p.lineTo(x0, y0);
+                    }
+                    p.lineTo(x1, y1);
+                    p.lineTo(x2, y2);
+                    p.lineTo(x3, y3);
                 }
+                p.close();
+                c.drawPath(p, paint);
+                c.drawCircle(cx, cy, w * 0.12f, paint);
+            } else if (kind == TRANSFER) {
+                p.moveTo(w * 0.20f, h * 0.34f); p.lineTo(w * 0.80f, h * 0.34f);
+                p.moveTo(w * 0.64f, h * 0.20f); p.lineTo(w * 0.80f, h * 0.34f); p.lineTo(w * 0.64f, h * 0.48f);
+                p.moveTo(w * 0.80f, h * 0.66f); p.lineTo(w * 0.20f, h * 0.66f);
+                p.moveTo(w * 0.36f, h * 0.52f); p.lineTo(w * 0.20f, h * 0.66f); p.lineTo(w * 0.36f, h * 0.80f);
+                c.drawPath(p, paint);
+            } else if (kind == DEVICES) {
+                c.drawRoundRect(new RectF(w * 0.14f, h * 0.24f, w * 0.56f, h * 0.60f),
+                        w * 0.06f, h * 0.06f, paint);
+                c.drawLine(w * 0.35f, h * 0.60f, w * 0.35f, h * 0.72f, paint);
+                c.drawLine(w * 0.22f, h * 0.72f, w * 0.48f, h * 0.72f, paint);
+                c.drawRoundRect(new RectF(w * 0.64f, h * 0.32f, w * 0.88f, h * 0.80f),
+                        w * 0.06f, h * 0.06f, paint);
+                c.drawLine(w * 0.73f, h * 0.71f, w * 0.79f, h * 0.71f, paint);
             } else if (kind == UPLOAD) {
                 p.moveTo(w * 0.5f, h * 0.62f); p.lineTo(w * 0.5f, h * 0.18f);
                 p.moveTo(w * 0.30f, h * 0.36f); p.lineTo(w * 0.5f, h * 0.17f); p.lineTo(w * 0.70f, h * 0.36f);
@@ -3563,6 +4206,9 @@ public class MainActivity extends Activity {
         } else if ("punch".equalsIgnoreCase(via)) {
             t.setTextColor(cWarn);
             t.setBackground(roundBox(cWarnContainer, 0, 99));
+        } else if ("fail".equalsIgnoreCase(via)) {
+            t.setTextColor(cOnErrorContainer);
+            t.setBackground(roundBox(cErrorContainer, 0, 99));
         } else {
             t.setTextColor(cOnSurface);
             t.setBackground(roundBox(cBorder, 0, 99));
@@ -3571,13 +4217,16 @@ public class MainActivity extends Activity {
 
     private static String pathLabel(String path) {
         if ("lan".equalsIgnoreCase(path)) {
-            return "LAN";
+            return "LAN 直连";
         }
         if ("punch".equalsIgnoreCase(path)) {
-            return "打洞";
+            return "UDP 打洞";
         }
         if ("relay".equalsIgnoreCase(path)) {
-            return "中继";
+            return "服务器中继";
+        }
+        if ("fail".equalsIgnoreCase(path)) {
+            return "失败";
         }
         return path == null ? "" : path;
     }
