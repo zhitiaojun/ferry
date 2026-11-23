@@ -93,16 +93,35 @@ func RunWithName(ctx context.Context, client *signaling.Client, key *identity.Ke
 	localName = SanitizeName(localName)
 	begins := make(chan signaling.PairBegin, 4)
 	relays := make(chan signaling.PairRelay, 8)
+	errCh := make(chan error, 4)
 	client.On(signaling.TypePairBegin, func(e *signaling.Envelope) {
 		if m, err := signaling.Decode[signaling.PairBegin](e); err == nil {
-			begins <- m
+			select {
+			case begins <- m:
+			default:
+			}
 		}
 	})
 	client.On(signaling.TypePairRelay, func(e *signaling.Envelope) {
 		if m, err := signaling.Decode[signaling.PairRelay](e); err == nil {
-			relays <- m
+			select {
+			case relays <- m:
+			default:
+			}
 		}
 	})
+	client.On(signaling.TypeError, func(e *signaling.Envelope) {
+		b, _ := signaling.Decode[signaling.ErrorBody](e)
+		select {
+		case errCh <- fmt.Errorf("signaling: %s: %s", b.Code, b.Message):
+		default:
+		}
+	})
+	defer func() {
+		client.Off(signaling.TypePairBegin)
+		client.Off(signaling.TypePairRelay)
+		client.Off(signaling.TypeError)
+	}()
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -110,9 +129,9 @@ func RunWithName(ctx context.Context, client *signaling.Client, key *identity.Ke
 	var peer Peer
 	var err error
 	if mode == Respond {
-		peer, err = respond(ctx, client, key, code, localName, begins, relays)
+		peer, err = respond(ctx, client, key, code, localName, begins, relays, errCh)
 	} else {
-		peer, err = initiate(ctx, client, key, code, peerID, localName, relays)
+		peer, err = initiate(ctx, client, key, code, peerID, localName, relays, errCh)
 	}
 	if err != nil {
 		return Peer{}, err
@@ -133,7 +152,7 @@ func RunWithName(ctx context.Context, client *signaling.Client, key *identity.Ke
 	return peer, nil
 }
 
-func initiate(ctx context.Context, client *signaling.Client, key *identity.Key, code, peerID, localName string, relays chan signaling.PairRelay) (Peer, error) {
+func initiate(ctx context.Context, client *signaling.Client, key *identity.Key, code, peerID, localName string, relays chan signaling.PairRelay, errCh <-chan error) (Peer, error) {
 	sid := newPairSID()
 	ex, err := Start(RoleInitiator, code, sid)
 	if err != nil {
@@ -146,7 +165,7 @@ func initiate(ctx context.Context, client *signaling.Client, key *identity.Key, 
 	}); err != nil {
 		return Peer{}, err
 	}
-	shareMsg, err := waitRelay(ctx, relays, peerID)
+	shareMsg, err := waitRelay(ctx, client, relays, errCh, peerID)
 	if err != nil {
 		return Peer{}, err
 	}
@@ -161,7 +180,7 @@ func initiate(ctx context.Context, client *signaling.Client, key *identity.Key, 
 	if err := sendConfirm(ctx, client, peerID, localName, shared, key); err != nil {
 		return Peer{}, err
 	}
-	confirmMsg, err := waitRelay(ctx, relays, peerID)
+	confirmMsg, err := waitRelay(ctx, client, relays, errCh, peerID)
 	if err != nil {
 		return Peer{}, err
 	}
@@ -183,10 +202,12 @@ func initiate(ctx context.Context, client *signaling.Client, key *identity.Key, 
 	return peer, nil
 }
 
-func respond(ctx context.Context, client *signaling.Client, key *identity.Key, code, localName string, begins chan signaling.PairBegin, relays chan signaling.PairRelay) (Peer, error) {
+func respond(ctx context.Context, client *signaling.Client, key *identity.Key, code, localName string, begins chan signaling.PairBegin, relays chan signaling.PairRelay, errCh <-chan error) (Peer, error) {
 	var begin signaling.PairBegin
 	select {
 	case begin = <-begins:
+	case err := <-errCh:
+		return Peer{}, err
 	case <-ctx.Done():
 		return Peer{}, fmt.Errorf("no pairing request before the deadline")
 	case <-client.Done():
@@ -214,7 +235,7 @@ func respond(ctx context.Context, client *signaling.Client, key *identity.Key, c
 	}); err != nil {
 		return Peer{}, err
 	}
-	confirmMsg, err := waitRelay(ctx, relays, begin.FromDevice)
+	confirmMsg, err := waitRelay(ctx, client, relays, errCh, begin.FromDevice)
 	if err != nil {
 		return Peer{}, err
 	}
@@ -255,7 +276,7 @@ func checkPeer(wantID string, pub []byte) (Peer, error) {
 	return Peer{ID: got, Pub: pub}, nil
 }
 
-func waitRelay(ctx context.Context, relays chan signaling.PairRelay, from string) (signaling.PairRelay, error) {
+func waitRelay(ctx context.Context, client *signaling.Client, relays chan signaling.PairRelay, errCh <-chan error, from string) (signaling.PairRelay, error) {
 	for {
 		select {
 		case m := <-relays:
@@ -263,6 +284,10 @@ func waitRelay(ctx context.Context, relays chan signaling.PairRelay, from string
 				continue
 			}
 			return m, nil
+		case err := <-errCh:
+			return signaling.PairRelay{}, err
+		case <-client.Done():
+			return signaling.PairRelay{}, fmt.Errorf("signaling connection dropped")
 		case <-ctx.Done():
 			return signaling.PairRelay{}, fmt.Errorf("timed out waiting for the peer")
 		}

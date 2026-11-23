@@ -428,3 +428,30 @@ func TestPingRequiresRegisteredPeer(t *testing.T) {
 		t.Fatal("expected ping to fail when peer is no longer registered")
 	}
 }
+
+func TestPairOfflineFailsFast(t *testing.T) {
+	ts, _ := newTestServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	initKey, _ := identity.GenerateKey()
+	offKey, _ := identity.GenerateKey()
+	paired, err := identity.LoadPaired(filepath.Join(t.TempDir(), "paired.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl, err := signaling.Dial(ctx, wsURL(t, ts, "/signal"), initKey, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	start := time.Now()
+	_, err = pairing.RunWithName(ctx, cl, initKey, paired, pairing.Initiate, "123456", offKey.IDHex(), "phone", 30*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "peer_offline") {
+		t.Fatalf("err = %v, want peer_offline", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("offline pair took %v, want fast fail", elapsed)
+	}
+}

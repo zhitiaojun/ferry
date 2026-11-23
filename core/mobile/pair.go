@@ -9,7 +9,6 @@ import (
 
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/pairing"
-	"github.com/cwlindean/filetransfer/core/signaling"
 )
 
 // GeneratePairCode returns a random 6-digit one-time pairing code.
@@ -95,11 +94,11 @@ func PairWithCodeNamed(signalURL, keyPath, pairedPath, code, peerID, localName s
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	client, err := signaling.Dial(ctx, signalURL, key, nil)
+	client, release, err := acquireSignalForPair(ctx, signalURL, key)
 	if err != nil {
 		return "", err
 	}
-	defer client.Close()
+	defer release()
 	peer, err := pairing.RunWithName(ctx, client, key, paired, pairing.Initiate, code, peerID, localName, 60*time.Second)
 	if err != nil {
 		return "", err
@@ -135,11 +134,11 @@ func WaitPairCodeNamed(signalURL, keyPath, pairedPath, code, localName string, t
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMS)*time.Millisecond)
 	defer cancel()
-	client, err := signaling.Dial(ctx, signalURL, key, nil)
+	client, release, err := acquireSignalForPair(ctx, signalURL, key)
 	if err != nil {
 		return "", err
 	}
-	defer client.Close()
+	defer release()
 	peer, err := pairing.RunWithName(ctx, client, key, paired, pairing.Respond, code, "", localName, time.Duration(timeoutMS)*time.Millisecond)
 	if err != nil {
 		return "", err

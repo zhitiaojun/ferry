@@ -11,6 +11,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/cwlindean/filetransfer/core/identity"
+	"github.com/cwlindean/filetransfer/core/signaling"
 )
 
 var (
@@ -230,14 +232,18 @@ type app struct {
 	logOut       *os.File
 	showMain     bool
 
-	mu          sync.Mutex
-	recent      []string
-	txSeq       uint64
-	tx          *activeTransfer
-	lastPaint   time.Time
-	signalState string
-	cloudPeers  map[string]bool
-	lanPeers    map[string]lanPeerEntry
+	mu           sync.Mutex
+	recent       []string
+	txSeq        uint64
+	tx           *activeTransfer
+	lastPaint    time.Time
+	signalState  string
+	sigClient    *signaling.Client
+	sigHoldCount int
+	sigResumeCh  chan struct{}
+	sigStopCur   context.CancelFunc
+	cloudPeers   map[string]bool
+	lanPeers     map[string]lanPeerEntry
 }
 
 func (a *app) beginTransfer(dir, peer, fileName string, fileCount int, total int64) uint64 {

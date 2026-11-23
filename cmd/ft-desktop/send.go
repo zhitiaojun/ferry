@@ -143,6 +143,12 @@ func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error)
 		}
 	}
 	if res.Channel == "" {
+		if sigCl := a.activeSignalClient(); sigCl != nil {
+			opts.SignalClient = sigCl
+		} else {
+			release := a.holdSignaling()
+			defer release()
+		}
 		res, err = client.SendFiles(ctx, opts, peer.ID, files)
 	}
 	if err != nil {

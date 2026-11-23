@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/cwlindean/filetransfer/core/client"
@@ -76,6 +77,82 @@ func (a *app) signalStatusText() string {
 	default:
 		return "未连接"
 	}
+}
+
+func (a *app) signalHomeStatus() (string, string) {
+	if a == nil {
+		return "信令服务器：未连接", "offline"
+	}
+	a.mu.Lock()
+	st := a.signalState
+	c := a.sigClient
+	a.mu.Unlock()
+	if st == "online" && c != nil && c.Alive() {
+		return "信令服务器：已连接", "online"
+	}
+	if st == "connecting" || st == "online" {
+		return "信令服务器：重连中…", "connecting"
+	}
+	return "信令服务器：未连接", "offline"
+}
+
+func (a *app) activeSignalClient() *signaling.Client {
+	if a == nil {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.signalState == "online" && a.sigClient != nil && a.sigClient.Alive() {
+		return a.sigClient
+	}
+	return nil
+}
+
+func (a *app) holdSignaling() func() {
+	if a == nil {
+		return func() {}
+	}
+	a.mu.Lock()
+	a.sigHoldCount++
+	if a.sigHoldCount == 1 {
+		a.sigResumeCh = make(chan struct{})
+	}
+	stopCur := a.sigStopCur
+	a.mu.Unlock()
+
+	if stopCur != nil {
+		stopCur()
+	}
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			a.mu.Lock()
+			if a.sigHoldCount > 0 {
+				a.sigHoldCount--
+				if a.sigHoldCount == 0 && a.sigResumeCh != nil {
+					close(a.sigResumeCh)
+				}
+			}
+			a.mu.Unlock()
+		})
+	}
+}
+
+func (a *app) acquireSignalForPair(ctx context.Context, key *identity.Key) (*signaling.Client, func(), error) {
+	if cl := a.activeSignalClient(); cl != nil {
+		return cl, func() {}, nil
+	}
+	release := a.holdSignaling()
+	cl, err := signaling.Dial(ctx, a.signalURL, key, nil)
+	if err != nil {
+		release()
+		return nil, nil, err
+	}
+	return cl, func() {
+		_ = cl.Close()
+		release()
+	}, nil
 }
 
 func (a *app) startPresence(ctx context.Context, key *identity.Key) {
@@ -160,7 +237,33 @@ func (a *app) runLANDiscovery(ctx context.Context, key *identity.Key) {
 func (a *app) runSignalingPresence(ctx context.Context, key *identity.Key) {
 	backoff := 2 * time.Second
 	for ctx.Err() == nil {
-		wasOnline := a.serveOneSignaling(ctx, key)
+		for {
+			a.mu.Lock()
+			held := a.sigHoldCount > 0
+			resumeCh := a.sigResumeCh
+			a.mu.Unlock()
+			if !held {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-resumeCh:
+			}
+		}
+
+		actx, acancel := context.WithCancel(ctx)
+		a.mu.Lock()
+		a.sigStopCur = acancel
+		a.mu.Unlock()
+
+		wasOnline := a.serveOneSignaling(actx, ctx, key)
+
+		acancel()
+		a.mu.Lock()
+		a.sigStopCur = nil
+		a.mu.Unlock()
+
 		if ctx.Err() != nil {
 			return
 		}
@@ -180,9 +283,11 @@ func (a *app) runSignalingPresence(ctx context.Context, key *identity.Key) {
 	}
 }
 
-func (a *app) serveOneSignaling(ctx context.Context, key *identity.Key) bool {
+func (a *app) serveOneSignaling(ctx, rootCtx context.Context, key *identity.Key) bool {
 	a.mu.Lock()
-	a.signalState = "connecting"
+	if rootCtx.Err() == nil {
+		a.signalState = "connecting"
+	}
 	a.mu.Unlock()
 	a.notifyMainPaint()
 
@@ -198,8 +303,11 @@ func (a *app) serveOneSignaling(ctx context.Context, key *identity.Key) bool {
 
 	defer func() {
 		a.mu.Lock()
+		if a.sigClient == cl {
+			a.sigClient = nil
+		}
 		a.cloudPeers = nil
-		if ctx.Err() != nil {
+		if rootCtx.Err() != nil {
 			a.signalState = "offline"
 		} else {
 			a.signalState = "connecting"
@@ -210,6 +318,7 @@ func (a *app) serveOneSignaling(ctx context.Context, key *identity.Key) bool {
 	}()
 
 	a.mu.Lock()
+	a.sigClient = cl
 	a.signalState = "online"
 	a.cloudPeers = make(map[string]bool)
 	for _, p := range cl.InitialPeers() {

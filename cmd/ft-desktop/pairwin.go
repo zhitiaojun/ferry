@@ -13,7 +13,6 @@ import (
 
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/pairing"
-	"github.com/cwlindean/filetransfer/core/signaling"
 	qrcode "github.com/skip2/go-qrcode"
 )
 
@@ -435,30 +434,45 @@ func (p *pairWin) startResponder() {
 			p.reportAsync(gen, false, err.Error())
 			return
 		}
-		cl, err := signaling.Dial(ctx, app.signalURL, key, nil)
-		if err != nil {
+		for ctx.Err() == nil {
+			left := time.Until(p.expiresAt)
+			if left <= 0 {
+				return
+			}
+			cl, release, derr := app.acquireSignalForPair(ctx, key)
+			if derr != nil {
+				if ctx.Err() == nil {
+					p.reportAsync(gen, false, "信令连接失败，请检查网络或刷新重试")
+				}
+				return
+			}
+			peer, perr := pairing.RunWithName(ctx, cl, key, paired, pairing.Respond, code, "", app.deviceName(), left)
+			release()
+			if perr == nil {
+				if serr := paired.Save(); serr != nil {
+					p.reportAsync(gen, false, serr.Error())
+					return
+				}
+				display := peer.Name
+				if display == "" {
+					display = truncID(peer.ID)
+				}
+				p.reportAsync(gen, true, display)
+				return
+			}
+			if ctx.Err() == nil && strings.Contains(perr.Error(), "signaling connection dropped") {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(400 * time.Millisecond):
+					continue
+				}
+			}
 			if ctx.Err() == nil {
-				p.reportAsync(gen, false, "信令连接失败，请检查网络或刷新重试")
+				p.reportAsync(gen, false, perr.Error())
 			}
 			return
 		}
-		defer cl.Close()
-		peer, err := pairing.RunWithName(ctx, cl, key, paired, pairing.Respond, code, "", app.deviceName(), rem)
-		if err != nil {
-			if ctx.Err() == nil {
-				p.reportAsync(gen, false, err.Error())
-			}
-			return
-		}
-		if serr := paired.Save(); serr != nil {
-			p.reportAsync(gen, false, serr.Error())
-			return
-		}
-		display := peer.Name
-		if display == "" {
-			display = truncID(peer.ID)
-		}
-		p.reportAsync(gen, true, display)
 		_ = hwnd
 	}()
 }
@@ -518,12 +532,12 @@ func (p *pairWin) submitManual() {
 			p.reportAsync(gen, false, err.Error())
 			return
 		}
-		cl, err := signaling.Dial(ctx, app.signalURL, key, nil)
+		cl, release, err := app.acquireSignalForPair(ctx, key)
 		if err != nil {
 			p.reportAsync(gen, false, "信令连接失败："+err.Error())
 			return
 		}
-		defer cl.Close()
+		defer release()
 		peer, err := pairing.RunWithName(ctx, cl, key, paired, pairing.Initiate, code, peerText, app.deviceName(), 60*time.Second)
 		if err != nil {
 			p.reportAsync(gen, false, err.Error())

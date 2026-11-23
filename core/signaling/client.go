@@ -226,6 +226,16 @@ func (c *Client) On(typ string, h func(*Envelope)) {
 	c.handlers[typ] = h
 }
 
+// Off removes the handler for one message type.
+func (c *Client) Off(typ string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.handlers, typ)
+}
+
 // Send transmits a message without waiting for a reply.
 func (c *Client) Send(ctx context.Context, typ string, data any) error {
 	e, err := Build(typ, "", data)

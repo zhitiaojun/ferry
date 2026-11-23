@@ -1230,7 +1230,33 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 	// Right Transfers Pane
 	paneL := w.sendColR.right + p(28)
 	paneR := cr.right - p(28)
-	cv.drawAlphaText(w.fontH1, "传输记录", rectT{paneL, topH + p(20), paneR, topH + p(54)}, dtSingleLine|dtVCenter, w.pal.ink)
+	sigLbl, sigKind := "信令服务器：未连接", "offline"
+	if w.app != nil {
+		sigLbl, sigKind = w.app.signalHomeStatus()
+	}
+	pillBg, pillFg, dotCol := w.pal.paper3, w.pal.ink2, w.pal.ink3
+	switch sigKind {
+	case "online":
+		pillBg, pillFg, dotCol = w.pal.accentSoft, w.pal.accent, w.pal.accent
+	case "connecting":
+		if w.dark {
+			pillBg = col(0x45, 0x1A, 0x03)
+		} else {
+			pillBg = col(0xFE, 0xF3, 0xC7)
+		}
+		pillFg, dotCol = w.pal.amber, w.pal.amber
+	}
+	pillW := textWidth(cv.memDC, w.fontSm, sigLbl) + p(26)
+	pillH := p(24)
+	pillY := topH + p(25)
+	pillR := rectT{paneR - pillW, pillY, paneR, pillY + pillH}
+	cv.drawAlphaText(w.fontH1, "传输记录", rectT{paneL, topH + p(20), pillR.left - p(12), topH + p(54)}, dtSingleLine|dtVCenter, w.pal.ink)
+	cv.drawAlphaRoundRect(pillR, float64(p(12)), pillBg, w.surfaceAlpha(235), 0, 0, 0)
+	dotSz := p(6)
+	dotX := pillR.left + p(9)
+	dotY := pillY + (pillH-dotSz)/2
+	cv.drawAlphaRoundRect(rectT{dotX, dotY, dotX + dotSz, dotY + dotSz}, float64(dotSz)/2.0, dotCol, 255, 0, 0, 0)
+	cv.drawAlphaText(w.fontSm, sigLbl, rectT{dotX + dotSz + p(6), pillY, pillR.right - p(8), pillR.bottom}, dtSingleLine|dtVCenter, pillFg)
 
 	// Underlined filter tabs
 	tabItems := []struct {

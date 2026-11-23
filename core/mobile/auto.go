@@ -41,6 +41,8 @@ var (
 	sigState       = "offline" // "offline" | "connecting" | "online"
 	sigClient      *signaling.Client
 	sigOnlinePeers = map[string]bool{}
+	autoHoldCount  int
+	autoResumeCh   = make(chan struct{})
 )
 
 // StartAutoReceive starts the one-button receiver. It announces nothing: the
@@ -94,6 +96,21 @@ func StartAutoReceive(name, outDir, signalURL, keyPath, pairedPath, hintJSON, st
 			sigMu.Unlock()
 		}()
 		for ctx.Err() == nil {
+			for {
+				sigMu.Lock()
+				held := autoHoldCount > 0
+				resumeCh := autoResumeCh
+				sigMu.Unlock()
+				if !held {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-resumeCh:
+				}
+			}
+
 			actx, acancel := context.WithCancel(ctx)
 			r.mu.Lock()
 			r.attemptCancel = acancel
@@ -203,6 +220,74 @@ func ConnectionStatus() string {
 		"lan_peers":     lanMap,
 	})
 	return string(b)
+}
+
+// holdAutoSignal temporarily pauses StartAutoReceive's background reconnect loop
+// so a foreground Dial using the same device key cannot fight the receiver.
+func holdAutoSignal() func() {
+	sigMu.Lock()
+	autoHoldCount++
+	if autoHoldCount == 1 {
+		autoResumeCh = make(chan struct{})
+	}
+	sigMu.Unlock()
+
+	autoMu.Lock()
+	r := autoRcv
+	autoMu.Unlock()
+	if r != nil {
+		r.mu.Lock()
+		ac := r.attemptCancel
+		r.mu.Unlock()
+		if ac != nil {
+			ac()
+		}
+	}
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			sigMu.Lock()
+			if autoHoldCount > 0 {
+				autoHoldCount--
+				if autoHoldCount == 0 && autoResumeCh != nil {
+					close(autoResumeCh)
+				}
+			}
+			sigMu.Unlock()
+			autoMu.Lock()
+			ar := autoRcv
+			autoMu.Unlock()
+			if ar != nil {
+				select {
+				case ar.reconnectCh <- struct{}{}:
+				default:
+				}
+			}
+		})
+	}
+}
+
+// acquireSignalForPair returns an active signaling client if StartAutoReceive
+// is already online, or holds the receiver loop while dialing a temporary one.
+func acquireSignalForPair(ctx context.Context, signalURL string, key *identity.Key) (*signaling.Client, func(), error) {
+	sigMu.Lock()
+	c := sigClient
+	st := sigState
+	sigMu.Unlock()
+	if c != nil && c.Alive() && st == "online" {
+		return c, func() {}, nil
+	}
+	release := holdAutoSignal()
+	cl, err := signaling.Dial(ctx, signalURL, key, nil)
+	if err != nil {
+		release()
+		return nil, nil, err
+	}
+	return cl, func() {
+		_ = cl.Close()
+		release()
+	}, nil
 }
 
 // StopAutoReceive stops the auto receiver.
@@ -539,6 +624,8 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 	if err != nil {
 		return "", err
 	}
+	releaseHold := holdAutoSignal()
+	defer releaseHold()
 	client, err := signaling.Dial(ctx, signalURL, key, logger)
 	if err != nil {
 		return "", err
@@ -569,6 +656,8 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
+		case <-client.Done():
+			return "", fmt.Errorf("signaling dropped: %v", client.Err())
 		case <-deadline.C:
 			return "", fmt.Errorf("peer did not answer the request")
 		case e := <-events:

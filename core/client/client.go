@@ -37,15 +37,16 @@ type Status struct {
 
 // Options configures one relay transfer.
 type Options struct {
-	SignalURL  string
-	KeyPath    string // device key file
-	PairedPath string // trusted-peer table
-	Name       string // device name shown to the peer
-	Chunk      int
-	Timeout    time.Duration
-	NoTLS      bool
-	Log        *logging.Logger
-	OnStatus   func(Status)
+	SignalURL    string
+	SignalClient *signaling.Client // optional persistent signaling client to reuse
+	KeyPath      string            // device key file
+	PairedPath   string            // trusted-peer table
+	Name         string            // device name shown to the peer
+	Chunk        int
+	Timeout      time.Duration
+	NoTLS        bool
+	Log          *logging.Logger
+	OnStatus     func(Status)
 }
 
 // Result summarises a completed transfer.
@@ -111,11 +112,17 @@ func SendFiles(ctx context.Context, o Options, toID string, files []string) (Res
 	if err != nil {
 		return Result{}, fmt.Errorf("device key %s: %w", o.KeyPath, err)
 	}
-	cl, err := signaling.Dial(ctx, o.SignalURL, key, o.Log)
-	if err != nil {
-		return Result{}, err
+	cl := o.SignalClient
+	if cl == nil || !cl.Alive() {
+		cl, err = signaling.Dial(ctx, o.SignalURL, key, o.Log)
+		if err != nil {
+			return Result{}, err
+		}
+		defer cl.Close()
+	} else {
+		defer cl.Off(signaling.TypeSendResp)
+		defer cl.Off(signaling.TypeError)
 	}
-	defer cl.Close()
 
 	sessionID, err := randomHex16()
 	if err != nil {
@@ -163,6 +170,8 @@ func SendFiles(ctx context.Context, o Options, toID string, files []string) (Res
 	case answer = <-respCh:
 	case err := <-errCh:
 		return Result{}, err
+	case <-cl.Done():
+		return Result{}, fmt.Errorf("signaling connection dropped: %v", cl.Err())
 	case <-ctx.Done():
 		return Result{}, ctx.Err()
 	}

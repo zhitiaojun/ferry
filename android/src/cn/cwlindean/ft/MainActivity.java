@@ -192,6 +192,10 @@ public class MainActivity extends Activity {
     private Button devicesLanBtn;
 
     // Home views
+    private LinearLayout homeSignalBar;
+    private View homeSigDot;
+    private TextView homeSigText;
+    private TextView homeSigHost;
     private HorizontalScrollView peerScroll;
     private LinearLayout peerChipRow;
     private LinearLayout sendCard;
@@ -662,6 +666,49 @@ public class MainActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(20), dp(8), dp(20), dp(28));
+
+        // 0. Signaling Server Status Bar (always visible whether paired or unpaired)
+        homeSignalBar = new LinearLayout(this);
+        homeSignalBar.setOrientation(LinearLayout.HORIZONTAL);
+        homeSignalBar.setGravity(Gravity.CENTER_VERTICAL);
+        homeSignalBar.setPadding(dp(12), dp(9), dp(12), dp(9));
+        homeSignalBar.setBackground(ripple(roundBox(cCard, cBorder, 12), 12));
+        homeSignalBar.setOnClickListener(v -> {
+            if (!recvRunning) {
+                getPreferences(MODE_PRIVATE).edit().putBoolean("recvAuto", true).apply();
+                startAllReceive();
+            } else if (!"online".equals(signalState)) {
+                ioPool.execute(() -> {
+                    try {
+                        Mobile.reconnectAutoReceive();
+                    } catch (Exception ignored) {
+                    }
+                });
+                pollConnectionStatusOnce();
+                toast("正在重连信令服务器…");
+            }
+        });
+
+        homeSigDot = new View(this);
+        homeSigDot.setBackground(oval(cOutline));
+        LinearLayout.LayoutParams hsDotLp = new LinearLayout.LayoutParams(dp(8), dp(8));
+        hsDotLp.rightMargin = dp(8);
+        homeSignalBar.addView(homeSigDot, hsDotLp);
+
+        homeSigText = label("信令服务器：未连接", 12, cOnSurface, true);
+        homeSigText.setSingleLine(true);
+        homeSigText.setEllipsize(TextUtils.TruncateAt.END);
+        homeSignalBar.addView(homeSigText, new LinearLayout.LayoutParams(0, WRAP, 1f));
+
+        homeSigHost = label("ft.cwlindean.cn", 11, cOnSurfaceVariant, false);
+        homeSigHost.setTypeface(Typeface.MONOSPACE);
+        LinearLayout.LayoutParams hsHostLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        hsHostLp.leftMargin = dp(8);
+        homeSignalBar.addView(homeSigHost, hsHostLp);
+
+        LinearLayout.LayoutParams hsLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        hsLp.bottomMargin = dp(12);
+        root.addView(homeSignalBar, hsLp);
 
         // 1. Horizontal Paired / LAN Device Selector Bar
         peerScroll = new HorizontalScrollView(this);
@@ -2661,6 +2708,44 @@ public class MainActivity extends Activity {
             startDotPulse();
         } else {
             stopDotPulse();
+        }
+        if (homeSignalBar != null && homeSigDot != null && homeSigText != null && homeSigHost != null) {
+            String barText = "信令服务器：未连接（后台接收已关闭）";
+            int barBg = cCard;
+            int barBorder = cBorder;
+            int barFg = cOnSurfaceVariant;
+            int dotClr = cOutline;
+            String hostText = "点此开启";
+            if (recvRunning) {
+                if ("online".equals(signalState)) {
+                    barText = "信令服务器：已连接";
+                    barBg = cPrimaryContainer;
+                    barBorder = cPrimary;
+                    barFg = cOnPrimaryContainer;
+                    dotClr = cPrimary;
+                    hostText = "ft.cwlindean.cn";
+                } else if ("connecting".equals(signalState)) {
+                    barText = "信令服务器：重连中…";
+                    barBg = cWarnContainer;
+                    barBorder = cWarn;
+                    barFg = cWarn;
+                    dotClr = cWarn;
+                    hostText = "ft.cwlindean.cn";
+                } else {
+                    barText = "信令服务器：未连接（仅局域网）";
+                    barBg = cCard;
+                    barBorder = cBorder;
+                    barFg = cOnSurfaceVariant;
+                    dotClr = cOutline;
+                    hostText = "点此重连";
+                }
+            }
+            homeSignalBar.setBackground(ripple(roundBox(barBg, barBorder, 12), 12));
+            homeSigDot.setBackground(oval(dotClr));
+            homeSigText.setText(barText);
+            homeSigText.setTextColor(barFg);
+            homeSigHost.setText(hostText);
+            homeSigHost.setTextColor(barFg);
         }
         if (setRecvBtn != null) {
             setRecvBtn.setText(recvRunning ? "已开启" : "已关闭");
