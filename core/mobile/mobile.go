@@ -8,6 +8,7 @@ package mobile
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -31,15 +32,25 @@ import (
 // Version is the core version shown in the Android UI.
 const Version = "1.0.0"
 
+type lanPeerEntry struct {
+	TCPAddr  string
+	LastSeen time.Time
+}
+
 var (
-	mu  sync.Mutex
-	rcv *receiver
+	mu           sync.Mutex
+	rcv          *receiver
+	lanPeersMu   sync.Mutex
+	lanPeers     = map[string]lanPeerEntry{}
+	lanListening bool
 )
 
 type receiver struct {
 	name   string
 	outDir string
+	devID  [32]byte
 	ln     *pathmgr.TCP
+	lanLst *discovery.Listener
 	cancel context.CancelFunc
 	logger *logging.Logger
 	logf   *os.File
@@ -69,6 +80,16 @@ type summary struct {
 // StartReceiver listens on all interfaces, announces on the LAN and accepts
 // transfers into outDir until StopReceiver. It returns the listen address.
 func StartReceiver(name, outDir, hintJSON string) (string, error) {
+	return startReceiver(name, outDir, "", hintJSON)
+}
+
+// StartReceiverWithKey is like StartReceiver but uses the persistent Ed25519
+// device key at keyPath so LAN peers match entries in paired.json by DeviceID.
+func StartReceiverWithKey(name, outDir, keyPath, hintJSON string) (string, error) {
+	return startReceiver(name, outDir, keyPath, hintJSON)
+}
+
+func startReceiver(name, outDir, keyPath, hintJSON string) (string, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	if rcv != nil {
@@ -77,6 +98,14 @@ func StartReceiver(name, outDir, hintJSON string) (string, error) {
 	name = pairing.SanitizeName(name)
 	if name == "" {
 		name = "android"
+	}
+	devID := identity.DeviceID(name)
+	if keyPath != "" {
+		k, err := identity.LoadOrCreateKey(keyPath)
+		if err != nil {
+			return "", err
+		}
+		devID = k.ID()
 	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return "", fmt.Errorf("create output dir: %w", err)
@@ -100,11 +129,20 @@ func StartReceiver(name, outDir, hintJSON string) (string, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	hint := parseHint(hintJSON)
-	r := &receiver{name: name, outDir: outDir, ln: ln, cancel: cancel, logger: logger, logf: logf}
+	lanLst, lerr := discovery.Listen(discovery.Config{
+		DeviceID: devID,
+		Name:     name,
+		Log:      logger,
+		Hint:     hint,
+	})
+	if lerr != nil {
+		logger.Event("discovery.listen.error", map[string]any{"error": lerr.Error()})
+	}
+	r := &receiver{name: name, outDir: outDir, devID: devID, ln: ln, lanLst: lanLst, cancel: cancel, logger: logger, logf: logf}
 	rcv = r
 	go func() {
 		err := discovery.Announce(ctx, discovery.Config{
-			DeviceID: identity.DeviceID(name),
+			DeviceID: devID,
 			Name:     name,
 			Port:     port,
 			Log:      logger,
@@ -114,8 +152,75 @@ func StartReceiver(name, outDir, hintJSON string) (string, error) {
 			logger.Event("discovery.announce.error", map[string]any{"error": err.Error()})
 		}
 	}()
+	if lanLst != nil {
+		lanPeersMu.Lock()
+		lanListening = true
+		lanPeersMu.Unlock()
+		go func() {
+			if err := lanLst.Run(ctx); err != nil && ctx.Err() == nil {
+				logger.Event("discovery.listen.run_error", map[string]any{"error": err.Error()})
+			}
+		}()
+		go syncLANPeers(ctx, lanLst)
+	}
 	go r.acceptLoop(ctx)
 	return ln.Addr(), nil
+}
+
+func syncLANPeers(ctx context.Context, lst *discovery.Listener) {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for {
+		devs := lst.Devices()
+		now := time.Now()
+		lanPeersMu.Lock()
+		for id, entry := range lanPeers {
+			if now.Sub(entry.LastSeen) > discovery.DeviceTTL {
+				delete(lanPeers, id)
+			}
+		}
+		for _, d := range devs {
+			if d.TCPAddr == "" {
+				continue
+			}
+			idHex := hex.EncodeToString(d.DeviceID[:])
+			lanPeers[idHex] = lanPeerEntry{TCPAddr: d.TCPAddr, LastSeen: d.LastSeen}
+		}
+		lanPeersMu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+func lanPeerAddr(idHex string) string {
+	idHex = strings.TrimSpace(idHex)
+	if idHex == "" {
+		return ""
+	}
+	lanPeersMu.Lock()
+	defer lanPeersMu.Unlock()
+	e, ok := lanPeers[idHex]
+	if !ok || time.Since(e.LastSeen) > discovery.DeviceTTL {
+		return ""
+	}
+	return e.TCPAddr
+}
+
+func snapshotLANPeers() (bool, map[string]string) {
+	lanPeersMu.Lock()
+	defer lanPeersMu.Unlock()
+	now := time.Now()
+	out := make(map[string]string, len(lanPeers))
+	for id, e := range lanPeers {
+		if now.Sub(e.LastSeen) <= discovery.DeviceTTL && e.TCPAddr != "" {
+			out[id] = e.TCPAddr
+		}
+	}
+	return lanListening, out
 }
 
 // StopReceiver stops listening and announcing.
@@ -135,6 +240,13 @@ func (r *receiver) stop() {
 	r.stopOnce.Do(func() {
 		r.cancel()
 		_ = r.ln.Close()
+		if r.lanLst != nil {
+			_ = r.lanLst.Close()
+		}
+		lanPeersMu.Lock()
+		lanListening = false
+		lanPeers = map[string]lanPeerEntry{}
+		lanPeersMu.Unlock()
 		_ = r.logf.Close()
 	})
 }
@@ -164,7 +276,7 @@ func (r *receiver) acceptLoop(ctx context.Context) {
 func (r *receiver) handle(ctx context.Context, nc net.Conn) {
 	defer nc.Close()
 	s, err := session.Accept(nc, session.Params{
-		DeviceID:     identity.DeviceID(r.name),
+		DeviceID:     r.devID,
 		Name:         r.name,
 		Capabilities: proto.CapResume,
 	})
@@ -273,34 +385,41 @@ func SendFiles(peerAddr, name, pathsJSON string) (string, error) {
 	txSeq := beginActiveTransfer("send", peerAddr, filepath.Base(paths[0]), len(paths), totalBytes)
 	defer endActiveTransfer(txSeq)
 
+	res, err := sendFilesLAN(context.Background(), peerAddr, name, identity.DeviceID(name), paths, 10*time.Second, txSeq, nil)
+	return marshalSummary(res), err
+}
+
+func sendFilesLAN(ctx context.Context, peerAddr, name string, devID [32]byte, paths []string, dialTimeout time.Duration, txSeq uint64, logger *logging.Logger) (summary, error) {
+	res := summary{OK: false, Path: "lan"}
 	d := pathmgr.NewTCPDial(peerAddr)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	dctx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
-	nc, err := d.Dial(ctx)
+	nc, err := d.Dial(dctx)
 	if err != nil {
 		res.Error = err.Error()
-		return marshalSummary(res), err
+		return res, err
 	}
 	s, err := session.Dial(nc, session.Params{
-		DeviceID:     identity.DeviceID(name),
+		DeviceID:     devID,
 		Name:         name,
 		Capabilities: proto.CapResume,
 	})
 	if err != nil {
 		_ = nc.Close()
 		res.Error = err.Error()
-		return marshalSummary(res), err
+		return res, err
 	}
 	defer s.Close()
 	updateActiveTransfer(txSeq, "transferring", "lan", pairing.SanitizeName(s.Peer.Name), "", 0, 0, -1, 0)
 	out, err := transfer.Send(s, paths, transfer.Config{
+		Log: logger,
 		OnDetailProgress: func(snap transfer.ProgressSnapshot) {
 			updateActiveTransfer(txSeq, snap.Stage, "lan", "", snap.FileName, snap.FileIndex, snap.FileCount, snap.BytesDone, snap.BytesTotal)
 		},
 	})
 	if err != nil {
 		res.Error = err.Error()
-		return marshalSummary(res), err
+		return res, err
 	}
 	res.OK = true
 	res.Peer = s.Peer.Name
@@ -309,7 +428,7 @@ func SendFiles(peerAddr, name, pathsJSON string) (string, error) {
 	res.Bytes = out.Bytes
 	res.Chunks = out.Chunks
 	res.DurationMS = out.Duration.Milliseconds()
-	return marshalSummary(res), nil
+	return res, nil
 }
 
 // Gateway returns the default gateway as text (diagnostics for hotspot mode),

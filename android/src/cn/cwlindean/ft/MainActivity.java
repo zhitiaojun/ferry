@@ -100,8 +100,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Date;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -144,6 +147,9 @@ public class MainActivity extends Activity {
     private boolean recvRunning;
     private boolean webRunning;
     private boolean lanSearching;
+    private String signalState = "offline";
+    private final Set<String> cloudOnlineSet = new HashSet<>();
+    private final Set<String> lanOnlineSet = new HashSet<>();
     private int activePage; // 0 = 传输, 1 = 设备, 2 = 设置
     private String lanPort = "";
     private String selectedTarget = "";
@@ -255,6 +261,7 @@ public class MainActivity extends Activity {
         public void run() {
             pollReceivedOnce();
             pollActiveTransferOnce();
+            pollConnectionStatusOnce();
             if (recvRunning) {
                 ui.postDelayed(this, 1500);
             }
@@ -303,6 +310,15 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         pollReceivedOnce();
+        if (recvRunning) {
+            ioPool.execute(() -> {
+                try {
+                    Mobile.reconnectAutoReceive();
+                } catch (Exception ignored) {
+                }
+            });
+            pollConnectionStatusOnce();
+        }
         if (pairDialog != null && pairDialog.isShowing() && pairMode == 0) {
             startCameraIfReady();
         }
@@ -1053,6 +1069,25 @@ public class MainActivity extends Activity {
                 nmTv.setSingleLine(true);
                 nmTv.setEllipsize(TextUtils.TruncateAt.END);
                 hdr.addView(nmTv, new LinearLayout.LayoutParams(0, WRAP, 1f));
+
+                String stLabel = "离线";
+                int stBg = cSurfaceAlt;
+                int stFg = cOnSurfaceVariant;
+                if (lanOnlineSet.contains(entry.value)) {
+                    stLabel = "局域网";
+                    stBg = cPrimaryContainer;
+                    stFg = cOnPrimaryContainer;
+                } else if ("online".equals(signalState) && cloudOnlineSet.contains(entry.value)) {
+                    stLabel = "云端在线";
+                    stBg = cPrimaryContainer;
+                    stFg = cOnPrimaryContainer;
+                }
+                TextView stBadge = label(stLabel, 10, stFg, true);
+                stBadge.setPadding(dp(8), dp(2), dp(8), dp(2));
+                stBadge.setBackground(roundBox(stBg, 0, 99));
+                LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+                sLp.leftMargin = dp(8);
+                hdr.addView(stBadge, sLp);
 
                 if (sel) {
                     TextView badge = label("当前目标", 10, cOnPrimaryContainer, true);
@@ -2411,9 +2446,10 @@ public class MainActivity extends Activity {
             String lanAddr = "";
             String autoErr = "";
             try {
-                lanAddr = Mobile.startReceiver(name, inboxDir().getAbsolutePath(), lanHint());
+                lanAddr = Mobile.startReceiverWithKey(name, inboxDir().getAbsolutePath(),
+                        keyFile().getAbsolutePath(), lanHint());
             } catch (Exception e) {
-                Log.e(TAG, "startReceiver", e);
+                Log.e(TAG, "startReceiverWithKey", e);
             }
             try {
                 Mobile.startAutoReceive(name, inboxDir().getAbsolutePath(), SIGNAL_URL,
@@ -2438,6 +2474,7 @@ public class MainActivity extends Activity {
                 startKeepAlive(lanPort.isEmpty() ? "正在等待接收文件" : "接收中 · 端口 " + lanPort);
                 refreshReceiveUi();
                 refreshSettingsInfo();
+                pollConnectionStatusOnce();
                 ui.removeCallbacks(pollTask);
                 ui.postDelayed(pollTask, 1000);
             });
@@ -2465,6 +2502,9 @@ public class MainActivity extends Activity {
                 }
                 recvRunning = false;
                 lanPort = "";
+                signalState = "offline";
+                cloudOnlineSet.clear();
+                lanOnlineSet.clear();
                 releaseMulticastLock();
                 if (!webRunning) {
                     stopKeepAlive();
@@ -2531,15 +2571,93 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    private void pollConnectionStatusOnce() {
+        ioPool.execute(() -> {
+            try {
+                String raw = Mobile.connectionStatus();
+                if (raw == null || raw.trim().isEmpty()) {
+                    return;
+                }
+                JSONObject o = new JSONObject(raw);
+                final String st = o.optString("signal_state", "offline");
+                final Set<String> nextCloud = new HashSet<>();
+                JSONArray cp = o.optJSONArray("online_peers");
+                if (cp != null) {
+                    for (int i = 0; i < cp.length(); i++) {
+                        String id = cp.optString(i, "");
+                        if (!id.isEmpty()) {
+                            nextCloud.add(id);
+                        }
+                    }
+                }
+                final Set<String> nextLan = new HashSet<>();
+                JSONObject lp = o.optJSONObject("lan_peers");
+                if (lp != null) {
+                    Iterator<String> it = lp.keys();
+                    while (it.hasNext()) {
+                        String id = it.next();
+                        if (!id.isEmpty() && !lp.optString(id, "").isEmpty()) {
+                            nextLan.add(id);
+                        }
+                    }
+                }
+                ui.post(() -> {
+                    boolean changed = !st.equals(signalState)
+                            || !nextCloud.equals(cloudOnlineSet)
+                            || !nextLan.equals(lanOnlineSet);
+                    if (!changed) {
+                        return;
+                    }
+                    signalState = st;
+                    cloudOnlineSet.clear();
+                    cloudOnlineSet.addAll(nextCloud);
+                    lanOnlineSet.clear();
+                    lanOnlineSet.addAll(nextLan);
+                    refreshReceiveUi();
+                    if (activePage == 1) {
+                        renderDevicesPage();
+                    }
+                });
+            } catch (Exception ignored) {
+            }
+        });
+    }
+
     private void refreshReceiveUi() {
         if (sendRecvStatusBtn != null) {
-            sendRecvStatusBtn.setText(recvRunning ? "已开启接收" : "未开启接收");
-            sendRecvStatusBtn.setTextColor(recvRunning ? cPrimary : cOnSurfaceVariant);
+            String stText = "未开启接收";
+            int stColor = cOnSurfaceVariant;
+            if (recvRunning) {
+                switch (signalState) {
+                    case "online":
+                        stText = "已在线";
+                        stColor = cPrimary;
+                        break;
+                    case "connecting":
+                        stText = "重连中…";
+                        stColor = cWarn;
+                        break;
+                    default:
+                        stText = "仅局域网";
+                        stColor = cOnSurfaceVariant;
+                        break;
+                }
+            }
+            sendRecvStatusBtn.setText(stText);
+            sendRecvStatusBtn.setTextColor(stColor);
         }
         if (recvPulseDot != null) {
-            recvPulseDot.setBackground(oval(recvRunning ? cPrimary : cOutline));
+            int dotClr = cOutline;
+            if (recvRunning) {
+                if ("online".equals(signalState)) {
+                    dotClr = cPrimary;
+                } else if ("connecting".equals(signalState)) {
+                    dotClr = cWarn;
+                }
+            }
+            recvPulseDot.setBackground(oval(dotClr));
         }
-        if (recvRunning) {
+        if (recvRunning && "online".equals(signalState)) {
             startDotPulse();
         } else {
             stopDotPulse();

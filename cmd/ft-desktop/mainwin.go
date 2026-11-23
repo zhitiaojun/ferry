@@ -1553,9 +1553,41 @@ func (w *mainWin) drawDevices(cv *glassCanvas, cr rectT) {
 	for i, br := range w.devSendBtnsR {
 		ry := top + int32(i)*rowH
 		peer := w.peers[i]
-		cv.drawAlphaText(w.fontBold, peerLabel(peer),
-			rectT{paneL + p(16), ry + p(9), br.left - p(12), ry + p(31)},
+		nameX := paneL + p(16)
+		nameMaxR := br.left - p(12)
+		peerName := peerLabel(peer)
+
+		reach := "offline"
+		if w.app != nil {
+			reach = w.app.peerReachability(peer.ID)
+		}
+		stLabel, stBg, stFg := "离线", w.pal.paper3, w.pal.ink2
+		switch reach {
+		case "lan":
+			stLabel, stBg, stFg = "局域网", w.pal.accentSoft, w.pal.accent
+		case "cloud":
+			stLabel, stBg, stFg = "云端在线", w.pal.accentSoft, w.pal.accent
+		}
+		stBadgeW := textWidth(cv.memDC, w.fontSm, stLabel) + p(14)
+		nameW := textWidth(cv.memDC, w.fontBold, peerName)
+		nameLimitR := nameMaxR - stBadgeW - p(8)
+		if nameLimitR < nameX+p(40) {
+			nameLimitR = nameX + p(40)
+		}
+		cv.drawAlphaText(w.fontBold, peerName,
+			rectT{nameX, ry + p(9), nameLimitR, ry + p(31)},
 			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink)
+
+		badgeL := nameX + nameW + p(8)
+		if badgeL+stBadgeW > nameMaxR {
+			badgeL = nameMaxR - stBadgeW
+		}
+		if badgeL > nameX+p(24) {
+			badgeR := rectT{badgeL, ry + p(10), badgeL + stBadgeW, ry + p(30)}
+			cv.drawAlphaRoundRect(badgeR, float64(p(10)), stBg, w.surfaceAlpha(240), 0, 0, 0)
+			cv.drawAlphaText(w.fontSm, stLabel, badgeR, dtCenter|dtSingleLine|dtVCenter, stFg)
+		}
+
 		cv.drawAlphaText(w.fontSm, "设备 ID "+truncID(peer.ID),
 			rectT{paneL + p(16), ry + p(31), br.left - p(12), ry + p(52)},
 			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
@@ -1697,13 +1729,17 @@ func (w *mainWin) drawSettings(cv *glassCanvas, cr rectT) {
 	if w.fullID == "" {
 		idShow = "未生成"
 	}
+	connShow := "局域网端口 " + portText
+	if w.app != nil {
+		connShow = "信令：" + w.app.signalStatusText() + " · 端口 " + portText
+	}
 	g2Rows := []struct {
 		k, v string
 		font syscall.Handle
 	}{
 		{"设备名称", w.hostName, w.fontSm},
 		{"设备 ID", idShow, w.fontMono},
-		{"本地监听端口", portText, w.fontMono},
+		{"连接状态", connShow, w.fontSm},
 	}
 	for i, r := range g2Rows {
 		ry := infoTop + int32(i)*infoRowH

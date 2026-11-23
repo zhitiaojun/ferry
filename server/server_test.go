@@ -394,3 +394,37 @@ func TestPairNameExchange(t *testing.T) {
 		t.Fatalf("responder stored peer = %+v (ok=%v), want Name=我的小米手机", dev, ok)
 	}
 }
+
+func TestPingRequiresRegisteredPeer(t *testing.T) {
+	ts, srv := newTestServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	k, err := identity.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl, err := signaling.Dial(ctx, wsURL(t, ts, "/signal"), k, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer cl.Close()
+
+	if !cl.Alive() || cl.LastPong().IsZero() {
+		t.Fatalf("expected alive client with non-zero LastPong after login")
+	}
+	if _, err := cl.Ping(ctx); err != nil {
+		t.Fatalf("initial ping: %v", err)
+	}
+
+	// Simulate stale/evicted registration in server peer table: ping must drop the socket.
+	srv.mu.Lock()
+	delete(srv.peers, k.IDHex())
+	srv.mu.Unlock()
+
+	pctx, pcancel := context.WithTimeout(ctx, 2*time.Second)
+	defer pcancel()
+	if _, err := cl.Ping(pctx); err == nil {
+		t.Fatal("expected ping to fail when peer is no longer registered")
+	}
+}

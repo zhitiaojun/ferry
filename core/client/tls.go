@@ -13,6 +13,11 @@ import (
 	"github.com/cwlindean/filetransfer/core/signaling"
 )
 
+// PairedPeer returns the pinned public key of a peer from the trusted table.
+func PairedPeer(path, id string) (ed25519.PublicKey, error) {
+	return pairedPeer(path, id)
+}
+
 // pairedPeer returns the pinned public key of a peer from the trusted table.
 func pairedPeer(path, id string) (ed25519.PublicKey, error) {
 	store, err := identity.LoadPaired(path)
@@ -38,6 +43,22 @@ func clientTLS(ctx context.Context, rc net.Conn, key *identity.Key, peer ed25519
 	hctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := tc.HandshakeContext(hctx); err != nil {
+		return nil, fmt.Errorf("tls handshake: %w", err)
+	}
+	return tc, nil
+}
+
+// ServerTLS wraps an inbound relay stream with pinned TLS 1.3 (D26).
+func ServerTLS(ctx context.Context, rc net.Conn, key *identity.Key, peer ed25519.PublicKey) (net.Conn, error) {
+	cfg, err := identity.ServerTLS(key, peer)
+	if err != nil {
+		return nil, err
+	}
+	tc := tls.Server(rc, cfg)
+	hctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := tc.HandshakeContext(hctx); err != nil {
+		_ = rc.Close()
 		return nil, fmt.Errorf("tls handshake: %w", err)
 	}
 	return tc, nil

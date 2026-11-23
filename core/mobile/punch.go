@@ -452,12 +452,17 @@ func describeFiles(paths []string) ([]signaling.FileInfo, int64, error) {
 	return out, total, nil
 }
 
-func openLogger(dir string) *logging.Logger {
+func openLoggerFile(dir string) (*logging.Logger, *os.File) {
 	f, err := os.OpenFile(stateLogPath(dir, "events.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	return logging.New(f)
+	return logging.New(f), f
+}
+
+func openLogger(dir string) *logging.Logger {
+	l, _ := openLoggerFile(dir)
+	return l
 }
 
 var debugFile *os.File

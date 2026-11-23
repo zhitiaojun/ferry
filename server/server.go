@@ -430,6 +430,13 @@ func (s *Server) broadcastPresence(deviceID string, online bool) {
 func (s *Server) route(ctx context.Context, p *peer, e *signaling.Envelope) {
 	switch e.Type {
 	case signaling.TypePing:
+		s.mu.Lock()
+		alive := s.peers[p.id] == p
+		s.mu.Unlock()
+		if !alive {
+			_ = p.conn.CloseNow()
+			return
+		}
 		body, _ := signaling.Decode[signaling.Ping](e)
 		pong, err := signaling.Build(signaling.TypePong, e.ID, body)
 		if err == nil {

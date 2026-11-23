@@ -116,19 +116,35 @@ func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	res, err := client.SendFiles(ctx, client.Options{
+	opts := client.Options{
 		SignalURL:  a.signalURL,
 		KeyPath:    a.keyPath,
 		PairedPath: a.pairedPath,
 		Name:       a.deviceName(),
 		OnStatus: func(st client.Status) {
 			ch := ""
-			if st.Channel == "relay" {
+			switch st.Channel {
+			case "lan":
+				ch = "LAN"
+			case "relay":
 				ch = "中继"
 			}
 			a.updateTransfer(txID, st.Stage, ch, "", st.FileName, st.FileIndex, st.FileCount, st.BytesDone, st.BytesTotal)
 		},
-	}, peer.ID, files)
+	}
+
+	var res client.Result
+	var err error
+	if lanAddr := a.peerLANAddr(peer.ID); lanAddr != "" {
+		res, err = client.SendLAN(ctx, opts, lanAddr, files)
+		if err != nil {
+			a.event("desktop.lan_fallback", map[string]any{"to": truncID(peer.ID), "addr": lanAddr, "error": err.Error()})
+			a.updateTransfer(txID, "connecting", "", "", filepath.Base(files[0]), 1, len(files), 0, totalBytes)
+		}
+	}
+	if res.Channel == "" {
+		res, err = client.SendFiles(ctx, opts, peer.ID, files)
+	}
 	if err != nil {
 		a.event("desktop.send_error", map[string]any{"to": truncID(peer.ID), "error": err.Error()})
 		a.note(fmt.Sprintf("%s  → %s · %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeFiles(files)))
@@ -144,12 +160,16 @@ func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error)
 			procPostMessageW.Call(uintptr(h), wmAppReload, 0, 0)
 		}
 	}
+	chLabel := res.Channel
+	if chLabel == "" {
+		chLabel = "中继"
+	}
 	a.event("desktop.send_done", map[string]any{
-		"to": truncID(peer.ID), "bytes": res.Bytes, "chunks": res.Chunks,
+		"to": truncID(peer.ID), "channel": chLabel, "bytes": res.Bytes, "chunks": res.Chunks,
 		"duration_ms": res.Duration.Milliseconds(), "transfer_id": res.TransferID,
 	})
-	a.note(fmt.Sprintf("%s  → %s · %s · %s · %s · 中继",
-		time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeFiles(files), humanBytes(res.Bytes), fmtDur(res.Duration)))
+	a.note(fmt.Sprintf("%s  → %s · %s · %s · %s · %s",
+		time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeFiles(files), humanBytes(res.Bytes), fmtDur(res.Duration), chLabel))
 	return res, nil
 }
 

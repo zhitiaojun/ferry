@@ -51,6 +51,7 @@ type Options struct {
 // Result summarises a completed transfer.
 type Result struct {
 	TransferID string
+	Channel    string // "LAN" | "中继"
 	PeerName   string
 	Files      []string
 	Bytes      int64
@@ -236,7 +237,7 @@ func SendFiles(ctx context.Context, o Options, toID string, files []string) (Res
 		return Result{}, err
 	}
 	return Result{
-		TransferID: transferID, PeerName: peerName, Files: res.Files, Bytes: res.Bytes,
+		TransferID: transferID, Channel: "中继", PeerName: peerName, Files: res.Files, Bytes: res.Bytes,
 		Chunks: res.Chunks, Duration: time.Since(start),
 	}, nil
 }

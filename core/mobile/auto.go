@@ -25,13 +25,22 @@ import (
 // session, and whichever path (punch or relay) completes its handshake first
 // is used (D1/D2).
 type autoReceiver struct {
-	cancel context.CancelFunc
-	done   chan struct{}
+	cancel      context.CancelFunc
+	done        chan struct{}
+	reconnectCh chan struct{}
+
+	mu            sync.Mutex
+	attemptCancel context.CancelFunc
 }
 
 var (
 	autoMu  sync.Mutex
 	autoRcv *autoReceiver
+
+	sigMu          sync.Mutex
+	sigState       = "offline" // "offline" | "connecting" | "online"
+	sigClient      *signaling.Client
+	sigOnlinePeers = map[string]bool{}
 )
 
 // StartAutoReceive starts the one-button receiver. It announces nothing: the
@@ -55,29 +64,145 @@ func StartAutoReceive(name, outDir, signalURL, keyPath, pairedPath, hintJSON, st
 		return key.IDHex(), nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	r := &autoReceiver{cancel: cancel, done: make(chan struct{})}
+	r := &autoReceiver{
+		cancel:      cancel,
+		done:        make(chan struct{}),
+		reconnectCh: make(chan struct{}, 1),
+	}
 	autoRcv = r
 	autoMu.Unlock()
 
+	sigMu.Lock()
+	sigState = "connecting"
+	sigClient = nil
+	sigOnlinePeers = map[string]bool{}
+	sigMu.Unlock()
+
 	hint := parseHint(hintJSON)
 	servers := splitSTUN(stunList)
-	logger := openLogger(outDir)
+	logger, logf := openLoggerFile(outDir)
 	go func() {
 		defer close(r.done)
+		if logf != nil {
+			defer func() { _ = logf.Close() }()
+		}
+		defer func() {
+			sigMu.Lock()
+			sigState = "offline"
+			sigClient = nil
+			sigOnlinePeers = map[string]bool{}
+			sigMu.Unlock()
+		}()
 		for ctx.Err() == nil {
-			if err := autoServe(ctx, key, name, outDir, signalURL, pairedPath, hint, servers, logger); err != nil {
+			actx, acancel := context.WithCancel(ctx)
+			r.mu.Lock()
+			r.attemptCancel = acancel
+			r.mu.Unlock()
+
+			err := autoServe(actx, ctx, key, name, outDir, signalURL, pairedPath, hint, servers, logger)
+
+			acancel()
+			r.mu.Lock()
+			r.attemptCancel = nil
+			r.mu.Unlock()
+
+			if err != nil {
 				if logger != nil {
 					logger.Event("auto.recv_error", map[string]any{"error": err.Error()})
 				}
 				select {
 				case <-ctx.Done():
 					return
+				case <-r.reconnectCh:
 				case <-time.After(2 * time.Second):
 				}
 			}
 		}
 	}()
 	return key.IDHex(), nil
+}
+
+// ReconnectAutoReceive checks whether the active signaling connection is dead or
+// stale and cancels the current attempt so StartAutoReceive redials at once.
+func ReconnectAutoReceive() {
+	autoMu.Lock()
+	r := autoRcv
+	autoMu.Unlock()
+	if r == nil {
+		return
+	}
+	sigMu.Lock()
+	c := sigClient
+	st := sigState
+	sigMu.Unlock()
+
+	trigger := func() {
+		select {
+		case r.reconnectCh <- struct{}{}:
+		default:
+		}
+		r.mu.Lock()
+		ac := r.attemptCancel
+		r.mu.Unlock()
+		if ac != nil {
+			ac()
+		}
+	}
+
+	if c == nil || !c.Alive() || st != "online" {
+		trigger()
+		return
+	}
+	lp := c.LastPong()
+	if lp.IsZero() || time.Since(lp) > 25*time.Second {
+		trigger()
+		return
+	}
+	if time.Since(lp) > 5*time.Second {
+		go func(cl *signaling.Client) {
+			pctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if _, err := cl.Ping(pctx); err != nil {
+				_ = cl.Close()
+				trigger()
+			}
+		}(c)
+	}
+}
+
+// ConnectionStatus returns a JSON snapshot of real signaling and LAN state.
+func ConnectionStatus() string {
+	sigMu.Lock()
+	st := sigState
+	c := sigClient
+	peers := make([]string, 0, len(sigOnlinePeers))
+	for id, ok := range sigOnlinePeers {
+		if ok {
+			peers = append(peers, id)
+		}
+	}
+	sigMu.Unlock()
+
+	var lastPongMS int64
+	if st == "online" {
+		if c == nil || !c.Alive() {
+			st = "connecting"
+		} else if lp := c.LastPong(); !lp.IsZero() {
+			lastPongMS = lp.UnixMilli()
+			if time.Since(lp) > 45*time.Second {
+				st = "connecting"
+			}
+		}
+	}
+	lanLst, lanMap := snapshotLANPeers()
+	b, _ := json.Marshal(map[string]any{
+		"signal_state":  st,
+		"last_pong_ms":  lastPongMS,
+		"lan_listening": lanLst,
+		"online_peers":  peers,
+		"lan_peers":     lanMap,
+	})
+	return string(b)
 }
 
 // StopAutoReceive stops the auto receiver.
@@ -97,7 +222,13 @@ func StopAutoReceive() error {
 	return nil
 }
 
-func autoServe(ctx context.Context, key *identity.Key, name, outDir, signalURL, pairedPath string, hint *discovery.Hint, servers []string, logger *logging.Logger) error {
+func autoServe(ctx, rootCtx context.Context, key *identity.Key, name, outDir, signalURL, pairedPath string, hint *discovery.Hint, servers []string, logger *logging.Logger) error {
+	sigMu.Lock()
+	if rootCtx.Err() == nil {
+		sigState = "connecting"
+	}
+	sigMu.Unlock()
+
 	g, err := gatherHint(ctx, servers, hint, logger)
 	if err != nil {
 		return err
@@ -108,11 +239,50 @@ func autoServe(ctx context.Context, key *identity.Key, name, outDir, signalURL, 
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer func() {
+		sigMu.Lock()
+		if sigClient == client {
+			sigClient = nil
+			sigOnlinePeers = map[string]bool{}
+			if rootCtx.Err() == nil {
+				sigState = "connecting"
+			} else {
+				sigState = "offline"
+			}
+		}
+		sigMu.Unlock()
+		_ = client.Close()
+	}()
+
+	sigMu.Lock()
+	sigClient = client
+	sigState = "online"
+	sigOnlinePeers = map[string]bool{}
+	for _, p := range client.InitialPeers() {
+		if p.Online && p.DeviceID != "" {
+			sigOnlinePeers[p.DeviceID] = true
+		}
+	}
+	sigMu.Unlock()
 
 	requests := make(chan *signaling.Envelope, 4)
 	cands := make(chan *signaling.Envelope, 8)
 	readyCh := make(chan signaling.RelayReady, 1)
+	client.On(signaling.TypePresence, func(e *signaling.Envelope) {
+		p, err := signaling.Decode[signaling.Presence](e)
+		if err != nil || p.DeviceID == "" {
+			return
+		}
+		sigMu.Lock()
+		if sigClient == client {
+			if p.Online {
+				sigOnlinePeers[p.DeviceID] = true
+			} else {
+				delete(sigOnlinePeers, p.DeviceID)
+			}
+		}
+		sigMu.Unlock()
+	})
 	client.On(signaling.TypeSendRequest, func(e *signaling.Envelope) {
 		select {
 		case requests <- e:
@@ -142,6 +312,8 @@ func autoServe(ctx context.Context, key *identity.Key, name, outDir, signalURL, 
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-client.Done():
+		return fmt.Errorf("signaling dropped: %v", client.Err())
 	case e := <-requests:
 		r, err := signaling.Decode[signaling.SendRequest](e)
 		if err != nil {
@@ -203,6 +375,8 @@ func autoServe(ctx context.Context, key *identity.Key, name, outDir, signalURL, 
 				select {
 				case <-actx.Done():
 					return nil, actx.Err()
+				case <-client.Done():
+					return nil, fmt.Errorf("signaling dropped: %v", client.Err())
 				case <-t.C:
 					return nil, fmt.Errorf("peer did not publish candidates")
 				case ce := <-cands:
@@ -234,6 +408,8 @@ func autoServe(ctx context.Context, key *identity.Key, name, outDir, signalURL, 
 			select {
 			case <-actx.Done():
 				return nil, actx.Err()
+			case <-client.Done():
+				return nil, fmt.Errorf("signaling dropped: %v", client.Err())
 			case ready = <-readyCh:
 			}
 			rc, err := relay.Dial(actx, relayURL(signalURL, ready))
@@ -313,13 +489,6 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	hint := parseHint(hintJSON)
-	g, err := gatherHint(ctx, splitSTUN(stunList), hint, logger)
-	if err != nil {
-		return "", err
-	}
-	defer g.Close()
-
 	files, totalBytes, err := describeFiles(paths)
 	if err != nil {
 		return "", err
@@ -336,6 +505,31 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 	}
 	txSeq := beginActiveTransfer("send", targetLabel, firstFile, len(files), totalBytes)
 	defer endActiveTransfer(txSeq)
+
+	if lanAddr := lanPeerAddr(toID); lanAddr != "" {
+		res, lerr := sendFilesLAN(ctx, lanAddr, name, key.ID(), paths, 3*time.Second, txSeq, logger)
+		if lerr == nil && res.OK {
+			if peerName := pairing.SanitizeName(res.Peer); peerName != "" {
+				identity.UpdatePeerName(pairedPath, toID, peerName)
+			}
+			out, _ := json.Marshal(map[string]any{
+				"ok": true, "path": "lan", "peer": truncID(toID), "transfer_id": res.TransferID,
+				"files": res.Files, "bytes": res.Bytes, "chunks": res.Chunks,
+				"duration_ms": res.DurationMS,
+			})
+			return string(out), nil
+		}
+		if logger != nil && lerr != nil {
+			logger.Event("send.lan_fallback", map[string]any{"peer": truncID(toID), "addr": lanAddr, "error": lerr.Error()})
+		}
+	}
+
+	hint := parseHint(hintJSON)
+	g, err := gatherHint(ctx, splitSTUN(stunList), hint, logger)
+	if err != nil {
+		return "", err
+	}
+	defer g.Close()
 
 	sid, err := randHex16()
 	if err != nil {

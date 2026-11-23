@@ -36,7 +36,9 @@ type Client struct {
 	err      error
 	done     chan struct{}
 
-	seq atomic.Uint64
+	initialPeers []Peer
+	lastPong     atomic.Int64
+	seq          atomic.Uint64
 }
 
 // Dial connects to url (wss://…/signal), performs the Ed25519 login handshake
@@ -137,6 +139,10 @@ func (c *Client) login(ctx context.Context) error {
 	body, err := Decode[LoginOK](ok)
 	if err != nil {
 		return err
+	}
+	c.lastPong.Store(time.Now().UnixNano())
+	if len(body.Peers) > 0 {
+		c.initialPeers = append([]Peer(nil), body.Peers...)
 	}
 	if c.log != nil {
 		c.log.Event("signal.login", map[string]any{
@@ -281,7 +287,41 @@ func (c *Client) Ping(ctx context.Context) (time.Duration, error) {
 	if _, err := Decode[Ping](reply); err != nil {
 		return 0, err
 	}
+	c.lastPong.Store(time.Now().UnixNano())
 	return time.Since(start), nil
+}
+
+// InitialPeers returns the online peers reported by the server at login_ok.
+func (c *Client) InitialPeers() []Peer {
+	if c == nil || len(c.initialPeers) == 0 {
+		return nil
+	}
+	return append([]Peer(nil), c.initialPeers...)
+}
+
+// LastPong returns the timestamp of login_ok or the most recent server pong.
+func (c *Client) LastPong() time.Time {
+	if c == nil {
+		return time.Time{}
+	}
+	ns := c.lastPong.Load()
+	if ns == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ns)
+}
+
+// Alive reports whether the signaling connection has not closed yet.
+func (c *Client) Alive() bool {
+	if c == nil {
+		return false
+	}
+	select {
+	case <-c.done:
+		return false
+	default:
+		return true
+	}
 }
 
 // SignalURL returns the signaling URL this client connected to.

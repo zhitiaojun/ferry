@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -77,6 +78,10 @@ func runTray(a *app, keyPath string) int {
 	})
 	go t.acceptLoop()
 
+	presCtx, stopPresence := context.WithCancel(context.Background())
+	defer stopPresence()
+	a.startPresence(presCtx, key)
+
 	// Tray window + icon.
 	if !t.createWindow() {
 		messageBox("轻渡", "创建托盘窗口失败")
@@ -110,6 +115,7 @@ func runTray(a *app, keyPath string) int {
 		procTranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
 		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&msg)))
 	}
+	stopPresence()
 	t.removeIcon()
 	ln.Close()
 	return 0
