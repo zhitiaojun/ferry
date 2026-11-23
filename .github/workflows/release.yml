@@ -165,22 +165,24 @@ jobs:
             --output "$WORK/dex" @"$WORK/classes.txt" "$WORK/aar/classes.jar"
 
           "$BT/aapt2" compile --dir android/res -o "$WORK/res.zip"
+          VER_CODE=$((1000 + ${GITHUB_RUN_NUMBER:-0}))
           "$BT/aapt2" link -o "$WORK/base.apk" \
             --manifest android/AndroidManifest.xml \
             -I "$AJAR" --min-sdk-version 21 --target-sdk-version 34 \
-            --version-code 1000 --version-name "$VER_NAME" "$WORK/res.zip"
+            --version-code "$VER_CODE" --version-name "$VER_NAME" "$WORK/res.zip"
 
           cp "$WORK/dex/classes.dex" "$WORK/classes.dex"
           (cd "$WORK" && python3 "$GITHUB_WORKSPACE/android/zipadd.py" base.apk classes.dex=classes.dex lib/arm64-v8a/libgojni.so=lib/arm64-v8a/libgojni.so)
           "$BT/zipalign" -f -p 4 "$WORK/base.apk" "$WORK/aligned.apk"
 
           if [ -n "${ANDROID_KEYSTORE_B64:-}" ]; then
-            echo "$ANDROID_KEYSTORE_B64" | base64 -d > "$WORK/release.keystore"
+            printf '%s' "$ANDROID_KEYSTORE_B64" | tr -d '\r\n ' | base64 -d > "$WORK/release.keystore"
             KS="$WORK/release.keystore"
-            ALIAS="$ANDROID_KEY_ALIAS"
+            ALIAS="${ANDROID_KEY_ALIAS:-ferry}"
             KSPASS="$ANDROID_KEYSTORE_PASS"
             KPASS="$ANDROID_KEY_PASS"
           else
+            echo "::warning::ANDROID_KEYSTORE_B64 secret is not configured; falling back to an ephemeral keystore."
             KS="$WORK/debug.keystore"
             ALIAS="androiddebugkey"
             KSPASS="android"

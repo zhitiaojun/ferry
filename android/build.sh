@@ -75,18 +75,32 @@ echo "== zipalign =="
 "$BT/zipalign.exe" -f -p 4 "$(m "$WORK/base.apk")" "$(m "$WORK/aligned.apk")"
 
 echo "== key =="
-KS=$TOOLS/android-debug.keystore
-if [ ! -f "$KS" ]; then
-  "$JDK/bin/keytool" -genkeypair -keystore "$(m "$KS")" -alias androiddebugkey \
-    -keyalg RSA -keysize 2048 -validity 10000 \
-    -storepass android -keypass android \
-    -dname "CN=ft Debug,O=ft,C=CN" >/dev/null 2>&1
+if [ -f "$TOOLS/ferry-release.keystore" ] && [ -f "$TOOLS/ferry-signing.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$TOOLS/ferry-signing.env"
+  set +a
+  KS=$TOOLS/ferry-release.keystore
+  ALIAS=${ANDROID_KEY_ALIAS:-ferry}
+  KSPASS=$ANDROID_KEYSTORE_PASS
+  KPASS=$ANDROID_KEY_PASS
+else
+  KS=$TOOLS/android-debug.keystore
+  ALIAS=androiddebugkey
+  KSPASS=android
+  KPASS=android
+  if [ ! -f "$KS" ]; then
+    "$JDK/bin/keytool" -genkeypair -keystore "$(m "$KS")" -alias "$ALIAS" \
+      -keyalg RSA -keysize 2048 -validity 10000 \
+      -storepass "$KSPASS" -keypass "$KPASS" \
+      -dname "CN=ft Debug,O=ft,C=CN" >/dev/null 2>&1
+  fi
 fi
 
 echo "== sign =="
 "$JDK/bin/java" -jar "$(m "$BT/lib/apksigner.jar")" sign \
-  --ks "$(m "$KS")" --ks-key-alias androiddebugkey \
-  --ks-pass pass:android --key-pass pass:android \
+  --ks "$(m "$KS")" --ks-key-alias "$ALIAS" \
+  --ks-pass "pass:$KSPASS" --key-pass "pass:$KPASS" \
   --out "$(m "$OUT/ft-debug.apk")" "$(m "$WORK/aligned.apk")"
 
 "$JDK/bin/java" -jar "$(m "$BT/lib/apksigner.jar")" verify --print-certs "$(m "$OUT/ft-debug.apk")" | head -4
