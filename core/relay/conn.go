@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -23,8 +25,10 @@ import (
 type Conn struct {
 	ws *websocket.Conn
 
-	mu  sync.Mutex
-	buf []byte
+	mu            sync.Mutex
+	buf           []byte
+	readDeadline  atomic.Int64
+	writeDeadline atomic.Int64
 }
 
 // Dial connects to the relay endpoint URL (wss://…/relay?token=…).
@@ -61,8 +65,19 @@ func (c *Conn) Read(p []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for len(c.buf) == 0 {
-		typ, data, err := c.ws.Read(context.Background())
+		ctx := context.Background()
+		var cancel context.CancelFunc
+		if ns := c.readDeadline.Load(); ns != 0 {
+			ctx, cancel = context.WithDeadline(ctx, time.Unix(0, ns))
+		}
+		typ, data, err := c.ws.Read(ctx)
+		if cancel != nil {
+			cancel()
+		}
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return 0, os.ErrDeadlineExceeded
+			}
 			return 0, err
 		}
 		if typ != websocket.MessageBinary {
@@ -77,7 +92,16 @@ func (c *Conn) Read(p []byte) (int, error) {
 
 // Write implements net.Conn: one binary message per call.
 func (c *Conn) Write(p []byte) (int, error) {
-	if err := c.ws.Write(context.Background(), websocket.MessageBinary, p); err != nil {
+	ctx := context.Background()
+	var cancel context.CancelFunc
+	if ns := c.writeDeadline.Load(); ns != 0 {
+		ctx, cancel = context.WithDeadline(ctx, time.Unix(0, ns))
+		defer cancel()
+	}
+	if err := c.ws.Write(ctx, websocket.MessageBinary, p); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return 0, os.ErrDeadlineExceeded
+		}
 		return 0, err
 	}
 	return len(p), nil
@@ -98,14 +122,31 @@ func (c *Conn) LocalAddr() net.Addr { return relayAddr("local") }
 // RemoteAddr implements net.Conn.
 func (c *Conn) RemoteAddr() net.Addr { return relayAddr("remote") }
 
-// SetDeadline implements net.Conn (deadlines are enforced by WebSocket reads).
-func (c *Conn) SetDeadline(t time.Time) error { return nil }
+// SetDeadline implements net.Conn.
+func (c *Conn) SetDeadline(t time.Time) error {
+	_ = c.SetReadDeadline(t)
+	return c.SetWriteDeadline(t)
+}
 
 // SetReadDeadline implements net.Conn.
-func (c *Conn) SetReadDeadline(t time.Time) error { return nil }
+func (c *Conn) SetReadDeadline(t time.Time) error {
+	if t.IsZero() {
+		c.readDeadline.Store(0)
+	} else {
+		c.readDeadline.Store(t.UnixNano())
+	}
+	return nil
+}
 
 // SetWriteDeadline implements net.Conn.
-func (c *Conn) SetWriteDeadline(t time.Time) error { return nil }
+func (c *Conn) SetWriteDeadline(t time.Time) error {
+	if t.IsZero() {
+		c.writeDeadline.Store(0)
+	} else {
+		c.writeDeadline.Store(t.UnixNano())
+	}
+	return nil
+}
 
 type relayAddr string
 

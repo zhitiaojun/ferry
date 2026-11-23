@@ -745,7 +745,7 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 	if err != nil {
 		return "", fmt.Errorf("race: %w", err)
 	}
-	defer sess.Drain(2 * time.Second)
+	defer sess.Close()
 	peerName := pairing.SanitizeName(sess.Peer.Name)
 	if peerName != "" {
 		identity.UpdatePeerName(pairedPath, toID, peerName)

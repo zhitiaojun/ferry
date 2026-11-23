@@ -211,7 +211,7 @@ func SendFiles(ctx context.Context, o Options, toID string, files []string) (Res
 		_ = rc.Close()
 		return Result{}, fmt.Errorf("handshake over relay: %w", err)
 	}
-	defer s.Drain(2 * time.Second)
+	defer s.Close()
 
 	peerName := pairing.SanitizeName(s.Peer.Name)
 	if peerName != "" {

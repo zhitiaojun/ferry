@@ -455,3 +455,60 @@ func TestPairOfflineFailsFast(t *testing.T) {
 		t.Fatalf("offline pair took %v, want fast fail", elapsed)
 	}
 }
+
+func TestRelayConnReadDeadline(t *testing.T) {
+	ts, _ := newTestServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	keyA, _ := identity.GenerateKey()
+	keyB, _ := identity.GenerateKey()
+	a, err := signaling.Dial(ctx, wsURL(t, ts, "/signal"), keyA, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := signaling.Dial(ctx, wsURL(t, ts, "/signal"), keyB, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+
+	bReady := make(chan signaling.RelayReady, 1)
+	b.On(signaling.TypeRelayReady, func(e *signaling.Envelope) {
+		r, _ := signaling.Decode[signaling.RelayReady](e)
+		bReady <- r
+	})
+	reply, err := a.Call(ctx, signaling.TypeRelayOpen, signaling.RelayOpen{
+		ToDevice: keyB.IDHex(), TransferID: "fedcba9876543210fedcba9876543210",
+	}, signaling.TypeRelayReady)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readyA, _ := signaling.Decode[signaling.RelayReady](reply)
+	readyB := <-bReady
+
+	urlA, _ := relay.RelayURL(wsURL(t, ts, "/signal"), readyA.RelayURL, readyA.Token)
+	urlB, _ := relay.RelayURL(wsURL(t, ts, "/signal"), readyB.RelayURL, readyB.Token)
+	ra, err := relay.Dial(ctx, urlA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ra.Close()
+	rb, err := relay.Dial(ctx, urlB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rb.Close()
+
+	_ = ra.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
+	start := time.Now()
+	buf := make([]byte, 16)
+	_, err = ra.Read(buf)
+	if err == nil {
+		t.Fatal("expected deadline error on idle relay Read")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("relay Read took %v, expected ~150ms deadline", elapsed)
+	}
+}

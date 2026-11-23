@@ -54,7 +54,7 @@ func SendLAN(ctx context.Context, o Options, addr string, files []string) (Resul
 		_ = nc.Close()
 		return Result{}, fmt.Errorf("lan handshake: %w", err)
 	}
-	defer s.Drain(2 * time.Second)
+	defer s.Close()
 
 	peerName := pairing.SanitizeName(s.Peer.Name)
 	peerIDHex := hex.EncodeToString(s.Peer.DeviceID[:])

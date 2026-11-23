@@ -1246,7 +1246,7 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 		}
 		pillFg, dotCol = w.pal.amber, w.pal.amber
 	}
-	pillW := textWidth(cv.memDC, w.fontSm, sigLbl) + p(26)
+	pillW := textWidth(cv.memDC, w.fontSm, sigLbl) + p(36)
 	pillH := p(24)
 	pillY := topH + p(25)
 	pillR := rectT{paneR - pillW, pillY, paneR, pillY + pillH}
