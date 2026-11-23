@@ -43,6 +43,9 @@ var (
 	sigOnlinePeers = map[string]bool{}
 	autoHoldCount  int
 	autoResumeCh   = make(chan struct{})
+
+	candRouteMu sync.Mutex
+	candRoutes  = map[string]chan *signaling.Envelope{}
 )
 
 // StartAutoReceive starts the one-button receiver. It announces nothing: the
@@ -271,23 +274,67 @@ func holdAutoSignal() func() {
 // acquireSignalForPair returns an active signaling client if StartAutoReceive
 // is already online, or holds the receiver loop while dialing a temporary one.
 func acquireSignalForPair(ctx context.Context, signalURL string, key *identity.Key) (*signaling.Client, func(), error) {
+	cl, _, release, err := acquireSignalClient(ctx, signalURL, key, nil)
+	return cl, release, err
+}
+
+func acquireSignalClient(ctx context.Context, signalURL string, key *identity.Key, logger *logging.Logger) (*signaling.Client, bool, func(), error) {
 	sigMu.Lock()
 	c := sigClient
 	st := sigState
 	sigMu.Unlock()
 	if c != nil && c.Alive() && st == "online" {
-		return c, func() {}, nil
+		return c, true, func() {}, nil
 	}
 	release := holdAutoSignal()
-	cl, err := signaling.Dial(ctx, signalURL, key, nil)
+	cl, err := signaling.Dial(ctx, signalURL, key, logger)
 	if err != nil {
 		release()
-		return nil, nil, err
+		return nil, false, nil, err
 	}
-	return cl, func() {
+	return cl, false, func() {
 		_ = cl.Close()
 		release()
 	}, nil
+}
+
+func registerCandRoute(sid string, ch chan *signaling.Envelope) {
+	if sid == "" || ch == nil {
+		return
+	}
+	candRouteMu.Lock()
+	candRoutes[sid] = ch
+	candRouteMu.Unlock()
+}
+
+func unregisterCandRoute(sid string) {
+	if sid == "" {
+		return
+	}
+	candRouteMu.Lock()
+	delete(candRoutes, sid)
+	candRouteMu.Unlock()
+}
+
+func dispatchCandEnvelope(e *signaling.Envelope, fallback chan *signaling.Envelope) {
+	if c, err := signaling.Decode[signaling.Candidates](e); err == nil && c.SessionID != "" {
+		candRouteMu.Lock()
+		ch := candRoutes[c.SessionID]
+		candRouteMu.Unlock()
+		if ch != nil {
+			select {
+			case ch <- e:
+			default:
+			}
+			return
+		}
+	}
+	if fallback != nil {
+		select {
+		case fallback <- e:
+		default:
+		}
+	}
 }
 
 // StopAutoReceive stops the auto receiver.
@@ -375,10 +422,7 @@ func autoServe(ctx, rootCtx context.Context, key *identity.Key, name, outDir, si
 		}
 	})
 	client.On(signaling.TypeCandidates, func(e *signaling.Envelope) {
-		select {
-		case cands <- e:
-		default:
-		}
+		dispatchCandEnvelope(e, cands)
 	})
 	client.On(signaling.TypeRelayReady, func(e *signaling.Envelope) {
 		r, err := signaling.Decode[signaling.RelayReady](e)
@@ -624,23 +668,34 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 	if err != nil {
 		return "", err
 	}
-	releaseHold := holdAutoSignal()
-	defer releaseHold()
-	client, err := signaling.Dial(ctx, signalURL, key, logger)
+	client, reused, releaseSig, err := acquireSignalClient(ctx, signalURL, key, logger)
 	if err != nil {
 		return "", err
 	}
-	defer client.Close()
+	defer releaseSig()
 
 	events := make(chan *signaling.Envelope, 16)
-	for _, typ := range []string{signaling.TypeSendResp, signaling.TypeCandidates, signaling.TypeError} {
-		t := typ
-		client.On(t, func(e *signaling.Envelope) {
+	for _, typ := range []string{signaling.TypeSendResp, signaling.TypeError} {
+		client.On(typ, func(e *signaling.Envelope) {
 			select {
 			case events <- e:
 			default:
 			}
 		})
+	}
+	defer client.Off(signaling.TypeSendResp)
+	defer client.Off(signaling.TypeError)
+	if reused {
+		registerCandRoute(sid, events)
+		defer unregisterCandRoute(sid)
+	} else {
+		client.On(signaling.TypeCandidates, func(e *signaling.Envelope) {
+			select {
+			case events <- e:
+			default:
+			}
+		})
+		defer client.Off(signaling.TypeCandidates)
 	}
 	if err := client.Send(ctx, signaling.TypeSendRequest, signaling.SendRequest{
 		ToDevice: toID, SessionID: sid, TransferID: tid, Files: files,

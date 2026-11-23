@@ -407,29 +407,17 @@ func SendViaRelay(signalURL, keyPath, pairedPath, toID, name, pathsJSON string) 
 }
 
 func openRelayRoom(ctx context.Context, client *signaling.Client, toID, transferID string) (signaling.RelayReady, error) {
-	readyCh := make(chan signaling.RelayReady, 1)
-	client.On(signaling.TypeRelayReady, func(e *signaling.Envelope) {
-		r, err := signaling.Decode[signaling.RelayReady](e)
-		if err == nil {
-			select {
-			case readyCh <- r:
-			default:
-			}
-		}
-	})
-	if err := client.Send(ctx, signaling.TypeRelayOpen, signaling.RelayOpen{
+	reply, err := client.Call(ctx, signaling.TypeRelayOpen, signaling.RelayOpen{
 		ToDevice: toID, TransferID: transferID,
-	}); err != nil {
+	}, signaling.TypeRelayReady)
+	if err != nil {
 		return signaling.RelayReady{}, err
 	}
-	select {
-	case r := <-readyCh:
-		return r, nil
-	case <-ctx.Done():
-		return signaling.RelayReady{}, ctx.Err()
-	case <-client.Done():
-		return signaling.RelayReady{}, fmt.Errorf("signaling connection dropped: %v", client.Err())
+	r, err := signaling.Decode[signaling.RelayReady](reply)
+	if err != nil {
+		return signaling.RelayReady{}, err
 	}
+	return r, nil
 }
 
 func relayURL(signalURL string, ready signaling.RelayReady) string {

@@ -2,7 +2,9 @@ package mobile
 
 import (
 	"encoding/json"
+	"net"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,7 +12,11 @@ import (
 
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/pairing"
+	"github.com/cwlindean/filetransfer/core/proto"
+	"github.com/cwlindean/filetransfer/core/relay"
+	"github.com/cwlindean/filetransfer/core/session"
 	"github.com/cwlindean/filetransfer/core/signaling"
+	"github.com/cwlindean/filetransfer/core/transfer"
 	"github.com/cwlindean/filetransfer/server"
 )
 
@@ -179,5 +185,155 @@ func TestPairWhileAutoReceiveActive(t *testing.T) {
 	}
 	if st := readConnSnapshot(t).SignalState; st != "online" {
 		t.Fatalf("StartAutoReceive signal_state after pairing = %q, want online", st)
+	}
+}
+
+func TestSendAutoReusesSignalWithoutDisconnect(t *testing.T) {
+	_ = StopAutoReceive()
+
+	srv := server.New(nil)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	sigURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/signal"
+
+	dir := t.TempDir()
+	mobKeyPath := filepath.Join(dir, "mob.key")
+	mobPairedPath := filepath.Join(dir, "mob-paired.json")
+	outDir := filepath.Join(dir, "out")
+	deskRecvDir := filepath.Join(dir, "desk-recv")
+
+	mobKey, err := identity.LoadOrCreateKey(mobKeyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deskKey, err := identity.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mobPaired, err := identity.LoadPaired(mobPairedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mobPaired.Add(identity.PairedDevice{
+		DeviceID: deskKey.IDHex(), Name: "my-pc", PubKey: deskKey.PubHex(), PairedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mobPaired.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := StartAutoReceive("test-phone", outDir, sigURL, mobKeyPath, mobPairedPath, "", ""); err != nil {
+		t.Fatalf("StartAutoReceive: %v", err)
+	}
+	defer func() { _ = StopAutoReceive() }()
+
+	var initialCl *signaling.Client
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		snap := readConnSnapshot(t)
+		sigMu.Lock()
+		c := sigClient
+		sigMu.Unlock()
+		if snap.SignalState == "online" && c != nil {
+			initialCl = c
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if initialCl == nil {
+		t.Fatalf("StartAutoReceive failed to go online")
+	}
+
+	// Simulate paired peer (desktop) connected on signaling server receiving relay file.
+	ctx := t.Context()
+	deskCl, err := signaling.Dial(ctx, sigURL, deskKey, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer deskCl.Close()
+
+	reqCh := make(chan signaling.SendRequest, 1)
+	readyCh := make(chan signaling.RelayReady, 1)
+	deskCl.On(signaling.TypeSendRequest, func(e *signaling.Envelope) {
+		if r, rerr := signaling.Decode[signaling.SendRequest](e); rerr == nil {
+			reqCh <- r
+		}
+	})
+	deskCl.On(signaling.TypeRelayReady, func(e *signaling.Envelope) {
+		if rr, rerr := signaling.Decode[signaling.RelayReady](e); rerr == nil {
+			readyCh <- rr
+		}
+	})
+
+	recvErrCh := make(chan error, 1)
+	go func() {
+		req := <-reqCh
+		if err := deskCl.Send(ctx, signaling.TypeSendResp, signaling.SendResponse{
+			ToDevice: req.FromDevice, TransferID: req.TransferID, Accept: true,
+		}); err != nil {
+			recvErrCh <- err
+			return
+		}
+		if err := deskCl.Send(ctx, signaling.TypeCandidates, signaling.Candidates{
+			ToDevice: req.FromDevice, SessionID: req.SessionID, Candidates: []signaling.Candidate{},
+		}); err != nil {
+			recvErrCh <- err
+			return
+		}
+		rr := <-readyCh
+		rc, err := relay.Dial(ctx, relayURL(sigURL, rr))
+		if err != nil {
+			recvErrCh <- err
+			return
+		}
+		conn, err := serverTLS(ctx, net.Conn(rc), deskKey, mobKey.Public())
+		if err != nil {
+			recvErrCh <- err
+			return
+		}
+		sess, err := session.Accept(conn, session.Params{
+			DeviceID: deskKey.ID(), Name: "my-pc", Capabilities: proto.CapResume,
+		})
+		if err != nil {
+			_ = conn.Close()
+			recvErrCh <- err
+			return
+		}
+		defer sess.Drain(2 * time.Second)
+		_, err = transfer.Receive(sess, deskRecvDir, transfer.Config{TransferID: hex16(req.TransferID)})
+		recvErrCh <- err
+	}()
+
+	srcFile := filepath.Join(dir, "hello.txt")
+	if err := os.WriteFile(srcFile, []byte("hello reused signaling"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pathsJSON, _ := json.Marshal([]string{srcFile})
+
+	rawRes, err := SendAuto(sigURL, mobKeyPath, mobPairedPath, deskKey.IDHex(), "test-phone", string(pathsJSON), "", "")
+	if err != nil {
+		t.Fatalf("SendAuto failed: %v", err)
+	}
+	if !strings.Contains(rawRes, `"ok":true`) {
+		t.Fatalf("unexpected SendAuto summary: %s", rawRes)
+	}
+	if rerr := <-recvErrCh; rerr != nil {
+		t.Fatalf("receiver error: %v", rerr)
+	}
+
+	sigMu.Lock()
+	afterCl := sigClient
+	sigMu.Unlock()
+	if afterCl != initialCl {
+		t.Fatalf("SendAuto replaced active sigClient (%p -> %p), causing disconnect flicker", initialCl, afterCl)
+	}
+	select {
+	case <-initialCl.Done():
+		t.Fatal("initial sigClient closed during SendAuto")
+	default:
+	}
+	if st := readConnSnapshot(t).SignalState; st != "online" {
+		t.Fatalf("SignalState after SendAuto = %q, want online", st)
 	}
 }

@@ -246,6 +246,13 @@ public class MainActivity extends Activity {
     private CountDownTimer pairCountdown;
     private int pairShowSeq;
 
+    // External Share Sheet state & views
+    private Dialog shareDialog;
+    private LinearLayout sharePeersBox;
+    private Button shareSendBtn;
+    private String shareSelectedTarget = "";
+    private List<Uri> shareDialogUris;
+
     // Camera2 QR scanner state
     private volatile boolean cameraWanted;
     private HandlerThread camThread;
@@ -343,6 +350,10 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (shareDialog != null && shareDialog.isShowing()) {
+            dismissShareSheet(true);
+            return;
+        }
         if (pairDialog != null && pairDialog.isShowing()) {
             closePairSheet();
             return;
@@ -356,6 +367,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        dismissShareSheet(true);
         closePairSheet();
         progressPollingActive = false;
         ui.removeCallbacks(progressPollTask);
@@ -2664,6 +2676,9 @@ public class MainActivity extends Activity {
                     if (activePage == 1) {
                         renderDevicesPage();
                     }
+                    if (shareDialog != null && shareDialog.isShowing()) {
+                        refreshShareSheetPeers();
+                    }
                 });
             } catch (Exception ignored) {
             }
@@ -3288,9 +3303,327 @@ public class MainActivity extends Activity {
         }
         sharedUris = uris;
         showPage(0);
+        final List<Uri> incoming = new ArrayList<>(uris);
+        ui.post(() -> openShareSheet(incoming));
+    }
+
+    private void openShareSheet(final List<Uri> uris) {
+        if (uris == null || uris.isEmpty()) {
+            return;
+        }
+        if (shareDialog != null && shareDialog.isShowing()) {
+            shareDialog.dismiss();
+            shareDialog = null;
+        }
+        shareDialogUris = new ArrayList<>(uris);
+        shareSelectedTarget = selectedTarget;
+
+        Dialog dlg = new Dialog(this, android.R.style.Theme_Translucent_NoTitleBar);
+        dlg.requestWindowFeature(Window.FEATURE_NO_TITLE);
+
+        FrameLayout overlay = new FrameLayout(this);
+        overlay.setBackgroundColor(Color.parseColor("#73000000"));
+        overlay.setPadding(dp(16), dp(28), dp(16), dp(24));
+        overlay.setOnClickListener(v -> dismissShareSheet(true));
+
+        ScrollView scroller = new ScrollView(this);
+        scroller.setFillViewport(false);
+        FrameLayout.LayoutParams scLp = new FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        scLp.width = Math.min(getResources().getDisplayMetrics().widthPixels - dp(32), dp(392));
+
+        LinearLayout sheet = new LinearLayout(this);
+        sheet.setOrientation(LinearLayout.VERTICAL);
+        sheet.setPadding(dp(20), dp(18), dp(20), dp(20));
+        sheet.setBackground(roundBox(cSheetBg, cBorder, 24));
+        sheet.setClickable(true);
+
+        // Header row: "外部分享" pill + title + close X
+        LinearLayout hdr = new LinearLayout(this);
+        hdr.setOrientation(LinearLayout.HORIZONTAL);
+        hdr.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView pill = label("外部分享", 11, cOnPrimaryContainer, true);
+        pill.setPadding(dp(9), dp(3), dp(9), dp(3));
+        pill.setBackground(roundBox(cPrimaryContainer, 0, 99));
+        LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        pLp.rightMargin = dp(8);
+        hdr.addView(pill, pLp);
+
+        TextView title = label("发送到其他设备", 17, cOnSurface, true);
+        hdr.addView(title, new LinearLayout.LayoutParams(0, WRAP, 1f));
+
+        TextView closeX = label("✕", 14, cOnSurfaceVariant, true);
+        closeX.setGravity(Gravity.CENTER);
+        closeX.setBackground(ripple(oval(Color.TRANSPARENT), 99));
+        closeX.setOnClickListener(v -> dismissShareSheet(true));
+        hdr.addView(closeX, new LinearLayout.LayoutParams(dp(30), dp(30)));
+        sheet.addView(hdr, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        // Shared files preview card
+        LinearLayout fileBox = new LinearLayout(this);
+        fileBox.setOrientation(LinearLayout.VERTICAL);
+        fileBox.setPadding(dp(14), dp(12), dp(14), dp(12));
+        fileBox.setBackground(roundBox(cSurfaceAlt, cBorder, 14));
+
+        long totalKnown = 0;
+        boolean allKnown = true;
+        int previewLimit = Math.min(3, uris.size());
+        List<String> previewNames = new ArrayList<>(previewLimit);
+        List<Long> previewSizes = new ArrayList<>(previewLimit);
+        for (int i = 0; i < uris.size(); i++) {
+            long sz = displaySize(uris.get(i));
+            if (sz >= 0) {
+                totalKnown += sz;
+            } else {
+                allKnown = false;
+            }
+            if (i < previewLimit) {
+                previewNames.add(displayName(uris.get(i)));
+                previewSizes.add(sz);
+            }
+        }
+        String summaryStr = "待发送 " + uris.size() + " 个文件";
+        if (totalKnown > 0) {
+            summaryStr += (allKnown ? " · 共 " : " · 约 ") + fmtBytes(totalKnown);
+        }
+        TextView sumTv = label(summaryStr, 12, cOnSurface, true);
+        LinearLayout.LayoutParams sumLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        sumLp.bottomMargin = dp(6);
+        fileBox.addView(sumTv, sumLp);
+
+        for (int i = 0; i < previewNames.size(); i++) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            TextView fn = label(previewNames.get(i), 12, cOnSurfaceVariant, false);
+            fn.setSingleLine(true);
+            fn.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+            row.addView(fn, new LinearLayout.LayoutParams(0, WRAP, 1f));
+            long sz = previewSizes.get(i);
+            if (sz >= 0) {
+                TextView szTv = label(fmtBytes(sz), 11, cOnSurfaceVariant, false);
+                LinearLayout.LayoutParams szLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+                szLp.leftMargin = dp(8);
+                row.addView(szTv, szLp);
+            }
+            LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+            rLp.topMargin = dp(3);
+            fileBox.addView(row, rLp);
+        }
+        if (uris.size() > previewLimit) {
+            TextView moreTv = label("…还有 " + (uris.size() - previewLimit) + " 个文件", 11, cOnSurfaceVariant, false);
+            LinearLayout.LayoutParams mLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+            mLp.topMargin = dp(4);
+            fileBox.addView(moreTv, mLp);
+        }
+
+        LinearLayout.LayoutParams fbLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        fbLp.topMargin = dp(14);
+        sheet.addView(fileBox, fbLp);
+
+        TextView devLbl = label("选择接收设备", 12, cOnSurfaceVariant, true);
+        LinearLayout.LayoutParams dlLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        dlLp.topMargin = dp(14);
+        dlLp.bottomMargin = dp(6);
+        sheet.addView(devLbl, dlLp);
+
+        sharePeersBox = new LinearLayout(this);
+        sharePeersBox.setOrientation(LinearLayout.VERTICAL);
+        sheet.addView(sharePeersBox, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        shareSendBtn = filledBtn("立即发送", cPrimaryPressed, cOnPrimary);
+        shareSendBtn.setOnClickListener(v -> {
+            List<PeerEntry> all = combinedPeers();
+            if (all.isEmpty()) {
+                List<Uri> keep = shareDialogUris;
+                dismissShareSheet(false);
+                sharedUris = keep;
+                if (shareBannerView != null && keep != null && !keep.isEmpty()) {
+                    shareBannerView.setText("已从其他应用带入 " + keep.size() + " 个文件 · 配对完成后点「发文件」发送");
+                    shareBannerView.setVisibility(View.VISIBLE);
+                }
+                openPairSheet(0);
+                return;
+            }
+            String tgt = shareSelectedTarget;
+            if (!isAutoTarget(tgt) && !isLanTarget(tgt)) {
+                toast("请先选择接收设备");
+                return;
+            }
+            selectedTarget = tgt;
+            saveLastPeer(tgt);
+            renderPeerSection();
+            String tgtName = resolveTargetName(tgt);
+            List<Uri> toSend = shareDialogUris;
+            dismissShareSheet(true);
+            if (toSend != null && !toSend.isEmpty()) {
+                sendUriBatch(toSend, deviceName, tgt, tgtName);
+            }
+        });
+        LinearLayout.LayoutParams sbLp = new LinearLayout.LayoutParams(MATCH, dp(44));
+        sbLp.topMargin = dp(14);
+        sheet.addView(shareSendBtn, sbLp);
+
+        Button cancelBtn = smallOutlineBtn("取消分享", v -> dismissShareSheet(true));
+        LinearLayout.LayoutParams cbLp = new LinearLayout.LayoutParams(MATCH, dp(38));
+        cbLp.topMargin = dp(8);
+        sheet.addView(cancelBtn, cbLp);
+
+        scroller.addView(sheet, new FrameLayout.LayoutParams(MATCH, WRAP));
+        overlay.addView(scroller, scLp);
+
+        dlg.setContentView(overlay);
+        dlg.setCanceledOnTouchOutside(true);
+        dlg.setOnCancelListener(d -> clearSharedPending());
+        dlg.setOnDismissListener(d -> {
+            if (shareDialog == dlg) {
+                shareDialog = null;
+                sharePeersBox = null;
+                shareSendBtn = null;
+                shareDialogUris = null;
+            }
+        });
+
+        Window win = dlg.getWindow();
+        if (win != null) {
+            win.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            win.setLayout(MATCH, MATCH);
+            win.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+            WindowManager.LayoutParams lp = win.getAttributes();
+            lp.dimAmount = 0.45f;
+            win.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+            if (Build.VERSION.SDK_INT >= 31) {
+                win.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND);
+                lp.setBlurBehindRadius(36);
+                win.setBackgroundBlurRadius(36);
+            }
+            win.setAttributes(lp);
+        }
+
+        shareDialog = dlg;
+        refreshShareSheetPeers();
+        dlg.show();
+    }
+
+    private List<PeerEntry> combinedPeers() {
+        List<PeerEntry> combined = new ArrayList<>();
+        combined.addAll(pairedEntries);
+        combined.addAll(lanEntries);
+        return combined;
+    }
+
+    private void refreshShareSheetPeers() {
+        if (sharePeersBox == null || shareSendBtn == null) {
+            return;
+        }
+        sharePeersBox.removeAllViews();
+        List<PeerEntry> combined = combinedPeers();
+        if (combined.isEmpty()) {
+            TextView empty = label("暂无已配对或局域网设备，请先配对。", 12, cOnSurfaceVariant, false);
+            empty.setPadding(dp(12), dp(12), dp(12), dp(12));
+            empty.setBackground(roundBox(cSurfaceAlt, cBorder, 12));
+            sharePeersBox.addView(empty, new LinearLayout.LayoutParams(MATCH, WRAP));
+            shareSendBtn.setText("去扫码配对设备");
+            return;
+        }
+
+        boolean foundSel = false;
+        for (PeerEntry e : combined) {
+            if (e.value.equals(shareSelectedTarget)) {
+                foundSel = true;
+                break;
+            }
+        }
+        if (!foundSel) {
+            shareSelectedTarget = combined.get(0).value;
+        }
+
+        for (int i = 0; i < combined.size(); i++) {
+            final PeerEntry entry = combined.get(i);
+            final boolean sel = entry.value.equals(shareSelectedTarget);
+
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(12), dp(10), dp(12), dp(10));
+            row.setBackground(ripple(roundBox(
+                    sel ? cPrimaryContainer : cCard,
+                    sel ? cPrimary : cBorder, 12), 12));
+            row.setOnClickListener(v -> {
+                shareSelectedTarget = entry.value;
+                refreshShareSheetPeers();
+            });
+
+            TextView nm = label(entry.name, 13, sel ? cOnPrimaryContainer : cOnSurface, true);
+            nm.setSingleLine(true);
+            nm.setEllipsize(TextUtils.TruncateAt.END);
+            row.addView(nm, new LinearLayout.LayoutParams(0, WRAP, 1f));
+
+            if (isAutoTarget(entry.value)) {
+                String stLabel = "离线";
+                int stBg = cSurfaceAlt;
+                int stFg = cOnSurfaceVariant;
+                if (lanOnlineSet.contains(entry.value)) {
+                    stLabel = "局域网";
+                    stBg = cPrimaryContainer;
+                    stFg = cOnPrimaryContainer;
+                } else if ("online".equals(signalState) && cloudOnlineSet.contains(entry.value)) {
+                    stLabel = "云端在线";
+                    stBg = cPrimaryContainer;
+                    stFg = cOnPrimaryContainer;
+                }
+                TextView stBadge = label(stLabel, 10, stFg, true);
+                stBadge.setPadding(dp(7), dp(2), dp(7), dp(2));
+                stBadge.setBackground(roundBox(stBg, 0, 99));
+                LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+                sLp.leftMargin = dp(8);
+                row.addView(stBadge, sLp);
+            } else {
+                TextView lanBadge = label("局域网", 10, cOnPrimaryContainer, true);
+                lanBadge.setPadding(dp(7), dp(2), dp(7), dp(2));
+                lanBadge.setBackground(roundBox(cPrimaryContainer, 0, 99));
+                LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+                sLp.leftMargin = dp(8);
+                row.addView(lanBadge, sLp);
+            }
+
+            if (sel) {
+                TextView chk = label("✓", 14, cPrimary, true);
+                LinearLayout.LayoutParams ckLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+                ckLp.leftMargin = dp(8);
+                row.addView(chk, ckLp);
+            }
+
+            LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+            if (i > 0) {
+                rLp.topMargin = dp(6);
+            }
+            sharePeersBox.addView(row, rLp);
+        }
+
+        String tgtName = resolveTargetName(shareSelectedTarget);
+        shareSendBtn.setText("立即发送给 " + tgtName);
+    }
+
+    private void clearSharedPending() {
+        sharedUris = null;
         if (shareBannerView != null) {
-            shareBannerView.setText("已从其他应用带入 " + uris.size() + " 个文件 · 点「发文件」发送");
-            shareBannerView.setVisibility(View.VISIBLE);
+            shareBannerView.setVisibility(View.GONE);
+        }
+    }
+
+    private void dismissShareSheet(boolean clearPending) {
+        if (clearPending) {
+            clearSharedPending();
+        }
+        if (shareDialog != null) {
+            try {
+                if (shareDialog.isShowing()) {
+                    shareDialog.dismiss();
+                }
+            } catch (Exception ignored) {
+            }
+            shareDialog = null;
         }
     }
 
@@ -3781,6 +4114,9 @@ public class MainActivity extends Activity {
                         selectedTarget = entries.get(0).value;
                     }
                     renderPeerSection();
+                    if (shareDialog != null && shareDialog.isShowing()) {
+                        refreshShareSheetPeers();
+                    }
                 });
             } catch (Exception e) {
                 Log.w(TAG, "loadPairedPeers", e);
@@ -3822,6 +4158,9 @@ public class MainActivity extends Activity {
                         toast("同一局域网暂无可直连设备");
                     }
                     renderPeerSection();
+                    if (shareDialog != null && shareDialog.isShowing()) {
+                        refreshShareSheetPeers();
+                    }
                 });
             } catch (Exception e) {
                 ui.post(() -> {
@@ -4622,6 +4961,20 @@ public class MainActivity extends Activity {
             name = "file-" + System.currentTimeMillis();
         }
         return name.replace('/', '_').replace('\\', '_');
+    }
+
+    private long displaySize(Uri uri) {
+        try (Cursor c = getContentResolver().query(uri, null, null, null, null)) {
+            if (c != null && c.moveToFirst()) {
+                int idx = c.getColumnIndex(OpenableColumns.SIZE);
+                if (idx >= 0 && !c.isNull(idx)) {
+                    return c.getLong(idx);
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "query size", e);
+        }
+        return -1;
     }
 
     private static void deleteTree(File f, File dir) {
