@@ -25,6 +25,7 @@ import android.graphics.Outline;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
 import android.graphics.Typeface;
@@ -58,6 +59,7 @@ import android.text.InputFilter;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.util.Log;
+import android.util.Range;
 import android.util.Size;
 import android.view.Gravity;
 import android.view.Surface;
@@ -2168,7 +2170,7 @@ public class MainActivity extends Activity {
                 stopCamera();
                 return;
             }
-            CameraCharacteristics cc = cm.getCameraCharacteristics(camId);
+            final CameraCharacteristics cc = cm.getCameraCharacteristics(camId);
             StreamConfigurationMap map = cc.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
             previewSize = chooseScanSize(map);
             configureCameraTransform(scanTextureView.getWidth(), scanTextureView.getHeight());
@@ -2185,7 +2187,7 @@ public class MainActivity extends Activity {
                         return;
                     }
                     cameraDevice = cam;
-                    createScanSession(cam);
+                    createScanSession(cam, cc);
                 }
 
                 @Override
@@ -2221,7 +2223,9 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void createScanSession(final CameraDevice cam) {
+    private static final float SCAN_DEFAULT_ZOOM = 1.5f;
+
+    private void createScanSession(final CameraDevice cam, final CameraCharacteristics cc) {
         try {
             SurfaceTexture st = scanTextureView.getSurfaceTexture();
             if (st == null || imageReader == null) {
@@ -2235,6 +2239,7 @@ public class MainActivity extends Activity {
             req.addTarget(previewSurface);
             req.addTarget(readerSurface);
             req.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+            applyDefaultScanZoom(req, cc, SCAN_DEFAULT_ZOOM);
 
             cam.createCaptureSession(Arrays.asList(previewSurface, readerSurface),
                     new CameraCaptureSession.StateCallback() {
@@ -2267,6 +2272,35 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             Log.e(TAG, "createScanSession", e);
             stopCamera();
+        }
+    }
+
+    private void applyDefaultScanZoom(CaptureRequest.Builder req, CameraCharacteristics cc, float targetZoom) {
+        if (req == null || cc == null || targetZoom <= 1.0f) {
+            return;
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 30) {
+                Range<Float> range = cc.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE);
+                if (range != null) {
+                    float z = Math.max(range.getLower(), Math.min(targetZoom, range.getUpper()));
+                    req.set(CaptureRequest.CONTROL_ZOOM_RATIO, z);
+                    return;
+                }
+            }
+            Float maxDigital = cc.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM);
+            Rect active = cc.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+            if (maxDigital != null && active != null && maxDigital > 1.0f) {
+                float z = Math.max(1.0f, Math.min(targetZoom, maxDigital));
+                int cropW = Math.round(active.width() / z);
+                int cropH = Math.round(active.height() / z);
+                int dx = (active.width() - cropW) / 2;
+                int dy = (active.height() - cropH) / 2;
+                req.set(CaptureRequest.SCALER_CROP_REGION,
+                        new Rect(active.left + dx, active.top + dy, active.left + dx + cropW, active.top + dy + cropH));
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "applyDefaultScanZoom", t);
         }
     }
 

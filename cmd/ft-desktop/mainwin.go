@@ -2350,20 +2350,33 @@ func (w *mainWin) removeSavedPeer(hwnd syscall.Handle, peer client.Peer) {
 	if w.app == nil {
 		return
 	}
-	if !confirmBox(hwnd, "移除设备", fmt.Sprintf("确定移除已保存的设备「%s」吗？\n移除后需重新配对才能向该设备收发文件。", peerLabel(peer))) {
-		return
-	}
-	ok, err := identity.RemovePeer(w.app.pairedPath, peer.ID)
-	if err != nil {
-		w.status = "移除失败：" + err.Error()
-	} else if ok {
-		w.loadPeers()
-		if thePanel != nil {
-			thePanel.reloadPeers()
-		}
-		w.status = "已移除设备 " + peerLabel(peer)
-	}
-	procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+	pairedPath := w.app.pairedPath
+	label := peerLabel(peer)
+	openConfirmDialog(confirmOpts{
+		Owner:       hwnd,
+		Title:       "移除设备",
+		Body:        fmt.Sprintf("确定移除已保存的设备「%s」吗？\n移除后需重新配对才能向该设备收发文件。", label),
+		ConfirmText: "移除",
+		CancelText:  "取消",
+		Danger:      true,
+		OnConfirm: func() {
+			ok, err := identity.RemovePeer(pairedPath, peer.ID)
+			mainMu.Lock()
+			if mw := mainWins[hwnd]; mw != nil {
+				if err != nil {
+					mw.status = "移除失败：" + err.Error()
+				} else if ok {
+					mw.loadPeers()
+					mw.status = "已移除设备 " + label
+				}
+			}
+			mainMu.Unlock()
+			if thePanel != nil {
+				thePanel.reloadPeers()
+			}
+			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+		},
+	})
 }
 
 func (w *mainWin) pickAndSend(hwnd syscall.Handle) {

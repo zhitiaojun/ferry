@@ -243,9 +243,14 @@ func (t *tray) command(id uint16) {
 	case menuOpenDir:
 		shellOpen(t.app.receiveDir())
 	case menuInfo:
-		messageBox("轻渡 接收信息", fmt.Sprintf(
-			"设备名称：%s\n设备 ID：%x\n端口：%d\n目录：%s\n\n在手机/电脑上用这个地址即可发送：\n%s",
-			t.app.deviceName(), t.devID[:4], t.app.port, t.app.receiveDir(), localAddr(t.app.port)))
+		openConfirmDialog(confirmOpts{
+			Title: "轻渡 接收信息",
+			Body: fmt.Sprintf(
+				"设备名称：%s\n设备 ID：%x\n端口：%d\n目录：%s\n\n在手机/电脑上用这个地址即可发送：\n%s",
+				t.app.deviceName(), t.devID[:4], t.app.port, t.app.receiveDir(), localAddr(t.app.port)),
+			ConfirmText: "知道了",
+			HideCancel:  true,
+		})
 	case menuMain:
 		openMainWindow(t.app)
 	case menuDrop:
