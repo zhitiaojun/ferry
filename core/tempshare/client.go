@@ -106,8 +106,16 @@ func resolve(ctx context.Context, base, path string) (*ResolvedSession, error) {
 
 // ProbeTransport tries LAN URLs first (fast direct transfer for apps), falling back to relay.
 func ProbeTransport(ctx context.Context, sess *ResolvedSession) (*ProbeResult, error) {
+	res, ws, err := probeAndKeepRelay(ctx, sess)
+	if ws != nil {
+		_ = ws.CloseNow()
+	}
+	return res, err
+}
+
+func probeAndKeepRelay(ctx context.Context, sess *ResolvedSession) (*ProbeResult, *websocket.Conn, error) {
 	if sess == nil {
-		return nil, fmt.Errorf("nil session")
+		return nil, nil, fmt.Errorf("nil session")
 	}
 	lanClient := &http.Client{Timeout: 1200 * time.Millisecond}
 	for _, raw := range sess.LAN {
@@ -131,26 +139,29 @@ func ProbeTransport(ctx context.Context, sess *ResolvedSession) (*ProbeResult, e
 		if err := json.Unmarshal(body, &list); err != nil {
 			continue
 		}
-		return &ProbeResult{Via: "lan", LANBase: base, Files: list.Files}, nil
+		return &ProbeResult{Via: "lan", LANBase: base, Files: list.Files}, nil, nil
 	}
 
 	ws, err := dialGuestRelay(ctx, sess)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	defer ws.Close(websocket.StatusNormalClosure, "bye")
 	files, err := relayList(ctx, ws)
 	if err != nil {
-		return nil, err
+		_ = ws.CloseNow()
+		return nil, nil, err
 	}
-	return &ProbeResult{Via: "relay", Files: files}, nil
+	return &ProbeResult{Via: "relay", Files: files}, ws, nil
 }
 
 // DownloadAll downloads all shared files into outDir, preferring LAN and falling back to relay.
 func DownloadAll(ctx context.Context, sess *ResolvedSession, outDir string) (via string, saved []string, err error) {
-	probe, err := ProbeTransport(ctx, sess)
+	probe, ws, err := probeAndKeepRelay(ctx, sess)
 	if err != nil {
 		return "", nil, err
+	}
+	if ws != nil {
+		defer ws.CloseNow()
 	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return "", nil, err
@@ -167,11 +178,6 @@ func DownloadAll(ctx context.Context, sess *ResolvedSession, outDir string) (via
 		return "lan", saved, nil
 	}
 
-	ws, err := dialGuestRelay(ctx, sess)
-	if err != nil {
-		return "", nil, err
-	}
-	defer ws.Close(websocket.StatusNormalClosure, "bye")
 	for _, f := range probe.Files {
 		dest, derr := relayDownloadFile(ctx, ws, f.Name, outDir)
 		if derr != nil {
@@ -187,9 +193,12 @@ func UploadFiles(ctx context.Context, sess *ResolvedSession, paths []string) (vi
 	if len(paths) == 0 {
 		return "", nil, fmt.Errorf("no files selected")
 	}
-	probe, err := ProbeTransport(ctx, sess)
+	probe, ws, err := probeAndKeepRelay(ctx, sess)
 	if err != nil {
 		return "", nil, err
+	}
+	if ws != nil {
+		defer ws.CloseNow()
 	}
 	if probe.Via == "lan" {
 		upClient := &http.Client{Timeout: 30 * time.Minute}
@@ -202,11 +211,6 @@ func UploadFiles(ctx context.Context, sess *ResolvedSession, paths []string) (vi
 		return "lan", uploaded, nil
 	}
 
-	ws, err := dialGuestRelay(ctx, sess)
-	if err != nil {
-		return "", nil, err
-	}
-	defer ws.Close(websocket.StatusNormalClosure, "bye")
 	for _, p := range paths {
 		name, uerr := relayUploadFile(ctx, ws, p)
 		if uerr != nil {

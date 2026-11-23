@@ -133,12 +133,12 @@ func TestWebPublicSiteAndTempRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("host ws dial: %v", err)
 	}
-	defer hostWS.Close(websocket.StatusNormalClosure, "")
+	defer hostWS.CloseNow()
 	guestWS, _, err := websocket.Dial(ctx, wsURL+"/web/"+created.Room+"?role=guest&token="+created.ShareToken, nil)
 	if err != nil {
 		t.Fatalf("guest ws dial: %v", err)
 	}
-	defer guestWS.Close(websocket.StatusNormalClosure, "")
+	defer guestWS.CloseNow()
 	if err := hostWS.Write(ctx, websocket.MessageText, []byte("ping")); err != nil {
 		t.Fatal(err)
 	}

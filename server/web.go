@@ -220,7 +220,7 @@ func (w *Web) handleTempCreate(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	canonical := "ferry-temp-v1\n" + strconv.FormatInt(body.TS, 10) + "\n" + mode + "\n" + body.Name
-	if !ed25519.Verify(ed25519.PublicKey(pubBytes), []byte(canonical), sigBytes) {
+	if !validEd25519Pub(pubBytes) || allZero(sigBytes[32:]) || !ed25519.Verify(ed25519.PublicKey(pubBytes), []byte(canonical), sigBytes) {
 		http.Error(rw, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -736,3 +736,107 @@ func clientIP(r *http.Request) string {
 }
 
 func fmtErr(format string, a ...any) string { return fmt.Sprintf(format, a...) }
+
+func allZero(b []byte) bool {
+	var acc byte
+	for _, v := range b {
+		acc |= v
+	}
+	return acc == 0
+}
+
+// validEd25519Pub verifies pub is a canonical compressed point on Ed25519 and
+// rejects all 8 small-order torsion points ([8]P == identity), closing the
+// low-order public-key forgery bypass in standard RFC 8032 Verify.
+func validEd25519Pub(pub []byte) bool {
+	if len(pub) != ed25519.PublicKeySize {
+		return false
+	}
+	p, _ := new(big.Int).SetString("7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed", 16)
+	d, _ := new(big.Int).SetString("52036cee2b6ffe738cc740797779e89800700a4d4141d8ab75eb4dca135978a3", 16)
+
+	var le [32]byte
+	copy(le[:], pub)
+	signBit := le[31] >> 7
+	le[31] &= 0x7f
+	// Convert little-endian y to big-endian for big.Int.SetBytes.
+	for i, j := 0, 31; i < j; i, j = i+1, j-1 {
+		le[i], le[j] = le[j], le[i]
+	}
+	y := new(big.Int).SetBytes(le[:])
+	if y.Cmp(p) >= 0 {
+		return false
+	}
+
+	// x^2 = (y^2 - 1) / (d*y^2 + 1) mod p
+	y2 := new(big.Int).Mul(y, y)
+	y2.Mod(y2, p)
+	u := new(big.Int).Sub(y2, big.NewInt(1))
+	u.Mod(u, p)
+	v := new(big.Int).Mul(d, y2)
+	v.Add(v, big.NewInt(1))
+	v.Mod(v, p)
+	vinv := new(big.Int).ModInverse(v, p)
+	if vinv == nil {
+		return false
+	}
+	x2 := new(big.Int).Mul(u, vinv)
+	x2.Mod(x2, p)
+
+	var x *big.Int
+	if x2.Sign() == 0 {
+		if signBit != 0 {
+			return false
+		}
+		x = big.NewInt(0)
+	} else {
+		x = new(big.Int).ModSqrt(x2, p)
+		if x == nil {
+			return false
+		}
+		if x.Bit(0) != uint(signBit) {
+			x.Sub(p, x)
+		}
+	}
+
+	// Double P three times to get [8]P on -x^2 + y^2 = 1 + d*x^2*y^2:
+	//   x' = (2*x*y) / (1 + d*x^2*y^2)
+	//   y' = (y^2 + x^2) / (1 - d*x^2*y^2)
+	one := big.NewInt(1)
+	two := big.NewInt(2)
+	px, py := new(big.Int).Set(x), new(big.Int).Set(y)
+	for i := 0; i < 3; i++ {
+		xx := new(big.Int).Mul(px, px)
+		xx.Mod(xx, p)
+		yy := new(big.Int).Mul(py, py)
+		yy.Mod(yy, p)
+		xy := new(big.Int).Mul(px, py)
+		xy.Mod(xy, p)
+		dxxyy := new(big.Int).Mul(d, xx)
+		dxxyy.Mul(dxxyy, yy)
+		dxxyy.Mod(dxxyy, p)
+
+		denX := new(big.Int).Add(one, dxxyy)
+		denX.Mod(denX, p)
+		invX := new(big.Int).ModInverse(denX, p)
+
+		denY := new(big.Int).Sub(one, dxxyy)
+		denY.Mod(denY, p)
+		invY := new(big.Int).ModInverse(denY, p)
+		if invX == nil || invY == nil {
+			return false
+		}
+
+		nx := new(big.Int).Mul(two, xy)
+		nx.Mul(nx, invX)
+		nx.Mod(nx, p)
+
+		ny := new(big.Int).Add(yy, xx)
+		ny.Mul(ny, invY)
+		ny.Mod(ny, p)
+
+		px, py = nx, ny
+	}
+	// Reject torsion points ([8]P == identity (0, 1)).
+	return !(px.Sign() == 0 && py.Cmp(one) == 0)
+}

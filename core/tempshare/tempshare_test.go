@@ -33,21 +33,40 @@ func TestUnsignedTempCreateRejected(t *testing.T) {
 	hs := httptest.NewServer(s.Handler())
 	defer hs.Close()
 
-	body, _ := json.Marshal(map[string]any{
-		"name": "fake",
-		"mode": "send",
-		"ts":   time.Now().Unix(),
-		"pub":  strings.Repeat("00", 32),
-		"sig":  strings.Repeat("00", 64),
-	})
-	resp, err := http.Post(hs.URL+"/api/temp/create", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
+	key := testKey(t)
+	cases := []struct {
+		name string
+		pub  string
+		sig  string
+	}{
+		{
+			name: "zero_torsion_key_and_sig",
+			pub:  strings.Repeat("00", 32),
+			sig:  strings.Repeat("00", 64),
+		},
+		{
+			name: "valid_key_bad_sig",
+			pub:  key.PubHex(),
+			sig:  strings.Repeat("ab", 64),
+		},
 	}
-	io.Copy(io.Discard, resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("unsigned create status = %d, want 403", resp.StatusCode)
+	for _, tc := range cases {
+		body, _ := json.Marshal(map[string]any{
+			"name": "fake",
+			"mode": "send",
+			"ts":   time.Now().Unix(),
+			"pub":  tc.pub,
+			"sig":  tc.sig,
+		})
+		resp, err := http.Post(hs.URL+"/api/temp/create", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("%s: unsigned create status = %d, want 403", tc.name, resp.StatusCode)
+		}
 	}
 }
 
