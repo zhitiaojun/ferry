@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
-	"net"
+	"math/rand/v2"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -450,21 +450,8 @@ func TestSlowPunchFallbackToRelayResumesPartFile(t *testing.T) {
 }
 
 func TestRelayFirstHotUpgradeToPunchResumesPartFile(t *testing.T) {
-	probeSock, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
-	if err != nil {
-		t.Fatal(err)
-	}
-	basePort := probeSock.LocalAddr().(*net.UDPAddr).Port
-	_ = probeSock.Close()
-
-	lo := basePort - 200
-	if lo < 1024 {
-		lo = 1024
-	}
-	hi := basePort + 1000
-	if hi > 65535 {
-		hi = 65535
-	}
+	lo := 38000 + rand.IntN(18000)
+	hi := lo + 800
 
 	prevRange := testBirthdayPortRange
 	prevDisable := testDisableFastPunch

@@ -382,14 +382,15 @@ func SendAuto(ctx context.Context, o Options, toID string, files []string) (Resu
 			localMap = g.Mapping
 		}
 		bpCfg := punch.BirthdayConfig{
-			SelfID:         key.ID(),
-			PeerID:         parseDeviceID(toID),
-			SessionID:      sessionID,
-			PeerCandidates: peerLocal,
-			LocalMapping:   localMap,
-			PortMin:        testBirthdayPortRange[0],
-			PortMax:        testBirthdayPortRange[1],
-			Log:            o.Log,
+			SelfID:          key.ID(),
+			PeerID:          parseDeviceID(toID),
+			SessionID:       sessionID,
+			PeerCandidates:  peerLocal,
+			LocalMapping:    localMap,
+			PortMin:         testBirthdayPortRange[0],
+			PortMax:         testBirthdayPortRange[1],
+			BindInPortRange: testBirthdayPortRange[0] > 0 && testBirthdayPortRange[1] > testBirthdayPortRange[0],
+			Log:             o.Log,
 		}
 		go func() {
 			defer close(upDone)
@@ -753,14 +754,15 @@ func ReceiveAuto(
 				return
 			}
 			bpCfg := punch.BirthdayConfig{
-				SelfID:         o.Key.ID(),
-				PeerID:         parseDeviceID(req.FromDevice),
-				SessionID:      req.SessionID,
-				PeerCandidates: peerLocal,
-				LocalMapping:   localMap,
-				PortMin:        testBirthdayPortRange[0],
-				PortMax:        testBirthdayPortRange[1],
-				Log:            o.Log,
+				SelfID:          o.Key.ID(),
+				PeerID:          parseDeviceID(req.FromDevice),
+				SessionID:       req.SessionID,
+				PeerCandidates:  peerLocal,
+				LocalMapping:    localMap,
+				PortMin:         testBirthdayPortRange[0],
+				PortMax:         testBirthdayPortRange[1],
+				BindInPortRange: testBirthdayPortRange[0] > 0 && testBirthdayPortRange[1] > testBirthdayPortRange[0],
+				Log:             o.Log,
 			}
 			upS, upCl, berr := punch.BirthdayConnect(bgCtx, bpCfg, o.Key, peerPub, sessionParams(o.Key, localName))
 			if berr != nil {

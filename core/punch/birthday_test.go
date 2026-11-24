@@ -3,6 +3,7 @@ package punch
 import (
 	"context"
 	"crypto/sha256"
+	"math/rand/v2"
 	"net"
 	"strconv"
 	"testing"
@@ -23,40 +24,26 @@ func TestBirthdayPunchAndConnectLoopback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Open a probe hint port on loopback so wave 0's nearby scan hits ephemeral ports
-	// deterministically on any OS while also exercising multi-socket probes.
-	hintSock, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
-	if err != nil {
-		t.Fatal(err)
-	}
-	hintPort := hintSock.LocalAddr().(*net.UDPAddr).Port
-	_ = hintSock.Close()
-
-	// Restrict port range around ephemeral loopback window so even pure random
-	// probes hit fast on Windows/Linux CI without waiting for 64k port space.
-	lo := hintPort - 200
-	if lo < 1024 {
-		lo = 1024
-	}
-	hi := hintPort + 400
-	if hi > 65535 {
-		hi = 65535
-	}
+	// Bind sockets inside a deterministic high-port block so probes collide
+	// reliably regardless of whether OS ephemeral allocation is random (Linux) or sequential (Windows).
+	lo := 38000 + rand.IntN(18000)
+	hi := lo + 400
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	cfgA := BirthdayConfig{
-		SelfID:         keyA.ID(),
-		PeerID:         keyB.ID(),
-		SessionID:      "sess-bp-1",
-		PeerCandidates: []Candidate{{Kind: "lan", Addr: net.JoinHostPort("127.0.0.1", strconv.Itoa(hintPort)), Priority: 50}},
-		NumSockets:     24,
-		Waves:          3,
-		ProbesPerWave:  300,
-		WaveInterval:   150 * time.Millisecond,
-		PortMin:        lo,
-		PortMax:        hi,
+		SelfID:          keyA.ID(),
+		PeerID:          keyB.ID(),
+		SessionID:       "sess-bp-1",
+		PeerCandidates:  []Candidate{{Kind: "lan", Addr: net.JoinHostPort("127.0.0.1", strconv.Itoa(lo)), Priority: 50}},
+		NumSockets:      24,
+		Waves:           3,
+		ProbesPerWave:   300,
+		WaveInterval:    150 * time.Millisecond,
+		PortMin:         lo,
+		PortMax:         hi,
+		BindInPortRange: true,
 	}
 	cfgB := cfgA
 	cfgB.SelfID = keyB.ID()

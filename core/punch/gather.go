@@ -88,7 +88,7 @@ func gather(ctx context.Context, stunServers []string, timeout time.Duration, hi
 		ok      bool
 	}
 	pmDone := make(chan struct{})
-	if len(ifaces) > 0 {
+	if len(ifaces) > 0 && len(stunServers) > 0 {
 		go func() {
 			defer close(pmDone)
 			pmRes.addr, pmRes.cleanup, pmRes.ok = mapPort(ctx, localPort, ifaces, defaultPortmapTimeout)

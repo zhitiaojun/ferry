@@ -6,7 +6,6 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/binary"
 	"fmt"
 	mrand "math/rand/v2"
 	"net"
@@ -45,9 +44,10 @@ type BirthdayConfig struct {
 	Waves          int
 	ProbesPerWave  int
 	WaveInterval   time.Duration
-	PortMin        int
-	PortMax        int
-	Log            *logging.Logger
+	PortMin         int
+	PortMax         int
+	BindInPortRange bool
+	Log             *logging.Logger
 }
 
 func (c BirthdayConfig) numSockets() int {
@@ -112,8 +112,10 @@ func BirthdayPunch(ctx context.Context, cfg BirthdayConfig) (*net.UDPConn, *net.
 	tag := birthdayTag(cfg.SelfID, cfg.PeerID, cfg.SessionID)
 	isLeader := bytes.Compare(cfg.SelfID[:], cfg.PeerID[:]) < 0
 
-	n := cfg.numSockets()
-	socks := make([]*net.UDPConn, 0, n)
+	socks, err := openBirthdaySockets(cfg.numSockets(), cfg)
+	if err != nil {
+		return nil, nil, err
+	}
 	closeAll := func(skip int) {
 		for i, s := range socks {
 			if i == skip || s == nil {
@@ -121,17 +123,6 @@ func BirthdayPunch(ctx context.Context, cfg BirthdayConfig) (*net.UDPConn, *net.
 			}
 			_ = s.Close()
 		}
-	}
-	for i := 0; i < n; i++ {
-		c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
-		if err != nil {
-			if len(socks) >= 4 {
-				break
-			}
-			closeAll(-1)
-			return nil, nil, fmt.Errorf("birthday punch: open udp sockets: %w", err)
-		}
-		socks = append(socks, c)
 	}
 
 	pctx, cancel := context.WithCancel(ctx)
@@ -478,5 +469,48 @@ func cloneUDPAddr(a *net.UDPAddr) *net.UDPAddr {
 	return &net.UDPAddr{IP: ip, Port: a.Port, Zone: a.Zone}
 }
 
-// unused helper check kept tidy with binary package
-var _ = binary.BigEndian
+func openBirthdaySockets(n int, cfg BirthdayConfig) ([]*net.UDPConn, error) {
+	socks := make([]*net.UDPConn, 0, n)
+	closeSocks := func() {
+		for _, s := range socks {
+			if s != nil {
+				_ = s.Close()
+			}
+		}
+	}
+	if cfg.BindInPortRange && cfg.PortMin > 0 && cfg.PortMax > cfg.PortMin {
+		lo, hi := cfg.portRange()
+		ports := make([]int, 0, hi-lo+1)
+		for p := lo; p <= hi; p++ {
+			ports = append(ports, p)
+		}
+		mrand.Shuffle(len(ports), func(i, j int) { ports[i], ports[j] = ports[j], ports[i] })
+		for _, p := range ports {
+			if len(socks) >= n {
+				break
+			}
+			c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: p})
+			if err != nil {
+				continue
+			}
+			socks = append(socks, c)
+		}
+		if len(socks) < 4 {
+			closeSocks()
+			return nil, fmt.Errorf("birthday punch: failed to bind enough sockets in [%d,%d]", lo, hi)
+		}
+		return socks, nil
+	}
+	for i := 0; i < n; i++ {
+		c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+		if err != nil {
+			if len(socks) >= 4 {
+				break
+			}
+			closeSocks()
+			return nil, fmt.Errorf("birthday punch: open udp sockets: %w", err)
+		}
+		socks = append(socks, c)
+	}
+	return socks, nil
+}
