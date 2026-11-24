@@ -19,7 +19,7 @@ import (
 	"github.com/cwlindean/filetransfer/core/logging"
 )
 
-const webChunk = 64 << 10
+const webChunk = 256 << 10
 
 type webHost struct {
 	srv  *lanweb.Server

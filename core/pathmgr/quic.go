@@ -31,6 +31,10 @@ type QUIC struct {
 // NewQUIC returns a path on the given UDP socket. tlsConfig must present this
 // device's certificate and pin the peer's (identity.ClientTLS/ServerTLS).
 func NewQUIC(udp *net.UDPConn, tlsConfig *tls.Config) *QUIC {
+	if udp != nil {
+		_ = udp.SetReadBuffer(4 << 20)
+		_ = udp.SetWriteBuffer(4 << 20)
+	}
 	cfg := tlsConfig.Clone()
 	cfg.NextProtos = []string{ALPNProto}
 	return &QUIC{
@@ -40,9 +44,20 @@ func NewQUIC(udp *net.UDPConn, tlsConfig *tls.Config) *QUIC {
 	}
 }
 
+func punchQUICConfig() *quic.Config {
+	return &quic.Config{
+		InitialStreamReceiveWindow:     2 << 20,
+		MaxStreamReceiveWindow:         16 << 20,
+		InitialConnectionReceiveWindow: 4 << 20,
+		MaxConnectionReceiveWindow:     32 << 20,
+		KeepAlivePeriod:                10 * time.Second,
+		MaxIdleTimeout:                 30 * time.Second,
+	}
+}
+
 // PrepareListen starts a QUIC listener on the shared socket.
 func (q *QUIC) PrepareListen(ctx context.Context) error {
-	ln, err := q.tr.Listen(q.tls, nil)
+	ln, err := q.tr.Listen(q.tls, punchQUICConfig())
 	if err != nil {
 		return fmt.Errorf("punch: quic listen: %w", err)
 	}
@@ -77,7 +92,7 @@ func (q *QUIC) DialAddr(ctx context.Context, remote string) (net.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("punch: resolve %s: %w", remote, err)
 	}
-	conn, err := q.tr.Dial(ctx, addr, q.tls, nil)
+	conn, err := q.tr.Dial(ctx, addr, q.tls, punchQUICConfig())
 	if err != nil {
 		return nil, fmt.Errorf("punch: quic dial %s: %w", remote, err)
 	}

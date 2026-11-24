@@ -4,21 +4,16 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/hex"
 	"fmt"
-	"net"
 	"sync"
 	"time"
 
 	"github.com/cwlindean/filetransfer/core/client"
 	"github.com/cwlindean/filetransfer/core/discovery"
 	"github.com/cwlindean/filetransfer/core/identity"
-	"github.com/cwlindean/filetransfer/core/pairing"
-	"github.com/cwlindean/filetransfer/core/proto"
-	"github.com/cwlindean/filetransfer/core/relay"
-	"github.com/cwlindean/filetransfer/core/session"
 	"github.com/cwlindean/filetransfer/core/signaling"
-	"github.com/cwlindean/filetransfer/core/transfer"
 )
 
 type lanPeerEntry struct {
@@ -94,6 +89,77 @@ func (a *app) signalHomeStatus() (string, string) {
 		return "信令服务器：重连中…", "connecting"
 	}
 	return "信令服务器：未连接", "offline"
+}
+
+func (a *app) registerCandRoute(sid string, ch chan *signaling.Envelope) func() {
+	if a == nil || sid == "" || ch == nil {
+		return func() {}
+	}
+	a.mu.Lock()
+	if a.candRoutes == nil {
+		a.candRoutes = map[string]chan *signaling.Envelope{}
+	}
+	a.candRoutes[sid] = ch
+	a.mu.Unlock()
+	return func() {
+		a.mu.Lock()
+		delete(a.candRoutes, sid)
+		a.mu.Unlock()
+	}
+}
+
+func (a *app) dispatchCand(e *signaling.Envelope) {
+	if a == nil {
+		return
+	}
+	c, err := signaling.Decode[signaling.Candidates](e)
+	if err != nil || c.SessionID == "" {
+		return
+	}
+	a.mu.Lock()
+	ch := a.candRoutes[c.SessionID]
+	a.mu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- e:
+		default:
+		}
+	}
+}
+
+func (a *app) setReadyRoute(ch chan signaling.RelayReady) {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	a.readyRoute = ch
+	a.mu.Unlock()
+}
+
+func (a *app) clearReadyRoute(ch chan signaling.RelayReady) {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	if a.readyRoute == ch {
+		a.readyRoute = nil
+	}
+	a.mu.Unlock()
+}
+
+func (a *app) dispatchReady(rr signaling.RelayReady) {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	ch := a.readyRoute
+	a.mu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- rr:
+		default:
+		}
+	}
 }
 
 func (a *app) activeSignalClient() *signaling.Client {
@@ -348,13 +414,14 @@ func (a *app) serveOneSignaling(ctx, rootCtx context.Context, key *identity.Key)
 		a.notifyMainPaint()
 	})
 
-	type relayOffer struct {
-		req      signaling.SendRequest
-		peerPub  []byte
-		peerName string
+	type autoOffer struct {
+		req       signaling.SendRequest
+		peerPub   ed25519.PublicKey
+		peerName  string
+		candCh    chan *signaling.Envelope
+		unregCand func()
 	}
-	offerCh := make(chan relayOffer, 4)
-	readyCh := make(chan signaling.RelayReady, 4)
+	offerCh := make(chan autoOffer, 4)
 
 	cl.On(signaling.TypeSendRequest, func(e *signaling.Envelope) {
 		req, rerr := signaling.Decode[signaling.SendRequest](e)
@@ -378,20 +445,17 @@ func (a *app) serveOneSignaling(ctx, rootCtx context.Context, key *identity.Key)
 				peerName = dev.Name
 			}
 		}
-		if err := cl.Send(ctx, signaling.TypeSendResp, signaling.SendResponse{
-			ToDevice: req.FromDevice, TransferID: req.TransferID, Accept: true,
-		}); err != nil {
-			return
-		}
-		if req.SessionID != "" {
-			_ = cl.Send(ctx, signaling.TypeCandidates, signaling.Candidates{
-				ToDevice: req.FromDevice, SessionID: req.SessionID, Candidates: []signaling.Candidate{},
-			})
-		}
+		candCh := make(chan *signaling.Envelope, 8)
+		unreg := a.registerCandRoute(req.SessionID, candCh)
 		select {
-		case offerCh <- relayOffer{req: req, peerPub: pub, peerName: peerName}:
+		case offerCh <- autoOffer{req: req, peerPub: pub, peerName: peerName, candCh: candCh, unregCand: unreg}:
 		default:
+			unreg()
 		}
+	})
+
+	cl.On(signaling.TypeCandidates, func(e *signaling.Envelope) {
+		a.dispatchCand(e)
 	})
 
 	cl.On(signaling.TypeRelayReady, func(e *signaling.Envelope) {
@@ -399,37 +463,36 @@ func (a *app) serveOneSignaling(ctx, rootCtx context.Context, key *identity.Key)
 		if rerr != nil {
 			return
 		}
-		select {
-		case readyCh <- rr:
-		default:
-		}
+		a.dispatchReady(rr)
 	})
 
 	for {
-		var offer relayOffer
 		select {
 		case <-ctx.Done():
 			return true
 		case <-cl.Done():
 			a.event("desktop.signal.dropped", map[string]any{"error": fmt.Sprintf("%v", cl.Err())})
 			return true
-		case offer = <-offerCh:
-		}
-		select {
-		case <-ctx.Done():
-			return true
-		case <-cl.Done():
-			a.event("desktop.signal.dropped", map[string]any{"error": fmt.Sprintf("%v", cl.Err())})
-			return true
-		case ready := <-readyCh:
-			go a.receiveOneRelay(ctx, key, offer.req, offer.peerPub, offer.peerName, ready)
-		case <-time.After(30 * time.Second):
-			a.event("desktop.relay_wait_timeout", map[string]any{"from": truncID(offer.req.FromDevice)})
+		case offer := <-offerCh:
+			readyCh := make(chan signaling.RelayReady, 2)
+			a.setReadyRoute(readyCh)
+			a.receiveOneAuto(ctx, cl, key, offer.req, offer.peerPub, offer.peerName, offer.candCh, readyCh)
+			a.clearReadyRoute(readyCh)
+			offer.unregCand()
 		}
 	}
 }
 
-func (a *app) receiveOneRelay(ctx context.Context, key *identity.Key, req signaling.SendRequest, peerPub []byte, peerName string, ready signaling.RelayReady) {
+func (a *app) receiveOneAuto(
+	ctx context.Context,
+	cl *signaling.Client,
+	key *identity.Key,
+	req signaling.SendRequest,
+	peerPub ed25519.PublicKey,
+	peerName string,
+	candCh <-chan *signaling.Envelope,
+	readyCh <-chan signaling.RelayReady,
+) {
 	start := time.Now()
 	var totalBytes int64
 	firstFile := ""
@@ -441,67 +504,31 @@ func (a *app) receiveOneRelay(ctx context.Context, key *identity.Key, req signal
 	}
 	txID := a.beginTransfer("recv", peerName, firstFile, len(req.Files), totalBytes)
 	defer a.endTransfer(txID)
-	a.updateTransfer(txID, "connecting", "中继", "", firstFile, 1, len(req.Files), 0, totalBytes)
 
 	rctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
-	u, err := relay.RelayURL(a.signalURL, ready.RelayURL, ready.Token)
-	if err != nil {
-		a.note(fmt.Sprintf("%s  ← %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerName)))
-		a.notifyMainPaint()
-		return
-	}
-	rc, err := relay.Dial(rctx, u)
-	if err != nil {
-		a.event("desktop.relay_dial_error", map[string]any{"error": err.Error()})
-		a.note(fmt.Sprintf("%s  ← %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerName)))
-		a.notifyMainPaint()
-		return
-	}
-	conn, err := client.ServerTLS(rctx, net.Conn(rc), key, peerPub)
-	if err != nil {
-		_ = rc.Close()
-		a.event("desktop.relay_tls_error", map[string]any{"error": err.Error()})
-		a.note(fmt.Sprintf("%s  ← %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerName)))
-		a.notifyMainPaint()
-		return
-	}
-	sess, err := session.Accept(conn, session.Params{
-		DeviceID:     key.ID(),
-		Name:         a.deviceName(),
-		Capabilities: proto.CapResume,
-	})
-	if err != nil {
-		_ = conn.Close()
-		a.event("desktop.relay_session_error", map[string]any{"error": err.Error()})
-		a.note(fmt.Sprintf("%s  ← %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerName)))
-		a.notifyMainPaint()
-		return
-	}
-	defer sess.Drain(2 * time.Second)
-
-	if peerClean := pairing.SanitizeName(sess.Peer.Name); peerClean != "" {
-		peerName = peerClean
-		if identity.UpdatePeerName(a.pairedPath, req.FromDevice, peerClean) {
-			if thePanel != nil {
-				thePanel.reloadPeers()
-			}
-			if h := existingMainWindow(); h != 0 {
-				procPostMessageW.Call(uintptr(h), wmAppReload, 0, 0)
-			}
-		}
-		a.updateTransfer(txID, "", "", peerName, "", 0, 0, -1, 0)
-	}
-
 	outDir := a.receiveDir()
-	res, err := transfer.Receive(sess, outDir, transfer.Config{
-		OnDetailProgress: func(s transfer.ProgressSnapshot) {
-			a.updateTransfer(txID, s.Stage, "中继", "", s.FileName, s.FileIndex, s.FileCount, s.BytesDone, s.BytesTotal)
+	res, err := client.ReceiveAuto(rctx, client.ReceiveOptions{
+		Key:         key,
+		SignalURL:   a.signalURL,
+		OutDir:      outDir,
+		PairedPath:  a.pairedPath,
+		Name:        a.deviceName(),
+		STUNServers: a.stunServers,
+		OnStatus: func(st client.Status) {
+			ch := ""
+			switch st.Channel {
+			case "punch":
+				ch = "打洞"
+			case "relay":
+				ch = "中继"
+			}
+			a.updateTransfer(txID, st.Stage, ch, "", st.FileName, st.FileIndex, st.FileCount, st.BytesDone, st.BytesTotal)
 		},
-	})
+	}, cl, req, peerPub, candCh, readyCh)
 	if err != nil {
-		a.event("desktop.relay_recv_error", map[string]any{"peer": truncID(req.FromDevice), "error": err.Error()})
+		a.event("desktop.auto_recv_error", map[string]any{"peer": truncID(req.FromDevice), "error": err.Error()})
 		a.note(fmt.Sprintf("%s  ← %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerName)))
 		a.notifyMainPaint()
 		if trayHandle != nil {
@@ -509,14 +536,29 @@ func (a *app) receiveOneRelay(ctx context.Context, key *identity.Key, req signal
 		}
 		return
 	}
-	a.event("desktop.relay_recv_done", map[string]any{
-		"peer": truncID(req.FromDevice), "files": res.Files, "bytes": res.Bytes,
+	if res.PeerName != "" && res.PeerName != peerName {
+		peerName = res.PeerName
+		if thePanel != nil {
+			thePanel.reloadPeers()
+		}
+		if h := existingMainWindow(); h != 0 {
+			procPostMessageW.Call(uintptr(h), wmAppReload, 0, 0)
+		}
+		a.updateTransfer(txID, "", "", peerName, "", 0, 0, -1, 0)
+	}
+	chLabel := res.Channel
+	if chLabel == "" {
+		chLabel = "中继"
+	}
+	a.event("desktop.auto_recv_done", map[string]any{
+		"peer": truncID(req.FromDevice), "channel": chLabel, "files": res.Files, "bytes": res.Bytes,
+		"duration_ms": res.Duration.Milliseconds(),
 	})
-	a.note(fmt.Sprintf("%s  ← %s · %s · %s · %s · 中继",
-		time.Now().Format("15:04"), sanitizeLedgerText(peerName), summarizeFiles(res.Files), humanBytes(res.Bytes), fmtDur(time.Since(start))))
+	a.note(fmt.Sprintf("%s  ← %s · %s · %s · %s · %s",
+		time.Now().Format("15:04"), sanitizeLedgerText(peerName), summarizeFiles(res.Files), humanBytes(res.Bytes), fmtDur(time.Since(start)), chLabel))
 	a.notifyMainPaint()
 	if trayHandle != nil {
 		trayHandle.balloon(fmt.Sprintf("已接收 %d 个文件", len(res.Files)),
-			fmt.Sprintf("来自 %s（中继），共 %d 字节，已存入 %s", peerName, res.Bytes, outDir))
+			fmt.Sprintf("来自 %s（%s），共 %d 字节，已存入 %s", peerName, chLabel, res.Bytes, outDir))
 	}
 }

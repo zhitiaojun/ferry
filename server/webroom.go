@@ -80,17 +80,35 @@ func (r *webRoom) serve(ctx context.Context) {
 	})
 }
 
-// pump copies one direction until it fails, then tears the room down.
+type webFrame struct {
+	typ  websocket.MessageType
+	data []byte
+}
+
+// pump copies one direction with read/write pipelining until it fails, then tears the room down.
 func (r *webRoom) pump(dst, src *websocket.Conn) {
-	for {
-		typ, data, err := src.Read(context.Background())
-		if err != nil {
-			break
+	ch := make(chan webFrame, 8)
+	done := make(chan struct{})
+	go func() {
+		defer close(ch)
+		for {
+			typ, data, err := src.Read(context.Background())
+			if err != nil {
+				return
+			}
+			select {
+			case ch <- webFrame{typ: typ, data: data}:
+			case <-done:
+				return
+			}
 		}
-		if err := dst.Write(context.Background(), typ, data); err != nil {
+	}()
+	for f := range ch {
+		if err := dst.Write(context.Background(), f.typ, f.data); err != nil {
 			break
 		}
 	}
+	close(done)
 	r.closeAll()
 }
 

@@ -4,9 +4,10 @@ import "fmt"
 
 // Capability bits advertised in HELLO / HELLO_ACK (§3.2.1).
 const (
-	CapResume    uint32 = 1 << 0
-	CapMultipath uint32 = 1 << 1
-	CapTLSPin    uint32 = 1 << 2
+	CapResume        uint32 = 1 << 0
+	CapMultipath     uint32 = 1 << 1
+	CapTLSPin        uint32 = 1 << 2
+	CapRelayFallback uint32 = 1 << 3
 )
 
 // FIN status values (§3.8).
@@ -21,7 +22,7 @@ const (
 const (
 	MinChunkSize     uint32 = 4096
 	MaxChunkSize     uint32 = 262144
-	DefaultChunkSize uint32 = 65536
+	DefaultChunkSize uint32 = 262144
 	MaxFiles                = 1024
 	MaxNameLen              = 255
 	MaxDeviceName           = 64

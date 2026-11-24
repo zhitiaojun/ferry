@@ -117,15 +117,19 @@ func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	opts := client.Options{
-		SignalURL:  a.signalURL,
-		KeyPath:    a.keyPath,
-		PairedPath: a.pairedPath,
-		Name:       a.deviceName(),
+		SignalURL:   a.signalURL,
+		KeyPath:     a.keyPath,
+		PairedPath:  a.pairedPath,
+		Name:        a.deviceName(),
+		STUNServers: a.stunServers,
+		CandRoute:   a.registerCandRoute,
 		OnStatus: func(st client.Status) {
 			ch := ""
 			switch st.Channel {
 			case "lan":
 				ch = "LAN"
+			case "punch":
+				ch = "打洞"
 			case "relay":
 				ch = "中继"
 			}
@@ -149,7 +153,7 @@ func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error)
 			release := a.holdSignaling()
 			defer release()
 		}
-		res, err = client.SendFiles(ctx, opts, peer.ID, files)
+		res, err = client.SendAuto(ctx, opts, peer.ID, files)
 	}
 	if err != nil {
 		a.event("desktop.send_error", map[string]any{"to": truncID(peer.ID), "error": err.Error()})

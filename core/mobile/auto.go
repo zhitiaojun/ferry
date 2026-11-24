@@ -3,6 +3,7 @@ package mobile
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -14,11 +15,18 @@ import (
 	"github.com/cwlindean/filetransfer/core/logging"
 	"github.com/cwlindean/filetransfer/core/pairing"
 	"github.com/cwlindean/filetransfer/core/pathmgr"
+	"github.com/cwlindean/filetransfer/core/proto"
 	"github.com/cwlindean/filetransfer/core/punch"
 	"github.com/cwlindean/filetransfer/core/relay"
 	"github.com/cwlindean/filetransfer/core/session"
 	"github.com/cwlindean/filetransfer/core/signaling"
 	"github.com/cwlindean/filetransfer/core/transfer"
+)
+
+const (
+	punchHeadStart      = 2 * time.Second
+	punchMinBytesPerSec = 625_000
+	relayFallbackWait   = 8 * time.Second
 )
 
 // autoReceiver is the single "receive" entry point of the app: one signaling
@@ -399,7 +407,7 @@ func autoServe(ctx, rootCtx context.Context, key *identity.Key, name, outDir, si
 
 	requests := make(chan *signaling.Envelope, 4)
 	cands := make(chan *signaling.Envelope, 8)
-	readyCh := make(chan signaling.RelayReady, 1)
+	readyCh := make(chan signaling.RelayReady, 2)
 	client.On(signaling.TypePresence, func(e *signaling.Envelope) {
 		p, err := signaling.Decode[signaling.Presence](e)
 		if err != nil || p.DeviceID == "" {
@@ -517,12 +525,16 @@ func autoServe(ctx, rootCtx context.Context, key *identity.Key, name, outDir, si
 				}
 			}
 			peerLocal := localCandidates(peerCands)
+			addrs := punch.Resolve(peerLocal)
+			if len(addrs) == 0 {
+				return nil, fmt.Errorf("peer has no udp candidates")
+			}
 			pctx, cancel := context.WithCancel(actx)
 			defer cancel()
 			go g.Punch(pctx, peerLocal)
 			cctx, ccancel := context.WithTimeout(actx, 25*time.Second)
 			defer ccancel()
-			s, err := punch.Connect(cctx, q, punch.Resolve(peerLocal), key.ID(), parseDeviceID(req.FromDevice), sessionParams(key, name))
+			s, err := punch.Connect(cctx, q, addrs, key.ID(), parseDeviceID(req.FromDevice), sessionParams(key, name))
 			if err != nil {
 				return nil, err
 			}
@@ -562,7 +574,6 @@ func autoServe(ctx, rootCtx context.Context, key *identity.Key, name, outDir, si
 	if err != nil {
 		return fmt.Errorf("race: %w", err)
 	}
-	defer sess.Drain(2 * time.Second)
 	peerName := pairing.SanitizeName(sess.Peer.Name)
 	if peerName != "" {
 		identity.UpdatePeerName(pairedPath, req.FromDevice, peerName)
@@ -575,16 +586,58 @@ func autoServe(ctx, rootCtx context.Context, key *identity.Key, name, outDir, si
 	if logger != nil {
 		logger.Event("path.selected", map[string]any{"path": winner, "peer": truncID(req.FromDevice)})
 	}
-	res, err := transfer.Receive(sess, outDir, transfer.Config{
+	tcfg := transfer.Config{
 		ChunkSize: 0, Timeout: 30 * time.Second, Log: logger,
 		TransferID: hex16(req.TransferID),
 		OnDetailProgress: func(s transfer.ProgressSnapshot) {
 			updateActiveTransfer(txSeq, s.Stage, winner, "", s.FileName, s.FileIndex, s.FileCount, s.BytesDone, s.BytesTotal)
 		},
-	})
+	}
+	res, err := transfer.Receive(sess, outDir, tcfg)
+	if err != nil && winner == "punch" {
+		_ = sess.Close()
+		updateActiveTransfer(txSeq, "connecting", "relay", peerName, "", 0, 0, -1, 0)
+		waitTimer := time.NewTimer(relayFallbackWait)
+		var ready signaling.RelayReady
+		gotFallback := false
+		select {
+		case <-ctx.Done():
+			waitTimer.Stop()
+		case <-client.Done():
+			waitTimer.Stop()
+		case <-waitTimer.C:
+		case ready = <-readyCh:
+			waitTimer.Stop()
+			gotFallback = true
+		}
+		if gotFallback {
+			rc, rerr := relay.Dial(ctx, relayURL(signalURL, ready))
+			if rerr != nil {
+				return rerr
+			}
+			conn, rerr := serverTLS(ctx, net.Conn(rc), key, peerPub)
+			if rerr != nil {
+				return rerr
+			}
+			relaySess, rerr := session.Accept(conn, sessionParams(key, name))
+			if rerr != nil {
+				_ = conn.Close()
+				return rerr
+			}
+			sess = relaySess
+			winner = "relay"
+			if logger != nil {
+				logger.Event("path.fallback_relay", map[string]any{"peer": truncID(req.FromDevice)})
+			}
+			updateActiveTransfer(txSeq, "transferring", "relay", peerName, "", 0, 0, -1, 0)
+			res, err = transfer.Receive(sess, outDir, tcfg)
+		}
+	}
 	if err != nil {
+		_ = sess.Close()
 		return err
 	}
+	sess.Drain(2 * time.Second)
 	recordReceivedFrom(outDir, winner, peerName, res.Files, res.Bytes)
 	if logger != nil {
 		logger.Event("auto.done", map[string]any{"path": winner, "peer": truncID(req.FromDevice)})
@@ -705,9 +758,12 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 
 	var peerCands []signaling.Candidate
 	accepted := false
+	gotCands := false
 	deadline := time.NewTimer(15 * time.Second)
 	defer deadline.Stop()
-	for !accepted || peerCands == nil {
+	var candDeadline *time.Timer
+	var candDeadlineC <-chan time.Time
+	for !accepted || !gotCands {
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
@@ -715,6 +771,8 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 			return "", fmt.Errorf("signaling dropped: %v", client.Err())
 		case <-deadline.C:
 			return "", fmt.Errorf("peer did not answer the request")
+		case <-candDeadlineC:
+			gotCands = true
 		case e := <-events:
 			switch e.Type {
 			case signaling.TypeError:
@@ -735,72 +793,106 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 				}); err != nil {
 					return "", fmt.Errorf("send candidates: %w", err)
 				}
+				if !gotCands {
+					candDeadline = time.NewTimer(3 * time.Second)
+					defer candDeadline.Stop()
+					candDeadlineC = candDeadline.C
+				}
 			case signaling.TypeCandidates:
 				c, err := signaling.Decode[signaling.Candidates](e)
 				if err != nil {
 					return "", err
 				}
 				peerCands = c.Candidates
+				gotCands = true
 			}
 		}
 	}
 
 	peerLocal := localCandidates(peerCands)
-	tlsCfg, err := identity.ClientTLS(key, peerPub)
-	if err != nil {
-		return "", err
-	}
-	q := pathmgr.NewQUIC(g.Conn, tlsCfg)
-	defer q.Close()
+	peerAddrs := punch.Resolve(peerLocal)
 
-	punchAttempt := pathmgr.Attempt[*session.Session]{
-		Name: "punch",
-		Fn: func(actx context.Context) (*session.Session, error) {
-			pctx, pcancel := context.WithCancel(actx)
-			defer pcancel()
-			go g.Punch(pctx, peerLocal)
-			conn, err := dialRace(actx, q, punch.Resolve(peerLocal), 12*time.Second)
-			if err != nil {
-				return nil, err
-			}
-			pcancel()
-			s, err := session.Dial(conn, sessionParams(key, name))
-			if err != nil {
-				_ = conn.Close()
-				return nil, err
-			}
-			return s, nil
-		},
-	}
-	relayAttempt := pathmgr.Attempt[*session.Session]{
-		Name: "relay",
-		Fn: func(actx context.Context) (*session.Session, error) {
-			room, err := openRelayRoom(actx, client, toID, tid)
-			if err != nil {
-				return nil, err
-			}
-			rc, err := relay.Dial(actx, relayURL(signalURL, room))
-			if err != nil {
-				return nil, err
-			}
-			conn, err := clientTLS(actx, net.Conn(rc), key, peerPub)
-			if err != nil {
-				return nil, err
-			}
-			s, err := session.Dial(conn, sessionParams(key, name))
-			if err != nil {
-				_ = conn.Close()
-				return nil, err
-			}
-			return s, nil
-		},
+	dialRelaySession := func(actx context.Context) (*session.Session, error) {
+		room, err := openRelayRoom(actx, client, toID, tid)
+		if err != nil {
+			return nil, err
+		}
+		rc, err := relay.Dial(actx, relayURL(signalURL, room))
+		if err != nil {
+			return nil, err
+		}
+		conn, err := clientTLS(actx, net.Conn(rc), key, peerPub)
+		if err != nil {
+			return nil, err
+		}
+		s, err := session.Dial(conn, sessionParams(key, name))
+		if err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		return s, nil
 	}
 
-	sess, winner, err := pathmgr.Race(ctx, punchAttempt, relayAttempt)
-	if err != nil {
-		return "", fmt.Errorf("race: %w", err)
+	var sess *session.Session
+	var winner string
+	if len(peerAddrs) > 0 {
+		tlsCfg, err := identity.ClientTLS(key, peerPub)
+		if err != nil {
+			return "", err
+		}
+		q := pathmgr.NewQUIC(g.Conn, tlsCfg)
+		defer q.Close()
+		if err := q.PrepareListen(ctx); err != nil {
+			return "", err
+		}
+
+		punchFailed := make(chan struct{})
+		var punchOnce sync.Once
+		markPunchFailed := func() {
+			punchOnce.Do(func() { close(punchFailed) })
+		}
+
+		punchAttempt := pathmgr.Attempt[*session.Session]{
+			Name: "punch",
+			Fn: func(actx context.Context) (*session.Session, error) {
+				pctx, pcancel := context.WithTimeout(actx, 12*time.Second)
+				defer pcancel()
+				go g.Punch(pctx, peerLocal)
+				s, err := punch.Connect(pctx, q, peerAddrs, key.ID(), parseDeviceID(toID), sessionParams(key, name))
+				if err != nil {
+					markPunchFailed()
+					return nil, err
+				}
+				return s, nil
+			},
+		}
+		relayAttempt := pathmgr.Attempt[*session.Session]{
+			Name: "relay",
+			Fn: func(actx context.Context) (*session.Session, error) {
+				t := time.NewTimer(punchHeadStart)
+				select {
+				case <-actx.Done():
+					t.Stop()
+					return nil, actx.Err()
+				case <-punchFailed:
+					t.Stop()
+				case <-t.C:
+				}
+				return dialRelaySession(actx)
+			},
+		}
+		sess, winner, err = pathmgr.Race(ctx, punchAttempt, relayAttempt)
+		if err != nil {
+			return "", fmt.Errorf("race: %w", err)
+		}
+	} else {
+		sess, err = dialRelaySession(ctx)
+		if err != nil {
+			return "", err
+		}
+		winner = "relay"
 	}
-	defer sess.Close()
+
 	peerName := pairing.SanitizeName(sess.Peer.Name)
 	if peerName != "" {
 		identity.UpdatePeerName(pairedPath, toID, peerName)
@@ -810,13 +902,34 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 		logger.Event("path.selected", map[string]any{"path": winner, "peer": truncID(toID)})
 	}
 	start := time.Now()
-	res, err := transfer.Send(sess, paths, transfer.Config{
+	tcfg := transfer.Config{
 		ChunkSize: 0, Timeout: 30 * time.Second, Log: logger,
 		TransferID: hex16(tid),
 		OnDetailProgress: func(s transfer.ProgressSnapshot) {
 			updateActiveTransfer(txSeq, s.Stage, winner, "", s.FileName, s.FileIndex, s.FileCount, s.BytesDone, s.BytesTotal)
 		},
-	})
+	}
+	if winner == "punch" && (sess.Peer.Capabilities&proto.CapRelayFallback) != 0 {
+		tcfg.MinBytesPerSec = punchMinBytesPerSec
+	}
+
+	res, err := transfer.Send(sess, paths, tcfg)
+	if errors.Is(err, transfer.ErrSlowPath) {
+		if logger != nil {
+			logger.Event("path.fallback_slow_punch", map[string]any{"peer": truncID(toID), "transfer_id": tid})
+		}
+		_ = sess.Close()
+		updateActiveTransfer(txSeq, "connecting", "relay", peerName, "", 0, 0, -1, 0)
+		sess, err = dialRelaySession(ctx)
+		if err != nil {
+			return "", fmt.Errorf("fallback relay: %w", err)
+		}
+		winner = "relay"
+		updateActiveTransfer(txSeq, "transferring", "relay", peerName, "", 0, 0, -1, 0)
+		tcfg.MinBytesPerSec = 0
+		res, err = transfer.Send(sess, paths, tcfg)
+	}
+	_ = sess.Close()
 	if err != nil {
 		return "", err
 	}

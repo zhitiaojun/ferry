@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cwlindean/filetransfer/core/client"
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/signaling"
 )
@@ -35,6 +36,7 @@ var (
 	flagKey     = flag.String("key", "", "device key file (default: %LOCALAPPDATA%\\Ferry\\device.key)")
 	flagPair    = flag.String("paired", "", "trusted device table (default: %LOCALAPPDATA%\\Ferry\\paired.json)")
 	flagSig     = flag.String("signal", "wss://ferry.cwlindean.cn/signal", "signaling URL used to send via the relay")
+	flagSTUN    = flag.String("stun", client.DefaultSTUN, "comma-separated UDP STUN servers for hole punching")
 	flagWebBase = flag.String("web", "https://ferry.cwlindean.cn", "public website and temp share base URL")
 	flagSend    = flag.String("send", "", "diagnostic: send these comma-separated files to the paired device, then exit")
 	flagAuto    = flag.String("startup", "", "diagnostic: on/off/status for the HKCU Run entry, then exit")
@@ -86,6 +88,7 @@ func main() {
 		app.pairedPath = defaultPairedPath()
 	}
 	app.signalURL = *flagSig
+	app.stunServers = splitSTUNList(*flagSTUN)
 	app.webBase = *flagWebBase
 	if *flagLog != "" {
 		f, err := os.OpenFile(*flagLog, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -232,6 +235,7 @@ type app struct {
 	webBase      string
 	pairedPath   string
 	signalURL    string
+	stunServers  []string
 	logOut       *os.File
 	showMain     bool
 
@@ -247,6 +251,18 @@ type app struct {
 	sigStopCur   context.CancelFunc
 	cloudPeers   map[string]bool
 	lanPeers     map[string]lanPeerEntry
+	candRoutes   map[string]chan *signaling.Envelope
+	readyRoute   chan signaling.RelayReady
+}
+
+func splitSTUNList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 func (a *app) beginTransfer(dir, peer, fileName string, fileCount int, total int64) uint64 {

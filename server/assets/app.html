@@ -420,7 +420,7 @@
   function pumpPut() {
     var p = state.put;
     if (!p) return;
-    var CH = 64 * 1024, HIGH_WATER = 4 * 1024 * 1024, BURST = 32;
+    var CH = 256 * 1024, HIGH_WATER = 8 * 1024 * 1024, BURST = 16;
     var step = function () {
       if (!state.put || !state.ws) return;
       var sent = 0;

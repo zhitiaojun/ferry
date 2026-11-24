@@ -8,17 +8,15 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/cwlindean/filetransfer/core/proto"
 	"github.com/cwlindean/filetransfer/core/session"
 )
 
-// Send streams paths to the peer over an established session.
-//
-// Files are sent one at a time. For every chunk the sender waits for the
-// cumulative ACK before sending the next one (M1 keeps the window at one
-// chunk; the ACK rule in §4.4 permits this).
+// Send streams paths to the peer over an established session using a sliding
+// window of unacknowledged chunks so RTT does not stall throughput.
 func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 	start := time.Now()
 	if len(paths) == 0 {
@@ -80,8 +78,15 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 	hashes := make([][32]byte, len(paths))
 	batchTotal := int64(totalSize(entries))
 	var completedBefore int64
+	var sessionBase int64
 	var total int64
 	chunks := 0
+
+	var slow *slowWatchdog
+	if cfg.MinBytesPerSec > 0 {
+		slow = startSlowWatchdog(s, batchTotal, cfg)
+		defer slow.stop()
+	}
 
 	for i, p := range paths {
 		if entries[i].Size == 0 {
@@ -110,6 +115,9 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 		if i == startIdx {
 			off = startOff
 		}
+		if slow != nil {
+			slow.setConfirmed(completedBefore+int64(off), sessionBase)
+		}
 		if cfg.OnDetailProgress != nil {
 			cfg.OnDetailProgress(ProgressSnapshot{
 				Stage:      "transferring",
@@ -120,15 +128,22 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 				BytesTotal: batchTotal,
 			})
 		}
-		h, n, c, err := sendFile(s, tid, uint32(i), len(entries), entries[i].Name, p, buf, cfg, off, completedBefore, batchTotal)
+		h, n, c, err := sendFile(s, tid, uint32(i), len(entries), entries[i].Name, entries[i].Size, p, buf, cfg, off, completedBefore, sessionBase, batchTotal, slow)
 		if err != nil {
-			_ = s.SendError(proto.CodeIOError, "send %s: %v", entries[i].Name, err)
+			if !errors.Is(err, ErrSlowPath) {
+				_ = s.SendError(proto.CodeIOError, "send %s: %v", entries[i].Name, err)
+			}
 			return nil, err
 		}
 		hashes[i] = h
 		completedBefore += int64(entries[i].Size)
+		sessionBase += int64(entries[i].Size - off)
 		total += n
 		chunks += c
+	}
+
+	if slow != nil {
+		slow.stop()
 	}
 
 	if cfg.OnDetailProgress != nil && len(entries) > 0 {
@@ -176,8 +191,24 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 	return res, nil
 }
 
-// sendFile writes every chunk of one file and returns its whole-file hash.
-func sendFile(s *session.Session, tid [16]byte, index uint32, fileCount int, fileName, path string, buf []byte, cfg Config, startOffset uint64, completedBefore, batchTotal int64) ([32]byte, int64, int, error) {
+// sendFile streams chunks of one file up to cfg.windowBytes() in flight while
+// a concurrent ACK reader advances the window and emits progress.
+func sendFile(
+	s *session.Session,
+	tid [16]byte,
+	index uint32,
+	fileCount int,
+	fileName string,
+	fileSize uint64,
+	path string,
+	buf []byte,
+	cfg Config,
+	startOffset uint64,
+	completedBefore int64,
+	sessionBase int64,
+	batchTotal int64,
+	slow *slowWatchdog,
+) ([32]byte, int64, int, error) {
 	var zero [32]byte
 
 	f, err := os.Open(path)
@@ -187,61 +218,344 @@ func sendFile(s *session.Session, tid [16]byte, index uint32, fileCount int, fil
 	defer f.Close()
 
 	h := sha256.New()
-	var off int64
 	if startOffset > 0 {
-		n, err := io.CopyN(h, f, int64(startOffset))
-		if err != nil {
+		if _, err := io.CopyN(h, f, int64(startOffset)); err != nil {
 			return zero, 0, 0, fmt.Errorf("hash %d resumed bytes of %s: %w", startOffset, path, err)
 		}
-		off = n
 	}
+	if startOffset >= fileSize {
+		var sum [32]byte
+		copy(sum[:], h.Sum(nil))
+		return sum, int64(startOffset), 0, nil
+	}
+
+	windowBytes := uint64(cfg.windowBytes())
+	var mu sync.Mutex
+	cond := sync.NewCond(&mu)
+	if slow != nil {
+		slow.attachCond(cond)
+		defer slow.attachCond(nil)
+	}
+
+	sentOff := startOffset
+	ackedOff := startOffset
+	var recvErr error
+
+	ackDone := make(chan error, 1)
+	go func() {
+		ackDone <- readFileAcks(s, tid, index, fileCount, fileName, fileSize, startOffset, completedBefore, sessionBase, batchTotal, cfg, slow, &mu, cond, &sentOff, &ackedOff, &recvErr)
+	}()
+
 	chunks := 0
+	var writeErr error
 	for {
 		n, rerr := f.Read(buf)
 		if n > 0 {
 			chunk := buf[:n]
 			sum := sha256.Sum256(chunk)
+
+			mu.Lock()
+			for (sentOff-ackedOff) >= windowBytes && recvErr == nil && (slow == nil || !slow.isTriggered()) {
+				cond.Wait()
+			}
+			if slow != nil && slow.isTriggered() {
+				mu.Unlock()
+				writeErr = ErrSlowPath
+				break
+			}
+			if recvErr != nil {
+				writeErr = recvErr
+				mu.Unlock()
+				break
+			}
+			off := sentOff
+			sentOff += uint64(n)
+			mu.Unlock()
+
 			msg := &proto.Data{
 				TransferID:  tid,
 				FileIndex:   index,
-				Offset:      uint64(off),
+				Offset:      off,
 				ChunkSHA256: sum,
 				Data:        chunk,
 			}
 			if err := s.SendMsg(proto.TypeData, msg); err != nil {
-				return zero, 0, 0, err
+				writeErr = err
+				_ = s.Conn().SetReadDeadline(time.Now())
+				break
 			}
 			_, _ = h.Write(chunk)
-			off += int64(n)
 			chunks++
-			if err := waitAck(s, tid, index, uint64(off), cfg.timeout()); err != nil {
-				return zero, 0, 0, err
-			}
-			if cfg.OnProgress != nil {
-				cfg.OnProgress(off)
-			}
-			if cfg.OnDetailProgress != nil {
-				cfg.OnDetailProgress(ProgressSnapshot{
-					Stage:      "transferring",
-					FileIndex:  int(index) + 1,
-					FileCount:  fileCount,
-					FileName:   fileName,
-					BytesDone:  completedBefore + off,
-					BytesTotal: batchTotal,
-				})
-			}
 		}
 		if rerr == io.EOF {
 			break
 		}
 		if rerr != nil {
-			return zero, 0, 0, rerr
+			writeErr = rerr
+			_ = s.Conn().SetReadDeadline(time.Now())
+			break
 		}
+	}
+
+	if writeErr == nil {
+		mu.Lock()
+		for ackedOff < fileSize && recvErr == nil && (slow == nil || !slow.isTriggered()) {
+			cond.Wait()
+		}
+		mu.Unlock()
+	}
+
+	ackErr := <-ackDone
+	if slow != nil && slow.isTriggered() {
+		return zero, 0, 0, ErrSlowPath
+	}
+	if writeErr != nil {
+		var remote *session.RemoteError
+		if errors.As(ackErr, &remote) {
+			return zero, 0, 0, ackErr
+		}
+		return zero, 0, 0, writeErr
+	}
+	if ackErr != nil {
+		return zero, 0, 0, ackErr
 	}
 
 	var sum [32]byte
 	copy(sum[:], h.Sum(nil))
-	return sum, off, chunks, nil
+	return sum, int64(fileSize), chunks, nil
+}
+
+func readFileAcks(
+	s *session.Session,
+	tid [16]byte,
+	index uint32,
+	fileCount int,
+	fileName string,
+	fileSize uint64,
+	startOffset uint64,
+	completedBefore int64,
+	sessionBase int64,
+	batchTotal int64,
+	cfg Config,
+	slow *slowWatchdog,
+	mu *sync.Mutex,
+	cond *sync.Cond,
+	sentOff *uint64,
+	ackedOff *uint64,
+	recvErr *error,
+) error {
+	fail := func(err error) error {
+		mu.Lock()
+		*recvErr = err
+		cond.Broadcast()
+		mu.Unlock()
+		return err
+	}
+
+	for {
+		v, err := s.Expect(proto.TypeAck, cfg.timeout())
+		if err != nil {
+			return fail(err)
+		}
+		ack, ok := v.(*proto.Ack)
+		if !ok {
+			return fail(proto.NewError(proto.CodePayloadInvalid, "ACK did not decode"))
+		}
+		if ack.TransferID != tid {
+			return fail(proto.NewError(proto.CodeProtocolViolation, "ACK transfer_id mismatch"))
+		}
+		if ack.FileIndex != index {
+			continue
+		}
+		if ack.Offset > fileSize {
+			return fail(proto.NewError(proto.CodeOffsetInvalid, fmt.Sprintf("ACK offset %d exceeds file size %d", ack.Offset, fileSize)))
+		}
+
+		mu.Lock()
+		if ack.Offset > *sentOff {
+			sent := *sentOff
+			mu.Unlock()
+			return fail(proto.NewError(proto.CodeOffsetInvalid, fmt.Sprintf("ACK offset %d ahead of sent %d", ack.Offset, sent)))
+		}
+		if ack.Offset <= *ackedOff {
+			mu.Unlock()
+			continue
+		}
+		*ackedOff = ack.Offset
+		curAck := *ackedOff
+		cond.Broadcast()
+		mu.Unlock()
+
+		if slow != nil {
+			slow.setConfirmed(completedBefore+int64(curAck), sessionBase+int64(curAck-startOffset))
+		}
+		if cfg.OnProgress != nil {
+			cfg.OnProgress(int64(curAck))
+		}
+		if cfg.OnDetailProgress != nil {
+			cfg.OnDetailProgress(ProgressSnapshot{
+				Stage:      "transferring",
+				FileIndex:  int(index) + 1,
+				FileCount:  fileCount,
+				FileName:   fileName,
+				BytesDone:  completedBefore + int64(curAck),
+				BytesTotal: batchTotal,
+			})
+		}
+		if curAck == fileSize {
+			return nil
+		}
+	}
+}
+
+type speedSample struct {
+	t     time.Time
+	bytes int64
+}
+
+type slowWatchdog struct {
+	s          *session.Session
+	batchTotal int64
+	minBps     float64
+	grace      time.Duration
+	win        time.Duration
+	minRem     int64
+	start      time.Time
+
+	mu        sync.Mutex
+	batchDone int64
+	sessDone  int64
+	triggered bool
+	stopped   bool
+	cond      *sync.Cond
+	stopCh    chan struct{}
+	doneCh    chan struct{}
+}
+
+func startSlowWatchdog(s *session.Session, batchTotal int64, cfg Config) *slowWatchdog {
+	now := time.Now()
+	w := &slowWatchdog{
+		s:          s,
+		batchTotal: batchTotal,
+		minBps:     float64(cfg.MinBytesPerSec),
+		grace:      cfg.slowGrace(),
+		win:        cfg.slowWindow(),
+		minRem:     cfg.slowMinRemaining(),
+		start:      now,
+		stopCh:     make(chan struct{}),
+		doneCh:     make(chan struct{}),
+	}
+	go w.run()
+	return w
+}
+
+func (w *slowWatchdog) setConfirmed(batchDone, sessDone int64) {
+	w.mu.Lock()
+	if batchDone > w.batchDone {
+		w.batchDone = batchDone
+	}
+	if sessDone > w.sessDone {
+		w.sessDone = sessDone
+	}
+	w.mu.Unlock()
+}
+
+func (w *slowWatchdog) attachCond(c *sync.Cond) {
+	w.mu.Lock()
+	w.cond = c
+	w.mu.Unlock()
+}
+
+func (w *slowWatchdog) isTriggered() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.triggered
+}
+
+func (w *slowWatchdog) stop() {
+	w.mu.Lock()
+	if w.stopped {
+		w.mu.Unlock()
+		return
+	}
+	w.stopped = true
+	close(w.stopCh)
+	w.mu.Unlock()
+	<-w.doneCh
+}
+
+func (w *slowWatchdog) run() {
+	defer close(w.doneCh)
+	interval := w.win / 10
+	if interval < 40*time.Millisecond {
+		interval = 40 * time.Millisecond
+	}
+	if interval > 200*time.Millisecond {
+		interval = 200 * time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	samples := []speedSample{{t: w.start, bytes: 0}}
+	for {
+		select {
+		case <-w.stopCh:
+			return
+		case now := <-ticker.C:
+			w.mu.Lock()
+			batchDone := w.batchDone
+			sessDone := w.sessDone
+			cond := w.cond
+			w.mu.Unlock()
+
+			samples = append(samples, speedSample{t: now, bytes: sessDone})
+			cutoff := now.Add(-(w.win + 2*time.Second))
+			prune := 0
+			for prune < len(samples)-1 && samples[prune].t.Before(cutoff) {
+				prune++
+			}
+			if prune > 0 {
+				samples = samples[prune:]
+			}
+
+			if now.Sub(w.start) < w.grace+w.win {
+				continue
+			}
+			if w.batchTotal-batchDone < w.minRem {
+				continue
+			}
+
+			target := now.Add(-w.win)
+			refIdx := -1
+			for i := len(samples) - 1; i >= 0; i-- {
+				if !samples[i].t.After(target) {
+					refIdx = i
+					break
+				}
+			}
+			if refIdx < 0 {
+				continue
+			}
+			dt := now.Sub(samples[refIdx].t).Seconds()
+			if dt <= 0 {
+				continue
+			}
+			rate := float64(sessDone-samples[refIdx].bytes) / dt
+			if rate < w.minBps {
+				w.mu.Lock()
+				w.triggered = true
+				cond = w.cond
+				w.mu.Unlock()
+				_ = w.s.Conn().SetDeadline(time.Now())
+				if cond != nil {
+					cond.L.Lock()
+					cond.Broadcast()
+					cond.L.Unlock()
+				}
+				return
+			}
+		}
+	}
 }
 
 // waitStart waits for the receiver's answer to MANIFEST: ACK(0,0) for a fresh
@@ -293,36 +607,6 @@ func hashFile(path string) ([32]byte, error) {
 	var sum [32]byte
 	copy(sum[:], h.Sum(nil))
 	return sum, nil
-}
-
-// waitAck waits for an ACK that covers want bytes of file index. A stale ACK
-// (offset behind want) is tolerated once; anything ahead is a protocol error.
-func waitAck(s *session.Session, tid [16]byte, index uint32, want uint64, timeout time.Duration) error {
-	for attempt := 0; attempt < 3; attempt++ {
-		v, err := s.Expect(proto.TypeAck, timeout)
-		if err != nil {
-			return err
-		}
-		ack, ok := v.(*proto.Ack)
-		if !ok {
-			return proto.NewError(proto.CodePayloadInvalid, "ACK did not decode")
-		}
-		if ack.TransferID != tid {
-			return proto.NewError(proto.CodeProtocolViolation, "ACK transfer_id mismatch")
-		}
-		if ack.FileIndex != index {
-			// Ack for an earlier file is stale; keep waiting.
-			continue
-		}
-		if ack.Offset == want {
-			return nil
-		}
-		if ack.Offset < want {
-			continue
-		}
-		return proto.NewError(proto.CodeOffsetInvalid, fmt.Sprintf("ACK offset %d ahead of sent %d", ack.Offset, want))
-	}
-	return proto.NewError(proto.CodeTimeout, "no matching ACK")
 }
 
 func totalSize(entries []proto.FileEntry) uint64 {

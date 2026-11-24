@@ -8,12 +8,28 @@ package transfer
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"time"
 
 	"github.com/cwlindean/filetransfer/core/logging"
 	"github.com/cwlindean/filetransfer/core/proto"
+)
+
+// ErrSlowPath is returned by Send when MinBytesPerSec is configured and
+// confirmed throughput stays below the threshold with enough bytes remaining.
+var ErrSlowPath = errors.New("transfer: path below minimum speed")
+
+const (
+	// DefaultWindowBytes bounds unacknowledged bytes kept in flight per file.
+	DefaultWindowBytes = 4 << 20
+	// DefaultSlowGrace skips initial ramp-up before checking transfer rate.
+	DefaultSlowGrace = 1 * time.Second
+	// DefaultSlowWindow is the rolling window over which transfer speed is measured.
+	DefaultSlowWindow = 2500 * time.Millisecond
+	// DefaultSlowMinRemaining avoids aborting near-complete transfers.
+	DefaultSlowMinRemaining = 2 << 20
 )
 
 // ProgressSnapshot reports detailed batch transfer state and byte counts.
@@ -28,9 +44,14 @@ type ProgressSnapshot struct {
 
 // Config tunes a transfer. Zero values select the protocol defaults.
 type Config struct {
-	ChunkSize uint32
-	Timeout   time.Duration
-	Log       *logging.Logger
+	ChunkSize        uint32
+	WindowBytes      int
+	Timeout          time.Duration
+	MinBytesPerSec   int64
+	SlowGrace        time.Duration
+	SlowWindow       time.Duration
+	SlowMinRemaining int64
+	Log              *logging.Logger
 	// TransferID overrides the random id when the caller already committed to
 	// one (e.g. the signaling transfer id); zero means "generate".
 	TransferID [16]byte
@@ -47,6 +68,38 @@ func (c Config) chunkSize() int {
 		return int(proto.DefaultChunkSize)
 	}
 	return int(c.ChunkSize)
+}
+
+func (c Config) windowBytes() int {
+	w := c.WindowBytes
+	if w <= 0 {
+		w = DefaultWindowBytes
+	}
+	if cs := c.chunkSize(); w < cs {
+		w = cs
+	}
+	return w
+}
+
+func (c Config) slowGrace() time.Duration {
+	if c.SlowGrace <= 0 {
+		return DefaultSlowGrace
+	}
+	return c.SlowGrace
+}
+
+func (c Config) slowWindow() time.Duration {
+	if c.SlowWindow <= 0 {
+		return DefaultSlowWindow
+	}
+	return c.SlowWindow
+}
+
+func (c Config) slowMinRemaining() int64 {
+	if c.SlowMinRemaining <= 0 {
+		return DefaultSlowMinRemaining
+	}
+	return c.SlowMinRemaining
 }
 
 func (c Config) timeout() time.Duration {

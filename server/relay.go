@@ -77,20 +77,27 @@ func (r *room) splice(ctx context.Context, idle time.Duration) {
 }
 
 // throttle keeps one room under RelayRate bytes per second by sleeping once
-// the budget for the current second is spent. A zero rate disables it.
+// the budget for the current window is spent. High rates (>= 1 MiB/s) use
+// 100 ms sub-windows to avoid burst-stall pauses on TCP. A zero rate disables it.
 func (r *room) throttle(ctx context.Context, n int) {
 	if r.rate <= 0 {
 		return
 	}
+	win := time.Second
+	limit := r.rate
+	if r.rate >= 1<<20 {
+		win = 100 * time.Millisecond
+		limit = r.rate / 10
+	}
 	r.rateMu.Lock()
 	now := time.Now()
-	if r.rateWindow.IsZero() || now.Sub(r.rateWindow) >= time.Second {
+	if r.rateWindow.IsZero() || now.Sub(r.rateWindow) >= win {
 		r.rateWindow = now
 		r.rateBytes = 0
 	}
 	r.rateBytes += int64(n)
-	over := r.rateBytes > r.rate
-	wait := time.Until(r.rateWindow.Add(time.Second))
+	over := r.rateBytes > limit
+	wait := time.Until(r.rateWindow.Add(win))
 	r.rateMu.Unlock()
 	if !over || wait <= 0 {
 		return
@@ -106,24 +113,45 @@ func (r *room) pump(ctx context.Context, from int, idle time.Duration) error {
 	if src == nil || dst == nil {
 		return errRoomHalf
 	}
-	for {
-		rctx, cancel := context.WithTimeout(ctx, idle)
-		typ, data, err := src.Read(rctx)
-		cancel()
-		if err != nil {
-			return err
+	ch := make(chan []byte, 8)
+	rerr := make(chan error, 1)
+	go func() {
+		defer close(ch)
+		for {
+			rctx, cancel := context.WithTimeout(ctx, idle)
+			typ, data, err := src.Read(rctx)
+			cancel()
+			if err != nil {
+				rerr <- err
+				return
+			}
+			if typ != websocket.MessageBinary || len(data) == 0 {
+				continue
+			}
+			select {
+			case ch <- data:
+			case <-ctx.Done():
+				rerr <- ctx.Err()
+				return
+			}
 		}
-		if typ != websocket.MessageBinary || len(data) == 0 {
-			continue
-		}
+	}()
+
+	for data := range ch {
 		wctx, wcancel := context.WithTimeout(ctx, 10*time.Second)
-		err = dst.Write(wctx, websocket.MessageBinary, data)
+		err := dst.Write(wctx, websocket.MessageBinary, data)
 		wcancel()
 		if err != nil {
 			return err
 		}
 		r.addBytes(from, len(data))
 		r.throttle(ctx, len(data))
+	}
+	select {
+	case err := <-rerr:
+		return err
+	default:
+		return nil
 	}
 }
 

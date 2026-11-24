@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -360,40 +359,6 @@ func SendViaPunch(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSO
 	return marshalSummary(s), nil
 }
 
-func dialRace(ctx context.Context, q *pathmgr.QUIC, addrs []*net.UDPAddr, timeout time.Duration) (net.Conn, error) {
-	if len(addrs) == 0 {
-		return nil, fmt.Errorf("no candidate addresses")
-	}
-	type out struct {
-		c   net.Conn
-		err error
-	}
-	ch := make(chan out, len(addrs))
-	for _, a := range addrs {
-		go func(addr string) {
-			c, err := q.DialAddr(ctx, addr)
-			ch <- out{c, err}
-		}(a.String())
-	}
-	var lastErr error
-	t := time.NewTimer(timeout)
-	defer t.Stop()
-	for i := 0; i < len(addrs); i++ {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-t.C:
-			return nil, fmt.Errorf("punch dial timeout")
-		case o := <-ch:
-			if o.err == nil {
-				return o.c, nil
-			}
-			lastErr = o.err
-		}
-	}
-	return nil, lastErr
-}
-
 func gatherHint(ctx context.Context, servers []string, hint *discovery.Hint, logger *logging.Logger) (*punch.Gathered, error) {
 	setPunchDebug()
 	if hint == nil {
@@ -505,7 +470,7 @@ func sessionParams(key *identity.Key, name string) session.Params {
 	return session.Params{
 		DeviceID:     key.ID(),
 		Name:         name,
-		Capabilities: proto.CapResume,
+		Capabilities: proto.CapResume | proto.CapRelayFallback,
 	}
 }
 

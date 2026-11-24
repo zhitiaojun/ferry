@@ -24,10 +24,10 @@ import (
 	"github.com/cwlindean/filetransfer/core/transfer"
 )
 
-// Status reports live progress stages for relay file transfers.
+// Status reports live progress stages for file transfers.
 type Status struct {
-	Stage      string // "connecting" | "waiting" | "transferring" | "verifying"
-	Channel    string // "" | "relay"
+	Stage      string // "connecting" | "waiting" | "racing" | "transferring" | "verifying"
+	Channel    string // "" | "lan" | "punch" | "relay"
 	FileIndex  int
 	FileCount  int
 	FileName   string
@@ -35,13 +35,15 @@ type Status struct {
 	BytesTotal int64
 }
 
-// Options configures one relay transfer.
+// Options configures one transfer.
 type Options struct {
 	SignalURL    string
 	SignalClient *signaling.Client // optional persistent signaling client to reuse
 	KeyPath      string            // device key file
 	PairedPath   string            // trusted-peer table
 	Name         string            // device name shown to the peer
+	STUNServers  []string          // nil uses DefaultSTUNList; empty non-nil skips STUN
+	CandRoute    func(sid string, ch chan *signaling.Envelope) func()
 	Chunk        int
 	Timeout      time.Duration
 	NoTLS        bool
@@ -52,7 +54,7 @@ type Options struct {
 // Result summarises a completed transfer.
 type Result struct {
 	TransferID string
-	Channel    string // "LAN" | "中继"
+	Channel    string // "LAN" | "打洞" | "中继"
 	PeerName   string
 	Files      []string
 	Bytes      int64
@@ -268,7 +270,11 @@ func openRelayRoom(ctx context.Context, c *signaling.Client, toID, transferID st
 }
 
 func sessionParams(key *identity.Key, name string) session.Params {
-	return session.Params{DeviceID: key.ID(), Name: name, Capabilities: proto.CapResume}
+	return session.Params{
+		DeviceID:     key.ID(),
+		Name:         name,
+		Capabilities: proto.CapResume | proto.CapRelayFallback,
+	}
 }
 
 func describeFiles(paths []string) ([]signaling.FileInfo, int64, error) {

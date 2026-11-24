@@ -1,0 +1,710 @@
+package client
+
+import (
+	"context"
+	"crypto/ed25519"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/cwlindean/filetransfer/core/identity"
+	"github.com/cwlindean/filetransfer/core/logging"
+	"github.com/cwlindean/filetransfer/core/pairing"
+	"github.com/cwlindean/filetransfer/core/pathmgr"
+	"github.com/cwlindean/filetransfer/core/proto"
+	"github.com/cwlindean/filetransfer/core/punch"
+	"github.com/cwlindean/filetransfer/core/relay"
+	"github.com/cwlindean/filetransfer/core/session"
+	"github.com/cwlindean/filetransfer/core/signaling"
+	"github.com/cwlindean/filetransfer/core/transfer"
+)
+
+const (
+	// DefaultSTUN is the public BJ STUN pair used for UDP candidate discovery.
+	DefaultSTUN = "123.57.253.208:40000,123.57.253.208:40001"
+	// PunchHeadStart delays opening a relay room while UDP hole punching tries first.
+	PunchHeadStart = 2 * time.Second
+	// PunchMinBytesPerSec is the 5 Mbps floor below which a punched transfer
+	// falls back to the relay and resumes from .ftpart.
+	PunchMinBytesPerSec int64 = 625_000
+	// RelayFallbackWait is how long a receiver waits for a fallback relay room
+	// when an active punched transfer fails mid-stream.
+	RelayFallbackWait = 8 * time.Second
+)
+
+// DefaultSTUNList returns the default BJ STUN server list.
+func DefaultSTUNList() []string {
+	var out []string
+	for _, s := range strings.Split(DefaultSTUN, ",") {
+		if t := strings.TrimSpace(s); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// ReceiveOptions configures an auto-path inbound transfer (UDP punch or relay).
+type ReceiveOptions struct {
+	Key         *identity.Key
+	SignalURL   string
+	OutDir      string
+	PairedPath  string
+	Name        string
+	STUNServers []string // nil uses DefaultSTUNList; empty non-nil skips STUN
+	Timeout     time.Duration
+	NoTLS       bool
+	Log         *logging.Logger
+	OnStatus    func(Status)
+}
+
+// SendAuto prefers UDP hole punching (with a PunchHeadStart over relay when
+// UDP candidates exist) and automatically falls back via .ftpart resume to
+// relay if punch fails or drops below 5 Mbps.
+func SendAuto(ctx context.Context, o Options, toID string, files []string) (Result, error) {
+	if len(files) == 0 {
+		return Result{}, fmt.Errorf("no files to send")
+	}
+	infos, total, err := describeFiles(files)
+	if err != nil {
+		return Result{}, err
+	}
+	firstName := infos[0].Name
+	emitStatus := func(st Status) {
+		if o.OnStatus != nil {
+			o.OnStatus(st)
+		}
+	}
+	emitStatus(Status{
+		Stage:      "connecting",
+		FileIndex:  1,
+		FileCount:  len(infos),
+		FileName:   firstName,
+		BytesTotal: total,
+	})
+
+	key, err := identity.LoadOrCreateKey(o.KeyPath)
+	if err != nil {
+		return Result{}, fmt.Errorf("device key %s: %w", o.KeyPath, err)
+	}
+	peerPub, err := pairedPeer(o.PairedPath, toID)
+	if err != nil {
+		return Result{}, err
+	}
+
+	stun := o.STUNServers
+	if stun == nil {
+		stun = DefaultSTUNList()
+	}
+	g, gerr := punch.Gather(ctx, stun, 2*time.Second, o.Log)
+	if gerr == nil {
+		defer g.Close()
+	}
+
+	cl := o.SignalClient
+	reused := cl != nil && cl.Alive()
+	if !reused {
+		cl, err = signaling.Dial(ctx, o.SignalURL, key, o.Log)
+		if err != nil {
+			return Result{}, err
+		}
+		defer cl.Close()
+	}
+
+	sessionID, err := randomHex16()
+	if err != nil {
+		return Result{}, err
+	}
+	transferID, err := randomHex16()
+	if err != nil {
+		return Result{}, err
+	}
+
+	events := make(chan *signaling.Envelope, 16)
+	cl.On(signaling.TypeSendResp, func(e *signaling.Envelope) {
+		select {
+		case events <- e:
+		default:
+		}
+	})
+	cl.On(signaling.TypeError, func(e *signaling.Envelope) {
+		select {
+		case events <- e:
+		default:
+		}
+	})
+	defer cl.Off(signaling.TypeSendResp)
+	defer cl.Off(signaling.TypeError)
+
+	if reused && o.CandRoute != nil {
+		unreg := o.CandRoute(sessionID, events)
+		defer unreg()
+	} else {
+		cl.On(signaling.TypeCandidates, func(e *signaling.Envelope) {
+			select {
+			case events <- e:
+			default:
+			}
+		})
+		defer cl.Off(signaling.TypeCandidates)
+	}
+
+	req := signaling.SendRequest{
+		ToDevice:   toID,
+		SessionID:  sessionID,
+		TransferID: transferID,
+		Files:      infos,
+	}
+	if err := cl.Send(ctx, signaling.TypeSendRequest, req); err != nil {
+		return Result{}, fmt.Errorf("send_request: %w", err)
+	}
+	emitStatus(Status{
+		Stage:      "waiting",
+		FileIndex:  1,
+		FileCount:  len(infos),
+		FileName:   firstName,
+		BytesTotal: total,
+	})
+
+	var peerCands []signaling.Candidate
+	accepted := false
+	gotCands := false
+	reqDeadline := time.NewTimer(15 * time.Second)
+	defer reqDeadline.Stop()
+	var candDeadline *time.Timer
+	var candDeadlineC <-chan time.Time
+
+	for !accepted || !gotCands {
+		select {
+		case <-ctx.Done():
+			return Result{}, ctx.Err()
+		case <-cl.Done():
+			return Result{}, fmt.Errorf("signaling connection dropped: %v", cl.Err())
+		case <-reqDeadline.C:
+			return Result{}, fmt.Errorf("peer did not answer the request")
+		case <-candDeadlineC:
+			gotCands = true
+		case e := <-events:
+			switch e.Type {
+			case signaling.TypeError:
+				body, _ := signaling.Decode[signaling.ErrorBody](e)
+				return Result{}, fmt.Errorf("signaling: %s: %s", body.Code, body.Message)
+			case signaling.TypeSendResp:
+				r, derr := signaling.Decode[signaling.SendResponse](e)
+				if derr != nil {
+					return Result{}, derr
+				}
+				if !r.Accept {
+					return Result{}, fmt.Errorf("peer rejected the transfer: %s", r.Reason)
+				}
+				accepted = true
+				emitStatus(Status{
+					Stage:      "racing",
+					FileIndex:  1,
+					FileCount:  len(infos),
+					FileName:   firstName,
+					BytesTotal: total,
+				})
+				var local []signaling.Candidate
+				if g != nil {
+					local = signalingCandidates(g.Candidates)
+				}
+				if err := cl.Send(ctx, signaling.TypeCandidates, signaling.Candidates{
+					ToDevice: toID, SessionID: sessionID, Candidates: local,
+				}); err != nil {
+					return Result{}, fmt.Errorf("send candidates: %w", err)
+				}
+				if !gotCands {
+					candDeadline = time.NewTimer(3 * time.Second)
+					defer candDeadline.Stop()
+					candDeadlineC = candDeadline.C
+				}
+			case signaling.TypeCandidates:
+				c, derr := signaling.Decode[signaling.Candidates](e)
+				if derr != nil {
+					return Result{}, derr
+				}
+				peerCands = c.Candidates
+				gotCands = true
+			}
+		}
+	}
+
+	if o.Log != nil {
+		o.Log.Event("signal.accepted", map[string]any{"to": truncHex(toID), "files": len(infos), "bytes": total})
+	}
+
+	localName := pairing.SanitizeName(o.Name)
+	peerLocal := localCandidates(peerCands)
+	peerAddrs := punch.Resolve(peerLocal)
+
+	var sess *session.Session
+	var winner string
+
+	if g != nil && len(peerAddrs) > 0 {
+		tlsCfg, derr := identity.ClientTLS(key, peerPub)
+		if derr != nil {
+			return Result{}, derr
+		}
+		q := pathmgr.NewQUIC(g.Conn, tlsCfg)
+		defer q.Close()
+		if err := q.PrepareListen(ctx); err != nil {
+			return Result{}, err
+		}
+
+		punchFailed := make(chan struct{})
+		var punchOnce sync.Once
+		markPunchFailed := func() {
+			punchOnce.Do(func() { close(punchFailed) })
+		}
+
+		punchAttempt := pathmgr.Attempt[*session.Session]{
+			Name: "punch",
+			Fn: func(actx context.Context) (*session.Session, error) {
+				pctx, pcancel := context.WithTimeout(actx, 12*time.Second)
+				defer pcancel()
+				go g.Punch(pctx, peerLocal)
+				s, cerr := punch.Connect(pctx, q, peerAddrs, key.ID(), parseDeviceID(toID), sessionParams(key, localName))
+				if cerr != nil {
+					markPunchFailed()
+					return nil, cerr
+				}
+				return s, nil
+			},
+		}
+		relayAttempt := pathmgr.Attempt[*session.Session]{
+			Name: "relay",
+			Fn: func(actx context.Context) (*session.Session, error) {
+				t := time.NewTimer(PunchHeadStart)
+				select {
+				case <-actx.Done():
+					t.Stop()
+					return nil, actx.Err()
+				case <-punchFailed:
+					t.Stop()
+				case <-t.C:
+				}
+				return openRelaySession(actx, cl, key, peerPub, localName, toID, transferID, o.NoTLS)
+			},
+		}
+		sess, winner, err = pathmgr.Race(ctx, punchAttempt, relayAttempt)
+		if err != nil {
+			return Result{}, fmt.Errorf("race: %w", err)
+		}
+	} else {
+		sess, err = openRelaySession(ctx, cl, key, peerPub, localName, toID, transferID, o.NoTLS)
+		if err != nil {
+			return Result{}, err
+		}
+		winner = "relay"
+	}
+
+	peerName := pairing.SanitizeName(sess.Peer.Name)
+	if peerName != "" && o.PairedPath != "" {
+		identity.UpdatePeerName(o.PairedPath, toID, peerName)
+	}
+	if o.Log != nil {
+		o.Log.Event("path.selected", map[string]any{"path": winner, "peer": truncHex(toID)})
+	}
+	emitStatus(Status{
+		Stage:      "transferring",
+		Channel:    winner,
+		FileIndex:  1,
+		FileCount:  len(infos),
+		FileName:   firstName,
+		BytesTotal: total,
+	})
+
+	start := time.Now()
+	tcfg := transfer.Config{
+		ChunkSize:  uint32(o.Chunk),
+		Timeout:    o.Timeout,
+		Log:        o.Log,
+		TransferID: hex16(transferID),
+		OnDetailProgress: func(snap transfer.ProgressSnapshot) {
+			emitStatus(Status{
+				Stage:      snap.Stage,
+				Channel:    winner,
+				FileIndex:  snap.FileIndex,
+				FileCount:  snap.FileCount,
+				FileName:   snap.FileName,
+				BytesDone:  snap.BytesDone,
+				BytesTotal: snap.BytesTotal,
+			})
+		},
+	}
+	if winner == "punch" && (sess.Peer.Capabilities&proto.CapRelayFallback) != 0 {
+		tcfg.MinBytesPerSec = PunchMinBytesPerSec
+	}
+
+	res, err := transfer.Send(sess, files, tcfg)
+	if errors.Is(err, transfer.ErrSlowPath) {
+		if o.Log != nil {
+			o.Log.Event("path.fallback_slow_punch", map[string]any{"peer": truncHex(toID), "transfer_id": transferID})
+		}
+		_ = sess.Close()
+		emitStatus(Status{
+			Stage:      "connecting",
+			Channel:    "relay",
+			FileIndex:  1,
+			FileCount:  len(infos),
+			FileName:   firstName,
+			BytesTotal: total,
+		})
+		sess, err = openRelaySession(ctx, cl, key, peerPub, localName, toID, transferID, o.NoTLS)
+		if err != nil {
+			return Result{}, fmt.Errorf("fallback relay: %w", err)
+		}
+		winner = "relay"
+		emitStatus(Status{
+			Stage:      "transferring",
+			Channel:    "relay",
+			FileIndex:  1,
+			FileCount:  len(infos),
+			FileName:   firstName,
+			BytesTotal: total,
+		})
+		tcfg.MinBytesPerSec = 0
+		res, err = transfer.Send(sess, files, tcfg)
+	}
+	_ = sess.Close()
+	if err != nil {
+		return Result{}, err
+	}
+
+	return Result{
+		TransferID: transferID,
+		Channel:    channelLabel(winner),
+		PeerName:   peerName,
+		Files:      res.Files,
+		Bytes:      res.Bytes,
+		Chunks:     res.Chunks,
+		Duration:   time.Since(start),
+	}, nil
+}
+
+// ReceiveAuto handles an inbound SendRequest by racing UDP hole punching and
+// relay, and automatically accepting a fallback relay room if a slow punched
+// path aborts mid-transfer.
+func ReceiveAuto(
+	ctx context.Context,
+	o ReceiveOptions,
+	cl *signaling.Client,
+	req signaling.SendRequest,
+	peerPub ed25519.PublicKey,
+	candCh <-chan *signaling.Envelope,
+	readyCh <-chan signaling.RelayReady,
+) (Result, error) {
+	if o.Key == nil {
+		return Result{}, fmt.Errorf("nil identity key")
+	}
+	if cl == nil {
+		return Result{}, fmt.Errorf("nil signaling client")
+	}
+	var total int64
+	firstName := ""
+	if len(req.Files) > 0 {
+		firstName = req.Files[0].Name
+		for _, f := range req.Files {
+			total += f.Size
+		}
+	}
+	emitStatus := func(st Status) {
+		if o.OnStatus != nil {
+			o.OnStatus(st)
+		}
+	}
+	emitStatus(Status{
+		Stage:      "connecting",
+		FileIndex:  1,
+		FileCount:  len(req.Files),
+		FileName:   firstName,
+		BytesTotal: total,
+	})
+
+	stun := o.STUNServers
+	if stun == nil {
+		stun = DefaultSTUNList()
+	}
+	g, gerr := punch.Gather(ctx, stun, 2*time.Second, o.Log)
+	if gerr == nil {
+		defer g.Close()
+	}
+
+	if err := cl.Send(ctx, signaling.TypeSendResp, signaling.SendResponse{
+		ToDevice: req.FromDevice, TransferID: req.TransferID, Accept: true,
+	}); err != nil {
+		return Result{}, err
+	}
+
+	var local []signaling.Candidate
+	if g != nil {
+		local = signalingCandidates(g.Candidates)
+	}
+	if req.SessionID != "" {
+		if err := cl.Send(ctx, signaling.TypeCandidates, signaling.Candidates{
+			ToDevice: req.FromDevice, SessionID: req.SessionID, Candidates: local,
+		}); err != nil {
+			return Result{}, err
+		}
+	}
+
+	emitStatus(Status{
+		Stage:      "racing",
+		FileIndex:  1,
+		FileCount:  len(req.Files),
+		FileName:   firstName,
+		BytesTotal: total,
+	})
+
+	localName := pairing.SanitizeName(o.Name)
+	var attempts []pathmgr.Attempt[*session.Session]
+
+	if gerr == nil && g != nil {
+		serverCfg, err := identity.ServerTLS(o.Key, peerPub)
+		if err != nil {
+			return Result{}, err
+		}
+		q := pathmgr.NewQUIC(g.Conn, serverCfg)
+		defer q.Close()
+		if err := q.PrepareListen(ctx); err != nil {
+			return Result{}, err
+		}
+		attempts = append(attempts, pathmgr.Attempt[*session.Session]{
+			Name: "punch",
+			Fn: func(actx context.Context) (*session.Session, error) {
+				var peerCands []signaling.Candidate
+				t := time.NewTimer(10 * time.Second)
+				defer t.Stop()
+				for peerCands == nil {
+					select {
+					case <-actx.Done():
+						return nil, actx.Err()
+					case <-cl.Done():
+						return nil, fmt.Errorf("signaling dropped: %v", cl.Err())
+					case <-t.C:
+						return nil, fmt.Errorf("peer did not publish candidates")
+					case ce := <-candCh:
+						c, derr := signaling.Decode[signaling.Candidates](ce)
+						if derr != nil {
+							return nil, derr
+						}
+						peerCands = c.Candidates
+						if peerCands == nil {
+							peerCands = []signaling.Candidate{}
+						}
+					}
+				}
+				peerLocal := localCandidates(peerCands)
+				addrs := punch.Resolve(peerLocal)
+				if len(addrs) == 0 {
+					return nil, fmt.Errorf("peer has no udp candidates")
+				}
+				pctx, cancel := context.WithTimeout(actx, 25*time.Second)
+				defer cancel()
+				go g.Punch(pctx, peerLocal)
+				return punch.Connect(pctx, q, addrs, o.Key.ID(), parseDeviceID(req.FromDevice), sessionParams(o.Key, localName))
+			},
+		})
+	}
+
+	attempts = append(attempts, pathmgr.Attempt[*session.Session]{
+		Name: "relay",
+		Fn: func(actx context.Context) (*session.Session, error) {
+			var ready signaling.RelayReady
+			select {
+			case <-actx.Done():
+				return nil, actx.Err()
+			case <-cl.Done():
+				return nil, fmt.Errorf("signaling dropped: %v", cl.Err())
+			case ready = <-readyCh:
+			}
+			return acceptRelaySession(actx, o.SignalURL, ready, o.Key, peerPub, localName, o.NoTLS)
+		},
+	})
+
+	sess, winner, err := pathmgr.Race(ctx, attempts...)
+	if err != nil {
+		return Result{}, fmt.Errorf("race: %w", err)
+	}
+
+	peerName := pairing.SanitizeName(sess.Peer.Name)
+	if peerName != "" && o.PairedPath != "" {
+		identity.UpdatePeerName(o.PairedPath, req.FromDevice, peerName)
+	}
+	if o.Log != nil {
+		o.Log.Event("path.selected", map[string]any{"path": winner, "peer": truncHex(req.FromDevice)})
+	}
+	emitStatus(Status{
+		Stage:      "transferring",
+		Channel:    winner,
+		FileIndex:  1,
+		FileCount:  len(req.Files),
+		FileName:   firstName,
+		BytesTotal: total,
+	})
+
+	start := time.Now()
+	tcfg := transfer.Config{
+		Timeout:    o.Timeout,
+		Log:        o.Log,
+		TransferID: hex16(req.TransferID),
+		OnDetailProgress: func(snap transfer.ProgressSnapshot) {
+			emitStatus(Status{
+				Stage:      snap.Stage,
+				Channel:    winner,
+				FileIndex:  snap.FileIndex,
+				FileCount:  snap.FileCount,
+				FileName:   snap.FileName,
+				BytesDone:  snap.BytesDone,
+				BytesTotal: snap.BytesTotal,
+			})
+		},
+	}
+
+	res, err := transfer.Receive(sess, o.OutDir, tcfg)
+	if err != nil && winner == "punch" {
+		_ = sess.Close()
+		emitStatus(Status{
+			Stage:      "connecting",
+			Channel:    "relay",
+			FileIndex:  1,
+			FileCount:  len(req.Files),
+			FileName:   firstName,
+			BytesTotal: total,
+		})
+		waitTimer := time.NewTimer(RelayFallbackWait)
+		var ready signaling.RelayReady
+		gotFallback := false
+		select {
+		case <-ctx.Done():
+			waitTimer.Stop()
+		case <-cl.Done():
+			waitTimer.Stop()
+		case <-waitTimer.C:
+		case ready = <-readyCh:
+			waitTimer.Stop()
+			gotFallback = true
+		}
+		if gotFallback {
+			relaySess, rerr := acceptRelaySession(ctx, o.SignalURL, ready, o.Key, peerPub, localName, o.NoTLS)
+			if rerr != nil {
+				return Result{}, fmt.Errorf("fallback relay: %w", rerr)
+			}
+			sess = relaySess
+			winner = "relay"
+			emitStatus(Status{
+				Stage:      "transferring",
+				Channel:    "relay",
+				FileIndex:  1,
+				FileCount:  len(req.Files),
+				FileName:   firstName,
+				BytesTotal: total,
+			})
+			res, err = transfer.Receive(sess, o.OutDir, tcfg)
+		}
+	}
+	if err != nil {
+		_ = sess.Close()
+		return Result{}, err
+	}
+	sess.Drain(2 * time.Second)
+
+	return Result{
+		TransferID: req.TransferID,
+		Channel:    channelLabel(winner),
+		PeerName:   peerName,
+		Files:      res.Files,
+		Bytes:      res.Bytes,
+		Chunks:     res.Chunks,
+		Duration:   time.Since(start),
+	}, nil
+}
+
+func openRelaySession(ctx context.Context, cl *signaling.Client, key *identity.Key, peerPub ed25519.PublicKey, localName, toID, transferID string, noTLS bool) (*session.Session, error) {
+	ready, err := openRelayRoom(ctx, cl, toID, transferID)
+	if err != nil {
+		return nil, err
+	}
+	rc, err := relay.Dial(ctx, ready.url)
+	if err != nil {
+		return nil, err
+	}
+	conn := net.Conn(rc)
+	if !noTLS {
+		conn, err = clientTLS(ctx, conn, key, peerPub)
+		if err != nil {
+			_ = rc.Close()
+			return nil, err
+		}
+	}
+	s, err := session.Dial(conn, sessionParams(key, localName))
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("handshake over relay: %w", err)
+	}
+	return s, nil
+}
+
+func acceptRelaySession(ctx context.Context, signalURL string, ready signaling.RelayReady, key *identity.Key, peerPub ed25519.PublicKey, localName string, noTLS bool) (*session.Session, error) {
+	u, err := relay.RelayURL(signalURL, ready.RelayURL, ready.Token)
+	if err != nil {
+		return nil, err
+	}
+	rc, err := relay.Dial(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+	conn := net.Conn(rc)
+	if !noTLS {
+		conn, err = ServerTLS(ctx, conn, key, peerPub)
+		if err != nil {
+			_ = rc.Close()
+			return nil, err
+		}
+	}
+	s, err := session.Accept(conn, sessionParams(key, localName))
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+func channelLabel(winner string) string {
+	switch winner {
+	case "punch":
+		return "打洞"
+	case "lan":
+		return "LAN"
+	default:
+		return "中继"
+	}
+}
+
+func signalingCandidates(cs []punch.Candidate) []signaling.Candidate {
+	out := make([]signaling.Candidate, 0, len(cs))
+	for _, c := range cs {
+		out = append(out, signaling.Candidate{Kind: c.Kind, Addr: c.Addr, Priority: c.Priority})
+	}
+	return out
+}
+
+func localCandidates(cs []signaling.Candidate) []punch.Candidate {
+	out := make([]punch.Candidate, 0, len(cs))
+	for _, c := range cs {
+		out = append(out, punch.Candidate{Kind: c.Kind, Addr: c.Addr, Priority: c.Priority})
+	}
+	return out
+}
+
+func parseDeviceID(hexID string) [32]byte {
+	var id [32]byte
+	if b, err := hex.DecodeString(hexID); err == nil && len(b) == 32 {
+		copy(id[:], b)
+	}
+	return id
+}

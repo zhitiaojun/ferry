@@ -54,7 +54,7 @@ func DefaultLimits() Limits {
 		RelayIdle:     60 * time.Second,
 		LoginTTL:      30 * time.Second,
 		PingIdle:      90 * time.Second,
-		RelayRate:     16 << 20,
+		RelayRate:     22 << 20,
 		LoginBurst:    10,
 		LoginWindow:   time.Minute,
 		PairBurst:     30,
@@ -213,7 +213,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 // accept upgrades an HTTP request to a WebSocket with the project's limits.
 func (s *Server) accept(w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		OriginPatterns: []string{"ft.cwlindean.cn", "localhost", "127.0.0.1"},
+		OriginPatterns: []string{"ferry.cwlindean.cn", "ft.cwlindean.cn", "localhost", "127.0.0.1"},
 	})
 	if err != nil {
 		return nil, err

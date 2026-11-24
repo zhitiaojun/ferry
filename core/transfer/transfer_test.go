@@ -492,3 +492,122 @@ func TestDetailProgressSendAndReceive(t *testing.T) {
 	checkSnaps("send", sendSnaps)
 	checkSnaps("recv", recvSnaps)
 }
+
+type throttledConn struct {
+	net.Conn
+	bytesPerSec int64
+}
+
+func (c *throttledConn) Read(p []byte) (int, error) {
+	if len(p) > 32*1024 {
+		p = p[:32*1024]
+	}
+	n, err := c.Conn.Read(p)
+	if n > 0 && c.bytesPerSec > 0 {
+		wait := time.Duration(float64(n) / float64(c.bytesPerSec) * float64(time.Second))
+		time.Sleep(wait)
+	}
+	return n, err
+}
+
+func TestSlowPathWatchdogTriggersAndLeavesResumablePart(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "big.bin")
+	const totalSize = 3 << 20
+	writePattern(t, src, totalSize)
+	outDir := filepath.Join(dir, "out")
+
+	a, b := net.Pipe()
+	slowB := &throttledConn{Conn: b, bytesPerSec: 120_000} // ~120 KB/s (< 625 KB/s)
+
+	recvCh := make(chan error, 1)
+	sbCh := make(chan *session.Session, 1)
+	go func() {
+		sb, err := session.Accept(slowB, testParams("recv"))
+		if err != nil {
+			recvCh <- err
+			return
+		}
+		sbCh <- sb
+		_, rerr := Receive(sb, outDir, Config{Timeout: 5 * time.Second})
+		recvCh <- rerr
+	}()
+
+	sa, err := session.Dial(a, testParams("send"))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer sa.Close()
+
+	_, sendErr := Send(sa, []string{src}, Config{
+		ChunkSize:        64 << 10,
+		WindowBytes:      256 << 10,
+		Timeout:          5 * time.Second,
+		MinBytesPerSec:   625_000,
+		SlowGrace:        150 * time.Millisecond,
+		SlowWindow:       400 * time.Millisecond,
+		SlowMinRemaining: 1 << 20,
+	})
+	_ = sa.Close()
+	if sb, ok := <-sbCh; ok {
+		_ = sb.Close()
+	}
+	<-recvCh
+
+	if !errors.Is(sendErr, ErrSlowPath) {
+		t.Fatalf("expected ErrSlowPath, got %v", sendErr)
+	}
+	st, err := os.Stat(filepath.Join(outDir, "big.bin.ftpart"))
+	if err != nil || st.Size() == 0 {
+		t.Fatalf("expected non-empty .ftpart for resume, got st=%v err=%v", st, err)
+	}
+}
+
+func TestSlowPathWatchdogSkipsSmallRemaining(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "small.bin")
+	writePattern(t, src, 512<<10) // 512 KiB < SlowMinRemaining (2 MiB)
+	outDir := filepath.Join(dir, "out")
+
+	a, b := net.Pipe()
+	slowB := &throttledConn{Conn: b, bytesPerSec: 250_000}
+
+	type recvRes struct {
+		res *Result
+		err error
+	}
+	recvCh := make(chan recvRes, 1)
+	go func() {
+		sb, err := session.Accept(slowB, testParams("recv"))
+		if err != nil {
+			recvCh <- recvRes{nil, err}
+			return
+		}
+		defer sb.Close()
+		res, rerr := Receive(sb, outDir, Config{Timeout: 10 * time.Second})
+		recvCh <- recvRes{res, rerr}
+	}()
+
+	sa, err := session.Dial(a, testParams("send"))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer sa.Close()
+
+	_, err = Send(sa, []string{src}, Config{
+		ChunkSize:        64 << 10,
+		WindowBytes:      128 << 10,
+		Timeout:          10 * time.Second,
+		MinBytesPerSec:   625_000,
+		SlowGrace:        100 * time.Millisecond,
+		SlowWindow:       250 * time.Millisecond,
+		SlowMinRemaining: 2 << 20,
+	})
+	if err != nil {
+		t.Fatalf("small transfer should not abort on slow path: %v", err)
+	}
+	rr := <-recvCh
+	if rr.err != nil {
+		t.Fatalf("receive: %v", rr.err)
+	}
+}
