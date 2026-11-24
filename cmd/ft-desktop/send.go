@@ -47,7 +47,30 @@ func (d *dropWindow) sendFiles(files []string) error {
 	return nil
 }
 
-// sendViaRelay is the headless path (-send / Explorer "Send to"): it requires
+// sendInteractive sends files from Explorer right-click / SendTo when no IPC
+// daemon is active: pops pickPeer when multiple paired devices exist.
+func sendInteractive(a *app, files []string) (client.Result, client.Peer, bool, error) {
+	peers, err := client.Peers(a.pairedPath)
+	if err != nil {
+		return client.Result{}, client.Peer{}, false, fmt.Errorf("读取配对表失败: %w", err)
+	}
+	switch len(peers) {
+	case 0:
+		return client.Result{}, client.Peer{}, false, fmt.Errorf("没有已配对设备：先在两端完成配对（ferry pair --show / --add，或 6 位码）")
+	case 1:
+		res, err := sendToPeer(a, files, peers[0])
+		return res, peers[0], false, err
+	default:
+		peer, ok := pickPeer(peers)
+		if !ok {
+			return client.Result{}, client.Peer{}, true, nil
+		}
+		res, err := sendToPeer(a, files, peer)
+		return res, peer, false, err
+	}
+}
+
+// sendViaRelay is the headless path (-send): it requires
 // exactly one paired device, because there is no window to ask in.
 func sendViaRelay(a *app, files []string) (client.Result, client.Peer, error) {
 	peers, err := client.Peers(a.pairedPath)
@@ -56,14 +79,14 @@ func sendViaRelay(a *app, files []string) (client.Result, client.Peer, error) {
 	}
 	switch len(peers) {
 	case 0:
-		return client.Result{}, client.Peer{}, fmt.Errorf("没有已配对设备：先在两端完成配对（ft pair --show / --add，或 6 位码）")
+		return client.Result{}, client.Peer{}, fmt.Errorf("没有已配对设备：先在两端完成配对（ferry pair --show / --add，或 6 位码）")
 	case 1:
 	default:
 		names := make([]string, 0, len(peers))
 		for _, p := range peers {
 			names = append(names, p.Name+"("+truncID(p.ID)+")")
 		}
-		return client.Result{}, client.Peer{}, fmt.Errorf("已配对 %d 台设备（%s），请从托盘投放小窗发送以选择接收方", len(peers), strings.Join(names, "、"))
+		return client.Result{}, client.Peer{}, fmt.Errorf("已配对 %d 台设备（%s），请通过正在运行的轻渡发送以选择接收方", len(peers), strings.Join(names, "、"))
 	}
 	res, err := sendToPeer(a, files, peers[0])
 	return res, peers[0], err
@@ -225,8 +248,12 @@ func pickPeer(peers []client.Peer) (client.Peer, bool) {
 	hwnd := uintptr(0)
 	if dropHandle != nil {
 		hwnd = uintptr(dropHandle.hwnd)
+	} else if trayHandle != nil && trayHandle.hwnd != 0 {
+		hwnd = uintptr(trayHandle.hwnd)
 	}
-	procSetForegroundWindow.Call(hwnd)
+	if hwnd != 0 {
+		procSetForegroundWindow.Call(hwnd)
+	}
 	cmd, _, _ := procTrackPopupMenu.Call(menu, tpmRightButton|tpmLeftAlign|tpmReturnCmd,
 		uintptr(pt.x), uintptr(pt.y), 0, hwnd, 0)
 	procPostMessageW.Call(hwnd, 0, 0, 0)

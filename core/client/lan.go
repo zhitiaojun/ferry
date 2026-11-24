@@ -3,15 +3,38 @@ package client
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"time"
 
+	"github.com/cwlindean/filetransfer/core/discovery"
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/pairing"
 	"github.com/cwlindean/filetransfer/core/session"
 	"github.com/cwlindean/filetransfer/core/transfer"
 )
+
+// ErrLANHijacked reports that an outbound LAN socket left through a TUN fake-ip
+// adapter instead of a physical NIC, meaning a VPN client intercepted the route.
+var ErrLANHijacked = errors.New("LAN path went through a VPN tunnel")
+
+// CheckLANPath verifies nc is not routed out through a TUN fake-ip interface
+// toward a non-fake-ip peer, failing fast instead of stalling for HandshakeTimeout.
+func CheckLANPath(nc net.Conn) error {
+	if nc == nil {
+		return nil
+	}
+	lAddr, lok := nc.LocalAddr().(*net.TCPAddr)
+	rAddr, rok := nc.RemoteAddr().(*net.TCPAddr)
+	if !lok || !rok {
+		return nil
+	}
+	if discovery.IsTunnelFakeIP(lAddr.IP) && !discovery.IsTunnelFakeIP(rAddr.IP) {
+		return fmt.Errorf("%w (%s -> %s)", ErrLANHijacked, lAddr.IP, rAddr.IP)
+	}
+	return nil
+}
 
 // SendLAN sends files directly over TCP to a LAN-discovered peer without
 // touching the signaling server.
@@ -41,13 +64,24 @@ func SendLAN(ctx context.Context, o Options, addr string, files []string) (Resul
 		BytesTotal: total,
 	})
 
-	key, err := identity.LoadOrCreateKey(o.KeyPath)
-	if err != nil {
-		return Result{}, fmt.Errorf("device key %s: %w", o.KeyPath, err)
+	key := o.Key
+	if key == nil {
+		key, err = identity.LoadOrCreateKey(o.KeyPath)
+		if err != nil {
+			return Result{}, fmt.Errorf("device key %s: %w", o.KeyPath, err)
+		}
 	}
-	nc, err := (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "tcp", addr)
+	dialTimeout := o.DialTimeout
+	if dialTimeout <= 0 {
+		dialTimeout = 3 * time.Second
+	}
+	nc, err := (&net.Dialer{Timeout: dialTimeout}).DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return Result{}, fmt.Errorf("lan dial %s: %w", addr, err)
+	}
+	if err := CheckLANPath(nc); err != nil {
+		_ = nc.Close()
+		return Result{}, err
 	}
 	s, err := session.Dial(nc, sessionParams(key, pairing.SanitizeName(o.Name)))
 	if err != nil {

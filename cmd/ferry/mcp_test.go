@@ -21,7 +21,7 @@ func TestServeMCPInitializeListWhoamiPairAndPeers(t *testing.T) {
 		KeyPath:    filepath.Join(dir, "device.key"),
 		PairedPath: filepath.Join(dir, "paired.json"),
 		OutDir:     filepath.Join(dir, "out"),
-		SignalURL:  "wss://ft.cwlindean.cn/signal",
+		SignalURL:  mcpDefaultSignal,
 		Name:       "test-agent-pc",
 	}
 
@@ -37,9 +37,9 @@ func TestServeMCPInitializeListWhoamiPairAndPeers(t *testing.T) {
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}`,
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
 		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`,
-		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"ft_whoami","arguments":{}}}`,
-		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"ft_pair_add","arguments":{"uri":"` + peerURI + `"}}}`,
-		`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"ft_list_peers","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"ferry_whoami","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"ferry_pair_add","arguments":{"uri":"` + peerURI + `"}}}`,
+		`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"ferry_list_peers","arguments":{}}}`,
 	}
 	var out bytes.Buffer
 	if err := serveMCP(strings.NewReader(strings.Join(reqs, "\n")+"\n"), &out, cfg); err != nil {
@@ -77,6 +77,11 @@ func TestServeMCPInitializeListWhoamiPairAndPeers(t *testing.T) {
 	if len(listResp.Result.Tools) != 6 {
 		t.Fatalf("want 6 tools, got %d", len(listResp.Result.Tools))
 	}
+	for _, tl := range listResp.Result.Tools {
+		if !strings.HasPrefix(tl.Name, "ferry_") {
+			t.Fatalf("unexpected non-ferry tool name: %q", tl.Name)
+		}
+	}
 
 	var peersResp struct {
 		Result struct {
@@ -90,7 +95,7 @@ func TestServeMCPInitializeListWhoamiPairAndPeers(t *testing.T) {
 		t.Fatal(err)
 	}
 	if peersResp.Result.IsError || len(peersResp.Result.Content) == 0 || !strings.Contains(peersResp.Result.Content[0].Text, "Pixel-9") {
-		t.Fatalf("unexpected ft_list_peers response: %s", lines[4])
+		t.Fatalf("unexpected ferry_list_peers response: %s", lines[4])
 	}
 }
 
@@ -124,7 +129,7 @@ func TestServeMCPSendTextEndToEnd(t *testing.T) {
 		SignalURL:  mcpDefaultSignal,
 		Name:       "send-pc",
 	}
-	req := `{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"ft_send_text","arguments":{"peer":"` + addr + `","text":"hello agent mcp","filename":"agent-note.txt"}}}` + "\n"
+	req := `{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"ferry_send_text","arguments":{"peer":"` + addr + `","text":"hello agent mcp","filename":"agent-note.txt"}}}` + "\n"
 	var out bytes.Buffer
 	if err := serveMCP(strings.NewReader(req), &out, cfg); err != nil {
 		t.Fatalf("serveMCP: %v", err)

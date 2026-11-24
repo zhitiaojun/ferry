@@ -18,12 +18,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cwlindean/filetransfer/core/client"
 	"github.com/cwlindean/filetransfer/core/discovery"
 	"github.com/cwlindean/filetransfer/core/identity"
+	"github.com/cwlindean/filetransfer/core/ipc"
+	"github.com/cwlindean/filetransfer/core/pairing"
 	"github.com/cwlindean/filetransfer/core/proto"
+	"github.com/cwlindean/filetransfer/core/signaling"
 )
 
-const mcpDefaultSignal = "wss://ferry.cwlindean.cn/signal"
+const mcpDefaultSignal = client.DefaultSignalURL
 
 type mcpConfig struct {
 	KeyPath    string
@@ -34,19 +38,23 @@ type mcpConfig struct {
 	STUN       []string
 }
 
+func (c mcpConfig) canUseIPC() bool {
+	return c.KeyPath == client.DefaultKeyPath() &&
+		c.PairedPath == client.DefaultPairedPath() &&
+		c.SignalURL == client.DefaultSignalURL
+}
+
 // runMCP starts a newline-delimited JSON-RPC 2.0 MCP server on stdin/stdout so
-// AI agents (Antigravity, Claude Code, Cursor, etc.) can list peers, pair,
-// send files/text, and receive files cleanly.
+// AI agents can list peers, pair, send files/text, and receive files cleanly.
 func runMCP(args []string) int {
-	defKey, defPaired := mcpDefaultPaths()
 	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	keyPath := fs.String("key", defKey, "device key file")
-	pairedPath := fs.String("paired", defPaired, "trusted peer table")
+	keyPath := fs.String("key", client.DefaultKeyPath(), "device key file")
+	pairedPath := fs.String("paired", client.DefaultPairedPath(), "trusted peer table")
 	outDir := fs.String("out", mcpDefaultOutDir(), "default directory for received files")
 	signalURL := fs.String("signal", mcpDefaultSignal, "signaling server WebSocket URL")
 	name := fs.String("name", defaultName(), "device name shown to peers")
-	stun := fs.String("stun", defaultSTUN, "comma-separated STUN servers for --punch")
+	stun := fs.String("stun", defaultSTUN, "comma-separated STUN servers")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -59,23 +67,10 @@ func runMCP(args []string) int {
 		STUN:       splitCSV(*stun),
 	}
 	if err := serveMCP(os.Stdin, os.Stdout, cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "ft mcp: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ferry mcp: %v\n", err)
 		return 1
 	}
 	return 0
-}
-
-// mcpDefaultPaths shares %LOCALAPPDATA%\ft identity/pairings with ft-desktop
-// on Windows when present, falling back to ~/.ft otherwise.
-func mcpDefaultPaths() (string, string) {
-	if lad := os.Getenv("LOCALAPPDATA"); lad != "" {
-		dir := filepath.Join(lad, "ft")
-		deskKey := filepath.Join(dir, "device.key")
-		if _, err := os.Stat(deskKey); err == nil {
-			return deskKey, filepath.Join(dir, "paired.json")
-		}
-	}
-	return defaultKeyPath(), defaultPairedPath()
 }
 
 func mcpDefaultOutDir() string {
@@ -129,13 +124,13 @@ func marshalClean(v any) ([]byte, error) {
 	if err := enc.Encode(v); err != nil {
 		return nil, err
 	}
-	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
+	return bytes.TrimRight(buf.Bytes(), "\r\n"), nil
 }
 
-func serveMCP(in io.Reader, out io.Writer, cfg mcpConfig) error {
-	sc := bufio.NewScanner(in)
-	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	w := &mcpWriter{w: out}
+func serveMCP(r io.Reader, w io.Writer, cfg mcpConfig) error {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64*1024), 8*1024*1024)
+	mw := &mcpWriter{w: w}
 	ctx := context.Background()
 
 	for sc.Scan() {
@@ -145,14 +140,14 @@ func serveMCP(in io.Reader, out io.Writer, cfg mcpConfig) error {
 		}
 		var req jsonRPCRequest
 		if err := json.Unmarshal(line, &req); err != nil {
-			_ = w.send(jsonRPCResponse{
+			_ = mw.send(jsonRPCResponse{
 				JSONRPC: "2.0",
 				ID:      json.RawMessage("null"),
 				Error:   &jsonRPCError{Code: -32700, Message: "parse error: " + err.Error()},
 			})
 			continue
 		}
-		if err := handleMCPMessage(ctx, w, cfg, req); err != nil {
+		if err := handleMCPMessage(ctx, mw, cfg, req); err != nil {
 			return err
 		}
 	}
@@ -245,7 +240,7 @@ type mcpToolSpec struct {
 func mcpToolDefs() []mcpToolSpec {
 	return []mcpToolSpec{
 		{
-			Name:        "ft_whoami",
+			Name:        "ferry_whoami",
 			Description: "Return this device's ID, name, fresh pairing URI, signaling URL, and local key/paired/output paths.",
 			InputSchema: map[string]any{
 				"type":                 "object",
@@ -254,7 +249,7 @@ func mcpToolDefs() []mcpToolSpec {
 			},
 		},
 		{
-			Name:        "ft_list_peers",
+			Name:        "ferry_list_peers",
 			Description: "List trusted paired devices and optionally scan for active LAN receivers.",
 			InputSchema: map[string]any{
 				"type": "object",
@@ -265,7 +260,7 @@ func mcpToolDefs() []mcpToolSpec {
 			},
 		},
 		{
-			Name:        "ft_send_files",
+			Name:        "ferry_send_files",
 			Description: "Send local files to a peer identified by paired name, 64-hex device ID, or LAN IP:port.",
 			InputSchema: map[string]any{
 				"type":     "object",
@@ -273,12 +268,12 @@ func mcpToolDefs() []mcpToolSpec {
 				"properties": map[string]any{
 					"peer":  map[string]any{"type": "string", "description": "Paired device name, 64-hex device ID, or LAN host:port"},
 					"files": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Absolute or relative file paths to send"},
-					"mode":  map[string]any{"type": "string", "enum": []string{"auto", "lan", "relay", "punch"}, "description": "Transport mode (default auto)"},
+					"mode":  map[string]any{"type": "string", "enum": []string{"auto", "lan", "punch", "relay"}, "description": "Transport mode (default auto)"},
 				},
 			},
 		},
 		{
-			Name:        "ft_send_text",
+			Name:        "ferry_send_text",
 			Description: "Send a UTF-8 text note as a temporary .txt file to a peer.",
 			InputSchema: map[string]any{
 				"type":     "object",
@@ -287,31 +282,31 @@ func mcpToolDefs() []mcpToolSpec {
 					"peer":     map[string]any{"type": "string", "description": "Paired device name, 64-hex device ID, or LAN host:port"},
 					"text":     map[string]any{"type": "string", "description": "UTF-8 text content to send"},
 					"filename": map[string]any{"type": "string", "description": "Optional target filename (default note-HHmmss.txt)"},
-					"mode":     map[string]any{"type": "string", "enum": []string{"auto", "lan", "relay", "punch"}, "description": "Transport mode (default auto)"},
+					"mode":     map[string]any{"type": "string", "enum": []string{"auto", "lan", "punch", "relay"}, "description": "Transport mode (default auto)"},
 				},
 			},
 		},
 		{
-			Name:        "ft_receive_once",
-			Description: "Wait for a single incoming transfer (via relay, race, punch, or lan) and save files to out_dir.",
+			Name:        "ferry_receive_once",
+			Description: "Wait for a single incoming transfer (auto punch+relay by default, or punch/relay/lan) and save files to out_dir.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"out_dir":     map[string]any{"type": "string", "description": "Destination directory (defaults to configured out_dir)"},
-					"mode":        map[string]any{"type": "string", "enum": []string{"relay", "race", "punch", "lan"}, "description": "Receive mode (default relay)"},
+					"mode":        map[string]any{"type": "string", "enum": []string{"auto", "race", "punch", "relay", "lan"}, "description": "Receive mode (default auto)"},
 					"timeout_sec": map[string]any{"type": "integer", "description": "Max wait seconds (1-300, default 60)"},
 					"listen":      map[string]any{"type": "string", "description": "Bind address host:port for mode=lan (default 0.0.0.0:0)"},
 				},
 			},
 		},
 		{
-			Name:        "ft_pair_add",
-			Description: "Trust and save a peer device from its ftpair:// URI.",
+			Name:        "ferry_pair_add",
+			Description: "Trust and pair a peer device from a ferry:// PAKE QR URI or legacy ftpair:// URI.",
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"uri"},
 				"properties": map[string]any{
-					"uri": map[string]any{"type": "string", "description": "Peer pairing URI starting with ftpair://"},
+					"uri": map[string]any{"type": "string", "description": "Peer pairing URI (ferry:// or ftpair://)"},
 				},
 			},
 		},
@@ -327,18 +322,18 @@ func invokeMCPTool(ctx context.Context, cfg mcpConfig, name string, raw json.Raw
 		err error
 	)
 	switch name {
-	case "ft_whoami":
+	case "ferry_whoami":
 		res, err = mcpWhoami(cfg)
-	case "ft_list_peers":
+	case "ferry_list_peers":
 		res, err = mcpListPeers(ctx, cfg, raw)
-	case "ft_send_files":
+	case "ferry_send_files":
 		res, err = mcpSendFilesTool(ctx, cfg, raw)
-	case "ft_send_text":
+	case "ferry_send_text":
 		res, err = mcpSendTextTool(ctx, cfg, raw)
-	case "ft_receive_once":
+	case "ferry_receive_once":
 		res, err = mcpReceiveOnce(ctx, cfg, raw)
-	case "ft_pair_add":
-		res, err = mcpPairAdd(cfg, raw)
+	case "ferry_pair_add":
+		res, err = mcpPairAdd(ctx, cfg, raw)
 	default:
 		err = fmt.Errorf("unknown tool: %s", name)
 	}
@@ -387,6 +382,18 @@ func mcpListPeers(ctx context.Context, cfg mcpConfig, raw json.RawMessage) (any,
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
+	if !args.DiscoverLAN && cfg.canUseIPC() {
+		if cl, derr := ipc.TryConnect(client.DefaultStateDir()); derr == nil {
+			if pr, perr := cl.Peers(ctx); perr == nil {
+				return map[string]any{
+					"paired":     pr.Paired,
+					"lan":        pr.LAN,
+					"daemon_ipc": true,
+				}, nil
+			}
+		}
+	}
+
 	store, err := identity.LoadPaired(cfg.PairedPath)
 	if err != nil {
 		return nil, err
@@ -461,7 +468,7 @@ func mcpSendTextTool(ctx context.Context, cfg mcpConfig, raw json.RawMessage) (a
 			return nil, fmt.Errorf("invalid filename")
 		}
 	}
-	tmpDir, err := os.MkdirTemp("", "ft-mcp-text-*")
+	tmpDir, err := os.MkdirTemp("", "ferry-mcp-text-*")
 	if err != nil {
 		return nil, err
 	}
@@ -478,13 +485,27 @@ func mcpSendFiles(ctx context.Context, cfg mcpConfig, peer string, files []strin
 	if len(files) == 0 {
 		return summary{}, fmt.Errorf("files must not be empty")
 	}
-	target, kind, err := resolveMCPTarget(cfg.PairedPath, peer)
-	if err != nil {
-		return summary{}, err
-	}
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	if mode == "" {
 		mode = "auto"
+	}
+
+	if cfg.canUseIPC() {
+		if cl, derr := ipc.TryConnect(client.DefaultStateDir()); derr == nil {
+			sres, serr := cl.Send(ctx, ipc.SendRequest{Peer: peer, Files: files, Mode: mode})
+			if serr != nil {
+				return summary{}, serr
+			}
+			return summary{
+				OK: true, Path: sres.Path, Peer: sres.Peer, TransferID: sres.TransferID,
+				Files: sres.Files, Bytes: sres.Bytes, Chunks: sres.Chunks, DurationMS: sres.DurationMS,
+			}, nil
+		}
+	}
+
+	target, kind, err := resolveMCPTarget(cfg.PairedPath, peer)
+	if err != nil {
+		return summary{}, err
 	}
 	timeout := 30 * time.Second
 	chunk := int(proto.DefaultChunkSize)
@@ -496,29 +517,40 @@ func mcpSendFiles(ctx context.Context, cfg mcpConfig, peer string, files []strin
 		return sendLANTarget(target, "lan", files, chunk, timeout, 30*time.Second, nil)
 	}
 
-	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	po := punchOptions{
-		SignalURL: cfg.SignalURL, KeyPath: cfg.KeyPath, PairedPath: cfg.PairedPath,
-		Name: cfg.Name, ToID: target, Files: files, Chunk: chunk,
-		Timeout: timeout, STUN: cfg.STUN,
+	opts := client.Options{
+		SignalURL:   cfg.SignalURL,
+		KeyPath:     cfg.KeyPath,
+		PairedPath:  cfg.PairedPath,
+		Name:        cfg.Name,
+		STUNServers: cfg.STUN,
+		Chunk:       chunk,
+		Timeout:     timeout,
 	}
-	ro := relayOptions{
-		SignalURL: cfg.SignalURL, KeyPath: cfg.KeyPath, PairedPath: cfg.PairedPath,
-		Name: cfg.Name, ToID: target, Files: files, Chunk: chunk, Timeout: timeout,
-	}
+
+	var res client.Result
 	switch mode {
-	case "auto":
-		return sendViaRace(cctx, po, ro)
+	case "auto", "punch":
+		res, err = client.SendAuto(cctx, opts, target, files)
 	case "relay":
-		return sendViaRelay(cctx, ro)
-	case "punch":
-		return sendViaPunch(cctx, po)
+		res, err = client.SendFiles(cctx, opts, target, files)
 	case "lan":
 		return summary{}, fmt.Errorf("mode=lan requires a host:port LAN address")
 	default:
 		return summary{}, fmt.Errorf("unknown mode %q (want auto, lan, relay, or punch)", mode)
 	}
+	if err != nil {
+		return summary{}, err
+	}
+	peerOut := res.PeerName
+	if peerOut == "" {
+		peerOut = truncHex(target)
+	}
+	return summary{
+		OK: true, Path: channelPathName(res.Channel), Peer: peerOut, TransferID: res.TransferID,
+		Files: res.Files, Bytes: res.Bytes, Chunks: res.Chunks, DurationMS: res.Duration.Milliseconds(),
+	}, nil
 }
 
 func resolveMCPTarget(pairedPath, rawPeer string) (target, kind string, err error) {
@@ -590,7 +622,7 @@ func mcpReceiveOnce(ctx context.Context, cfg mcpConfig, raw json.RawMessage) (an
 	wait := time.Duration(sec) * time.Second
 	mode := strings.ToLower(strings.TrimSpace(args.Mode))
 	if mode == "" {
-		mode = "relay"
+		mode = "auto"
 	}
 
 	cctx, cancel := context.WithTimeout(ctx, wait)
@@ -603,27 +635,27 @@ func mcpReceiveOnce(ctx context.Context, cfg mcpConfig, raw json.RawMessage) (an
 		err error
 	)
 	switch mode {
-	case "relay":
-		sum, err = recvViaRelay(cctx, relayOptions{
-			SignalURL: cfg.SignalURL, KeyPath: cfg.KeyPath, PairedPath: cfg.PairedPath,
-			Name: cfg.Name, OutDir: outDir, Chunk: chunk, Timeout: timeout,
+	case "auto", "race", "punch", "relay":
+		res, rerr := client.ReceiveOneAuto(cctx, client.ReceiveOptions{
+			KeyPath:      cfg.KeyPath,
+			SignalURL:    cfg.SignalURL,
+			OutDir:       outDir,
+			PairedPath:   cfg.PairedPath,
+			Name:         cfg.Name,
+			STUNServers:  cfg.STUN,
+			Chunk:        chunk,
+			Timeout:      timeout,
+			DisablePunch: mode == "relay",
 		})
-	case "punch":
-		sum, err = recvViaPunch(cctx, punchOptions{
-			SignalURL: cfg.SignalURL, KeyPath: cfg.KeyPath, PairedPath: cfg.PairedPath,
-			Name: cfg.Name, OutDir: outDir, Chunk: chunk, Timeout: timeout, STUN: cfg.STUN,
-		})
-	case "race", "auto":
-		sum, err = recvViaRace(cctx,
-			punchOptions{
-				SignalURL: cfg.SignalURL, KeyPath: cfg.KeyPath, PairedPath: cfg.PairedPath,
-				Name: cfg.Name, OutDir: outDir, Chunk: chunk, Timeout: timeout, STUN: cfg.STUN,
-			},
-			relayOptions{
-				SignalURL: cfg.SignalURL, KeyPath: cfg.KeyPath, PairedPath: cfg.PairedPath,
-				Name: cfg.Name, OutDir: outDir, Chunk: chunk, Timeout: timeout,
-			},
-		)
+		if rerr != nil {
+			err = rerr
+		} else {
+			sum = summary{
+				OK: true, Path: channelPathName(res.Channel), Peer: res.PeerName,
+				TransferID: res.TransferID, Files: res.Files, Bytes: res.Bytes,
+				Chunks: res.Chunks, DurationMS: res.Duration.Milliseconds(),
+			}
+		}
 	case "lan":
 		listen := strings.TrimSpace(args.Listen)
 		if listen == "" {
@@ -631,7 +663,7 @@ func mcpReceiveOnce(ctx context.Context, cfg mcpConfig, raw json.RawMessage) (an
 		}
 		sum, err = recvLAN(cctx, listen, listen != "127.0.0.1:0", outDir, cfg.Name, chunk, timeout, wait, nil, nil)
 	default:
-		return nil, fmt.Errorf("unknown mode %q (want relay, race, punch, or lan)", mode)
+		return nil, fmt.Errorf("unknown mode %q (want auto, race, punch, relay, or lan)", mode)
 	}
 	if err != nil {
 		return nil, err
@@ -648,26 +680,62 @@ func mcpReceiveOnce(ctx context.Context, cfg mcpConfig, raw json.RawMessage) (an
 		"peer":        sum.Peer,
 		"transfer_id": sum.TransferID,
 		"files":       sum.Files,
-		"file_paths":  savedPaths,
-		"saved_dir":   absOut,
+		"saved_paths": savedPaths,
 		"bytes":       sum.Bytes,
 		"chunks":      sum.Chunks,
 		"duration_ms": sum.DurationMS,
 	}, nil
 }
 
-func mcpPairAdd(cfg mcpConfig, raw json.RawMessage) (any, error) {
+func mcpPairAdd(ctx context.Context, cfg mcpConfig, raw json.RawMessage) (any, error) {
 	var args struct {
 		URI string `json:"uri"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
-	peer, secret, err := identity.ParsePairURI(strings.TrimSpace(args.URI))
+	uri := strings.TrimSpace(args.URI)
+	if uri == "" {
+		return nil, fmt.Errorf("uri cannot be empty")
+	}
+
+	store, err := identity.LoadPaired(cfg.PairedPath)
 	if err != nil {
 		return nil, err
 	}
-	store, err := identity.LoadPaired(cfg.PairedPath)
+
+	if strings.HasPrefix(uri, "ferry://") {
+		payload, perr := pairing.ParsePairURI(uri, time.Now().UTC())
+		if perr != nil {
+			return nil, perr
+		}
+		key, kerr := loadDeviceKey(cfg.KeyPath)
+		if kerr != nil {
+			return nil, kerr
+		}
+		pctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+		defer cancel()
+		cl, derr := signaling.Dial(pctx, cfg.SignalURL, key, nil)
+		if derr != nil {
+			return nil, derr
+		}
+		defer cl.Close()
+		peer, rerr := pairing.RunWithName(pctx, cl, key, store, pairing.Initiate, payload.Code, payload.DeviceID, cfg.Name, 45*time.Second)
+		if rerr != nil {
+			return nil, rerr
+		}
+		if serr := store.Save(); serr != nil {
+			return nil, serr
+		}
+		return map[string]any{
+			"ok":        true,
+			"device_id": peer.ID,
+			"name":      peer.Name,
+			"paired":    len(store.List()),
+		}, nil
+	}
+
+	peer, secret, err := identity.ParsePairURI(uri)
 	if err != nil {
 		return nil, err
 	}
@@ -675,7 +743,7 @@ func mcpPairAdd(cfg mcpConfig, raw json.RawMessage) (any, error) {
 		return nil, err
 	}
 	if err := store.Save(); err != nil {
-		return nil, fmt.Errorf("save paired table: %w", err)
+		return nil, err
 	}
 	return map[string]any{
 		"ok":         true,

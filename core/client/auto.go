@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/cwlindean/filetransfer/core/discovery"
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/logging"
 	"github.com/cwlindean/filetransfer/core/pairing"
@@ -62,17 +64,46 @@ func DefaultSTUNList() []string {
 // ReceiveOptions configures an auto-path inbound transfer (UDP punch or relay).
 type ReceiveOptions struct {
 	Key                *identity.Key
+	KeyPath            string
 	SignalURL          string
 	OutDir             string
 	PairedPath         string
 	Name               string
-	STUNServers        []string // nil uses DefaultSTUNList; empty non-nil skips STUN
+	STUNServers        []string        // nil uses DefaultSTUNList; empty non-nil skips STUN
+	LANHint            *discovery.Hint // optional interface hint (Android avoids netlink)
+	SkipLANEnum        bool            // true skips discovery.Eligible() when LANHint is nil
+	Chunk              int
 	Timeout            time.Duration
 	HotUpgradeMinBytes int64 // 0 defaults to HotUpgradeMinBytes (4 MiB)
 	DisableHotUpgrade  bool
+	DisablePunch       bool
 	NoTLS              bool
 	Log                *logging.Logger
 	OnStatus           func(Status)
+}
+
+func gatherCandidates(ctx context.Context, stun []string, hint *discovery.Hint, skipLANEnum bool, log *logging.Logger) (*punch.Gathered, error) {
+	var g *punch.Gathered
+	var err error
+	switch {
+	case hint != nil:
+		g, err = punch.GatherHint(ctx, stun, 2*time.Second, hint, log)
+	case skipLANEnum:
+		g, err = punch.GatherSTUNOnly(ctx, stun, 2*time.Second, log)
+	default:
+		g, err = punch.Gather(ctx, stun, 2*time.Second, log)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if os.Getenv("FT_PUNCH_LOOPBACK") == "1" && g.Conn != nil {
+		if ap, ok := g.Conn.LocalAddr().(*net.UDPAddr); ok {
+			g.Candidates = append(g.Candidates, punch.Candidate{
+				Kind: "lan", Addr: net.JoinHostPort("127.0.0.1", fmt.Sprint(ap.Port)), Priority: 100,
+			})
+		}
+	}
+	return g, nil
 }
 
 // SendAuto prefers UDP hole punching (with a PunchHeadStart over relay when
@@ -100,22 +131,31 @@ func SendAuto(ctx context.Context, o Options, toID string, files []string) (Resu
 		BytesTotal: total,
 	})
 
-	key, err := identity.LoadOrCreateKey(o.KeyPath)
-	if err != nil {
-		return Result{}, fmt.Errorf("device key %s: %w", o.KeyPath, err)
+	key := o.Key
+	if key == nil {
+		key, err = identity.LoadOrCreateKey(o.KeyPath)
+		if err != nil {
+			return Result{}, fmt.Errorf("device key %s: %w", o.KeyPath, err)
+		}
 	}
 	peerPub, err := pairedPeer(o.PairedPath, toID)
 	if err != nil {
 		return Result{}, err
 	}
 
-	stun := o.STUNServers
-	if stun == nil {
-		stun = DefaultSTUNList()
-	}
-	g, gerr := punch.Gather(ctx, stun, 2*time.Second, o.Log)
-	if gerr == nil {
-		defer g.Close()
+	var g *punch.Gathered
+	var gerr error
+	if !o.DisablePunch {
+		stun := o.STUNServers
+		if stun == nil {
+			stun = DefaultSTUNList()
+		}
+		g, gerr = gatherCandidates(ctx, stun, o.LANHint, o.SkipLANEnum, o.Log)
+		if gerr == nil {
+			defer g.Close()
+		}
+	} else {
+		gerr = errors.New("punch disabled")
 	}
 
 	cl := o.SignalClient
@@ -258,7 +298,7 @@ func SendAuto(ctx context.Context, o Options, toID string, files []string) (Resu
 	var sess *session.Session
 	var winner string
 
-	if g != nil && len(peerAddrs) > 0 && !testDisableFastPunch {
+	if g != nil && len(peerAddrs) > 0 && !o.DisablePunch && !testDisableFastPunch && os.Getenv("FT_PUNCH_BLOCK") != "1" {
 		tlsCfg, derr := identity.ClientTLS(key, peerPub)
 		if derr != nil {
 			return Result{}, derr
@@ -548,13 +588,19 @@ func ReceiveAuto(
 		BytesTotal: total,
 	})
 
-	stun := o.STUNServers
-	if stun == nil {
-		stun = DefaultSTUNList()
-	}
-	g, gerr := punch.Gather(ctx, stun, 2*time.Second, o.Log)
-	if gerr == nil {
-		defer g.Close()
+	var g *punch.Gathered
+	var gerr error
+	if !o.DisablePunch {
+		stun := o.STUNServers
+		if stun == nil {
+			stun = DefaultSTUNList()
+		}
+		g, gerr = gatherCandidates(ctx, stun, o.LANHint, o.SkipLANEnum, o.Log)
+		if gerr == nil {
+			defer g.Close()
+		}
+	} else {
+		gerr = errors.New("punch disabled")
 	}
 
 	if err := cl.Send(ctx, signaling.TypeSendResp, signaling.SendResponse{
@@ -599,7 +645,7 @@ func ReceiveAuto(
 		return append([]signaling.Candidate(nil), savedPeerCands...)
 	}
 
-	if gerr == nil && g != nil && !testDisableFastPunch {
+	if gerr == nil && g != nil && !o.DisablePunch && !testDisableFastPunch && os.Getenv("FT_PUNCH_BLOCK") != "1" {
 		serverCfg, err := identity.ServerTLS(o.Key, peerPub)
 		if err != nil {
 			return Result{}, err
@@ -781,6 +827,7 @@ func ReceiveAuto(
 
 	start := time.Now()
 	tcfg := transfer.Config{
+		ChunkSize:  uint32(o.Chunk),
 		Timeout:    o.Timeout,
 		Log:        o.Log,
 		TransferID: hex16(req.TransferID),
@@ -987,4 +1034,77 @@ func parseDeviceID(hexID string) [32]byte {
 		copy(id[:], b)
 	}
 	return id
+}
+
+// ReceiveOneAuto dials signaling, waits for one authorized SendRequest, and
+// receives the transfer using ReceiveAuto (UDP punch + relay race + hot upgrade).
+func ReceiveOneAuto(ctx context.Context, o ReceiveOptions) (Result, error) {
+	key := o.Key
+	if key == nil {
+		var err error
+		key, err = identity.LoadOrCreateKey(o.KeyPath)
+		if err != nil {
+			return Result{}, fmt.Errorf("device key %s: %w", o.KeyPath, err)
+		}
+		o.Key = key
+	}
+	sigURL := o.SignalURL
+	if sigURL == "" {
+		sigURL = DefaultSignalURL
+		o.SignalURL = sigURL
+	}
+	cl, err := signaling.Dial(ctx, sigURL, key, o.Log)
+	if err != nil {
+		return Result{}, err
+	}
+	defer cl.Close()
+
+	reqCh := make(chan *signaling.Envelope, 4)
+	candCh := make(chan *signaling.Envelope, 8)
+	readyCh := make(chan signaling.RelayReady, 2)
+	cl.On(signaling.TypeSendRequest, func(e *signaling.Envelope) {
+		select {
+		case reqCh <- e:
+		default:
+		}
+	})
+	cl.On(signaling.TypeCandidates, func(e *signaling.Envelope) {
+		select {
+		case candCh <- e:
+		default:
+		}
+	})
+	cl.On(signaling.TypeRelayReady, func(e *signaling.Envelope) {
+		if rr, rerr := signaling.Decode[signaling.RelayReady](e); rerr == nil {
+			select {
+			case readyCh <- rr:
+			default:
+			}
+		}
+	})
+	if o.Log != nil {
+		o.Log.Event("auto.ready", map[string]any{"device_id": truncHex(key.IDHex())})
+	}
+
+	var req signaling.SendRequest
+	for {
+		select {
+		case <-ctx.Done():
+			return Result{}, ctx.Err()
+		case <-cl.Done():
+			return Result{}, fmt.Errorf("signaling dropped: %v", cl.Err())
+		case e := <-reqCh:
+			r, derr := signaling.Decode[signaling.SendRequest](e)
+			if derr != nil {
+				return Result{}, derr
+			}
+			req = r
+		}
+		peerPub, perr := pairedPeer(o.PairedPath, req.FromDevice)
+		if perr != nil {
+			_ = cl.Send(ctx, signaling.TypeError, signaling.ErrorBody{Code: "unauthorized", Message: perr.Error()})
+			continue
+		}
+		return ReceiveAuto(ctx, o, cl, req, peerPub, candCh, readyCh)
+	}
 }

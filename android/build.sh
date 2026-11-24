@@ -25,12 +25,14 @@ export ANDROID_HOME=$(m "$SDK") ANDROID_NDK_HOME=$(m "$SDK/ndk/27.2.12479018") J
 export TMP=$(m "$TOOLS/tmp") TEMP=$(m "$TOOLS/tmp")
 export PATH="$TOOLS/go/bin:$TOOLS/gopath/bin:$JDK/bin:$PATH"
 
+VER_NAME=${VER_NAME:-1.0.0}
+
 echo "== go build =="
 (cd "$ROOT" && go build ./...)
 
 echo "== gomobile bind =="
 mkdir -p "$OUT"
-(cd "$ROOT" && CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384" gomobile.exe bind -target=android/arm64 -androidapi 21 -o android/ft.aar ./core/mobile)
+(cd "$ROOT" && CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384" gomobile.exe bind -target=android/arm64 -androidapi 21 -ldflags="-X github.com/cwlindean/filetransfer/core/mobile.Version=${VER_NAME}" -o android/ft.aar ./core/mobile)
 
 echo "== extract AAR =="
 rm -rf "$WORK"
@@ -65,7 +67,7 @@ echo "== aapt2 link =="
 "$BT/aapt2.exe" link -o "$(m "$WORK/base.apk")" \
   --manifest "$(m "$ROOT/android/AndroidManifest.xml")" \
   -I "$(m "$AJAR")" --min-sdk-version 21 --target-sdk-version 34 \
-  --version-code 1000 --version-name 1.0.0 "$(m "$WORK/res.zip")"
+  --version-code 1000 --version-name "$VER_NAME" "$(m "$WORK/res.zip")"
 
 echo "== package =="
 cp "$WORK/dex/classes.dex" "$WORK/classes.dex"

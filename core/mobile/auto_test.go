@@ -337,3 +337,61 @@ func TestSendAutoReusesSignalWithoutDisconnect(t *testing.T) {
 		t.Fatalf("SignalState after SendAuto = %q, want online", st)
 	}
 }
+
+func TestAutoReceiveScreenAwakeAndNetworkPause(t *testing.T) {
+	_ = StopAutoReceive()
+	SetScreenAwake(true)
+	SetNetworkAvailable(true)
+	defer func() {
+		_ = StopAutoReceive()
+		SetScreenAwake(true)
+		SetNetworkAvailable(true)
+	}()
+
+	srv := server.New(nil)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	sigURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/signal"
+
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "mob.key")
+	pairedPath := filepath.Join(dir, "paired.json")
+	outDir := filepath.Join(dir, "out")
+
+	if _, err := StartAutoReceive("test-phone", outDir, sigURL, keyPath, pairedPath, "", ""); err != nil {
+		t.Fatalf("StartAutoReceive: %v", err)
+	}
+
+	waitState := func(wantSignal string, wantAwake, wantNet bool) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			var raw struct {
+				SignalState      string `json:"signal_state"`
+				ScreenAwake      bool   `json:"screen_awake"`
+				NetworkAvailable bool   `json:"network_available"`
+			}
+			if err := json.Unmarshal([]byte(ConnectionStatus()), &raw); err == nil {
+				if raw.SignalState == wantSignal && raw.ScreenAwake == wantAwake && raw.NetworkAvailable == wantNet {
+					return
+				}
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+		t.Fatalf("timed out waiting for signal=%q awake=%v net=%v (got %s)", wantSignal, wantAwake, wantNet, ConnectionStatus())
+	}
+
+	waitState("online", true, true)
+
+	SetScreenAwake(false)
+	waitState("offline", false, true)
+
+	SetScreenAwake(true)
+	waitState("online", true, true)
+
+	SetNetworkAvailable(false)
+	waitState("offline", true, false)
+
+	SetNetworkAvailable(true)
+	waitState("online", true, true)
+}

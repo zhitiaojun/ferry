@@ -40,9 +40,9 @@
 | 端 / 组件 | 入口 / 产物 | 核心能力 |
 |---|---|---|
 | **Windows 桌面端** | `ferry-desktop-windows-amd64.exe` / `ferry-setup-windows-amd64.exe` | 原生 Win32 界面、托盘常驻、DWM Acrylic 接收确认弹窗、顶部磁吸拖拽投放面板、资源管理器右键菜单扩展（`ftmenu.dll`）、开机自启、一键安装/卸载 |
-| **Android 原生端** | `ferry-android-arm64.apk` | 原生 Java + `gomobile` Go 核心（API 21+，16 KB 页对齐），支持文件/文字/剪贴板发送、系统「分享」面板接入、1.5x 默认变焦扫码、前台保活服务与实时目标在线状态 |
+| **Android 原生端** | `ferry-android-arm64.apk` | 原生 Java + `gomobile` Go 核心（API 21+，16 KB 页对齐），支持文件/文字/剪贴板发送、系统「分享」面板接入、1.5x 默认变焦扫码、`TransferService` 常驻后台与锁屏低功耗休眠 |
 | **浏览器临时快传** | `/transfer`、`/app`、`/s/<token>` | 免配对一码双用：客户端生成 Ed25519 签名的 10 分钟临时 HTTPS 链接与 6 位取件码；浏览器支持公网加密中继与「同 Wi-Fi 极速直连」切换 |
-| **跨平台 CLI & MCP** | `ferry` (`cmd/ft`) | Windows / Linux / macOS 命令行收发、目录局域网网页共享 (`ft share`)、标准 stdio JSON-RPC 2.0 **MCP Server** (`ft mcp`) |
+| **跨平台 CLI & MCP** | `ferry` (`cmd/ferry`) | Windows / Linux / macOS 命令行收发、常驻守护进程 (`ferry daemon`)、临时快传 (`ferry share`)、标准 stdio JSON-RPC 2.0 **MCP Server** (`ferry mcp`) |
 | **信令与中继服务端** | `ferry-server-linux-amd64` (`cmd/ft-server`) | 单二进制、全内存状态；集成 WebSocket 信令 (`/signal`)、房间中继 (`/relay`)、匿名快传网页门户与双端口 UDP STUN 服务 |
 
 ---
@@ -63,15 +63,15 @@
 2. **命令行配对**：
    ```bash
    # 查看本机设备 ID 与公钥
-   ft whoami
+   ferry whoami
 
    # 方式 A：通过配对 URI
-   ft pair --show --name "MyPC"
-   ft pair --add "ftpair://..."
+   ferry pair --show --name "MyPC"
+   ferry pair --add "ftpair://..."
 
    # 方式 B：通过一次性 6 位 SPAKE2 配对码（经信令协商，口令不落网）
-   ft pair --code 482910 --wait   --signal wss://your-server.example/signal
-   ft pair --code 482910 --with <对端64位设备ID> --signal wss://your-server.example/signal
+   ferry pair --code 482910 --wait   --signal wss://your-server.example/signal
+   ferry pair --code 482910 --with <对端64位设备ID> --signal wss://your-server.example/signal
    ```
 
 ### 三、命令行常用收发
@@ -79,34 +79,41 @@
 #### 1. 局域网直连传输
 ```bash
 # 接收端（开启全接口监听并发送局域网广播发现）
-ft recv --lan --out ./recv
+ferry recv --lan --out ./recv
 
 # 或指定固定监听地址
-ft recv --listen 0.0.0.0:18800 --out ./recv
+ferry recv --listen 0.0.0.0:18800 --out ./recv
 
 # 发送端（自动发现局域网内接收方）
-ft send --discover --to "MyPC" --file ./photo.png --file ./archive.zip
+ferry send --discover --to "MyPC" --file ./photo.png --file ./archive.zip
 
 # 或直连已知地址（同一局域网、热点或本机环回）
-ft send --addr 192.168.1.23:18800 --file ./archive.zip
+ferry send --addr 192.168.1.23:18800 --file ./archive.zip
 ```
 
-#### 2. 跨网 P2P 打洞 + 中继自动选路
+#### 2. 跨网 P2P 打洞 + 中继自动选路（共享桌面/守护内核）
 ```bash
-# 接收端上线等待传输（支持打洞与中继自动竞速）
-ft recv --punch --signal wss://your-server.example/signal --stun your-server.example:40000,your-server.example:40001 --out ./recv
+# 接收端上线等待传输（支持打洞与中继自动竞速 + 后台生日悖论热升级）
+ferry recv --signal wss://your-server.example/signal --stun your-server.example:40000,your-server.example:40001 --out ./recv
 
-# 发送端按「UDP 打洞优先 → 慢速自动切换/热升级中继」发送
-ft send --punch --allow relay --signal wss://your-server.example/signal --stun your-server.example:40000,your-server.example:40001 --to-id <对端64位设备ID> --file ./video.mp4
+# 发送端默认启用「UDP 打洞优先 → 中继 + 后台热升级」（本机桌面端或 ferry daemon 在线时自动复用长连）
+ferry send --to-id <对端64位设备ID> --file ./video.mp4
+
+# 无头 Linux / 服务器常驻守护进程（接收局域网 + 跨网传输，并暴露本机 IPC）
+ferry daemon --dir ./downloads
 ```
 
-#### 3. 给手机/浏览器快速发目录（局域网二维码 / 网页共享）
+#### 3. 临时快传与局域网浏览器收发
 ```bash
 # 终端内启动局域网接收网页并打印二维码（手机浏览器扫码即传）
-ft recv --web --qr --out ./recv
+ferry recv --web --qr --out ./recv
 
-# 共享本地目录给浏览器（支持同网直连与公网中继回退）
-ft share --dir ./shared --base https://your-server.example
+# 发起免口令临时快传（生成 6 位码 + /s/<token> 链接 + 二维码）
+ferry share --send ./archive.zip --base https://your-server.example
+
+# 等待陌生设备上传文件，或通过 6 位码加入他人临时快传
+ferry share --recv --out ./recv
+ferry share join 123456 --out ./recv
 ```
 
 > [!TIP]
@@ -116,7 +123,7 @@ ft share --dir ./shared --base https://your-server.example
 
 ## AI 智能体集成（MCP Server）
 
-`ft mcp` 实现了标准换行分隔的 JSON-RPC 2.0 **Model Context Protocol (stdio)** 服务端。默认读取 `~/.ft`（若 Windows 上存在 `%LOCALAPPDATA%\ft` 则优先复用），也可通过 `--key` 与 `--paired` 显式指向桌面端 `%LOCALAPPDATA%\Ferry` 下的密钥与配对列表，让 AI 助手直接把生成的文件、长文本或构建产物发送到你的手机或电脑。
+`ferry mcp` 实现了标准换行分隔的 JSON-RPC 2.0 **Model Context Protocol (stdio)** 服务端。默认自动共享 `%LOCALAPPDATA%\Ferry`（非 Windows 为 `~/.ferry`，并自动迁移旧版 `ft` / `.ft` 目录），若本机桌面端或 `ferry daemon` 正在运行则优先通过本机 IPC 复用在线信令与局域网缓存，让 AI 助手直接把生成的文件、长文本或构建产物发送到你的手机或电脑。
 
 ### 客户端配置示例
 
@@ -139,12 +146,12 @@ ft share --dir ./shared --base https://your-server.example
 
 | 工具名 | 作用 |
 |---|---|
-| `ft_whoami` | 获取本机设备 ID、名称、新生成的配对 URI 及当前信令/密钥路径 |
-| `ft_list_peers` | 列出已配对信任设备，并支持扫描局域网活跃接收端 (`discover_lan`) |
-| `ft_send_files` | 向已配对设备或 `host:port` 发送一个或多个本地文件（支持 `auto` / `lan` / `relay` / `punch`） |
-| `ft_send_text` | 将 UTF-8 文本封装为 `.txt` 文件直接摆渡至目标设备 |
-| `ft_receive_once` | 等待接收一次传入文件并保存至指定目录（支持 `relay` / `race` / `punch` / `lan`） |
-| `ft_pair_add` | 解析并信任对端的 `ftpair://` 配对 URI |
+| `ferry_whoami` | 获取本机设备 ID、名称、新生成的配对 URI 及当前信令/密钥路径 |
+| `ferry_list_peers` | 列出已配对信任设备，并支持扫描局域网活跃接收端 (`discover_lan`) |
+| `ferry_send_files` | 向已配对设备或 `host:port` 发送一个或多个本地文件（支持 `auto` / `lan` / `punch` / `relay`） |
+| `ferry_send_text` | 将 UTF-8 文本封装为 `.txt` 文件直接摆渡至目标设备 |
+| `ferry_receive_once` | 等待接收一次传入文件并保存至指定目录（默认 `auto`，支持 `race` / `punch` / `relay` / `lan`） |
+| `ferry_pair_add` | 解析并信任对端的 `ferry://` 配对二维码或 `ftpair://` URI |
 
 ---
 
@@ -200,13 +207,13 @@ go vet ./...
 go test -count=1 ./...
 
 # 构建 Linux CLI 与服务端
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o out/ferry-linux-amd64 ./cmd/ft
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o out/ferry-linux-amd64 ./cmd/ferry
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o out/ferry-server-linux-amd64 ./cmd/ft-server
 ```
 
 ```powershell
 # 构建 Windows CLI 与桌面端 GUI
-go build -trimpath -o out/ferry-windows-amd64.exe ./cmd/ft
+go build -trimpath -o out/ferry-windows-amd64.exe ./cmd/ferry
 go build -trimpath -ldflags="-H=windowsgui" -o out/ferry-desktop-windows-amd64.exe ./cmd/ft-desktop
 ```
 
@@ -225,8 +232,8 @@ go build -trimpath -ldflags="-H=windowsgui" -o out/ferry-desktop-windows-amd64.e
 .
 ├── android/                  # 原生 Android 外壳（Java、Manifest、资源与无 Gradle 构建脚本）
 ├── cmd/
-│   ├── ft/                   # 跨平台 CLI、配对、目录网页共享与 MCP Server
-│   ├── ft-desktop/           # Windows 桌面端（托盘、主界面、投放面板、Acrylic 确认弹窗）
+│   ├── ferry/                # 跨平台 CLI、daemon、临时快传、配对与 MCP Server
+│   ├── ft-desktop/           # Windows 桌面端（托盘、主界面、投放面板、IPC 服务、Acrylic 弹窗）
 │   ├── ft-msix-stub/         # Windows 右键菜单扩展辅助桩程序
 │   ├── ft-probe/             # 网络与 STUN 探测调试工具
 │   ├── ft-server/            # 信令、中继、匿名快传门户与 STUN 服务端入口
@@ -236,6 +243,7 @@ go build -trimpath -ldflags="-H=windowsgui" -o out/ferry-desktop-windows-amd64.e
 │   ├── client/               # 桌面/CLI 统一自动选路、打洞/中继竞速与后台热升级
 │   ├── discovery/            # 局域网 UDP 广播/组播自动发现与网卡拓扑识别
 │   ├── identity/             # Ed25519 设备身份、DPAPI 密钥封装、信任列表与 TLS 钉定证书
+│   ├── ipc/                  # 本机回环 Bearer 鉴权 IPC 通道（桌面端/daemon 与 CLI/MCP/右键共享）
 │   ├── lanweb/               # 局域网浏览器点对点收发小站
 │   ├── mobile/               # 供 gomobile 绑定的 Android Go 核心接口与事件回调
 │   ├── pairing/              # ftpair:// URI 编解码与 SPAKE2 一次性 6 位配对协议

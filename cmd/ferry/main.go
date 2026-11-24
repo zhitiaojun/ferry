@@ -1,13 +1,17 @@
-// Command ft is the command line client for the filetransfer skeleton.
+// Command ferry is the cross-platform CLI and MCP server for Ferry (轻渡).
 //
-//	ft send --addr 127.0.0.1:18800 --file a.bin --file b.txt
-//	ft recv --listen 127.0.0.1:18800 --out ./recv
-//
-// M1 supports one transfer per invocation over plain TCP (path "lan").
+//	ferry send --to-id <peer_id> --file a.bin [--file b.txt]
+//	ferry send --discover --file a.bin
+//	ferry recv --signal wss://ferry.cwlindean.cn/signal --out ./recv
+//	ferry recv --lan --out ./recv
+//	ferry daemon
+//	ferry mcp
 package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -15,15 +19,20 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/signal"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/cwlindean/filetransfer/core/client"
 	"github.com/cwlindean/filetransfer/core/discovery"
 	"github.com/cwlindean/filetransfer/core/identity"
+	"github.com/cwlindean/filetransfer/core/ipc"
 	"github.com/cwlindean/filetransfer/core/lanweb"
 	"github.com/cwlindean/filetransfer/core/logging"
+	"github.com/cwlindean/filetransfer/core/pairing"
 	"github.com/cwlindean/filetransfer/core/pathmgr"
 	"github.com/cwlindean/filetransfer/core/proto"
 	"github.com/cwlindean/filetransfer/core/session"
@@ -38,6 +47,38 @@ var (
 	goPlatform = runtime.GOOS + "/" + runtime.GOARCH
 )
 
+const defaultSTUN = client.DefaultSTUN
+
+func defaultKeyPath() string { return client.DefaultKeyPath() }
+
+func loadDeviceKey(path string) (*identity.Key, error) {
+	k, err := identity.LoadOrCreateKey(path)
+	if err != nil {
+		return nil, fmt.Errorf("device key %s: %w", path, err)
+	}
+	return k, nil
+}
+
+func truncHex(id string) string {
+	if len(id) > 12 {
+		return id[:12]
+	}
+	return id
+}
+
+func channelPathName(ch string) string {
+	switch ch {
+	case "LAN":
+		return "lan"
+	case "打洞":
+		return "punch"
+	case "中继":
+		return "relay"
+	default:
+		return strings.ToLower(ch)
+	}
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -45,7 +86,7 @@ func main() {
 	}
 	switch os.Args[1] {
 	case "-version", "--version", "version":
-		fmt.Printf("Ferry (ft) %s\nprotocol %d\ngo %s\nplatform %s\n", version, proto.Version, goVersion, goPlatform)
+		fmt.Printf("Ferry (ferry) %s\nprotocol %d\ngo %s\nplatform %s\n", version, proto.Version, goVersion, goPlatform)
 		return
 	case "send":
 		os.Exit(runSend(os.Args[2:]))
@@ -57,42 +98,20 @@ func main() {
 		os.Exit(runPair(os.Args[2:]))
 	case "share":
 		os.Exit(runShare(os.Args[2:]))
+	case "daemon":
+		os.Exit(runDaemon(os.Args[2:]))
 	case "mcp":
 		os.Exit(runMCP(os.Args[2:]))
 	case "help", "-h", "--help":
 		usage()
 		return
 	default:
-		fmt.Fprintf(os.Stderr, "ft: unknown command %q\n", os.Args[1])
+		fmt.Fprintf(os.Stderr, "ferry: unknown command %q\n", os.Args[1])
 		usage()
 		os.Exit(2)
 	}
 }
 
-// runShare serves a directory to the public web UI (protocol §8.6): a browser
-// on ft.cwlindean.cn enters the six-digit code, tries the LAN address first and
-// falls back to this host's relay socket.
-func runShare(args []string) int {
-	fs := flag.NewFlagSet("share", flag.ContinueOnError)
-	base := fs.String("base", "https://ferry.cwlindean.cn", "public site base URL")
-	password := fs.String("password", os.Getenv("FT_WEB_PASSWORD"), "web password (or FT_WEB_PASSWORD)")
-	dir := fs.String("dir", ".", "directory to share")
-	name := fs.String("name", defaultName(), "device name shown to the browser")
-	port := fs.Int("port", 0, "LAN web port (0 = random)")
-	logPath := fs.String("log", "", "JSONL log file")
-	if err := fs.Parse(args); err != nil {
-		return 2
-	}
-	if err := shareMain(shareOptions{
-		BaseURL: *base, Password: *password, Name: *name, Dir: *dir, Port: *port, LogPath: *logPath,
-	}); err != nil {
-		fmt.Fprintf(os.Stderr, "ft share: %v\n", err)
-		return 1
-	}
-	return 0
-}
-
-// runWhoami prints the signaling identity used by --signal (protocol §8.2).
 func runWhoami(args []string) int {
 	fs := flag.NewFlagSet("whoami", flag.ContinueOnError)
 	keyPath := fs.String("key", defaultKeyPath(), "device key file")
@@ -101,7 +120,7 @@ func runWhoami(args []string) int {
 	}
 	k, err := loadDeviceKey(*keyPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ft whoami: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ferry whoami: %v\n", err)
 		return 1
 	}
 	fmt.Printf("device_id %s\npubkey %s\nkey %s\n", k.IDHex(), k.PubHex(), *keyPath)
@@ -109,28 +128,50 @@ func runWhoami(args []string) int {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `usage:
-  ft send --addr <host:port> --file <path> [--file <path>...] [options]
-  ft recv --listen <host:port> --out <dir> [options]
-  ft mcp [--key FILE] [--paired FILE] [--out DIR] [--signal URL]
-  ft version
+	fmt.Fprintf(os.Stderr, `usage:
+  ferry send --to-id <hex> --file <path> [--file <path>...] [options]
+  ferry send --addr <host:port>|--discover --file <path> [options]
+  ferry recv [--signal URL] --out <dir> [options]
+  ferry share [--send <file>...] [--recv] [options]
+  ferry share join <code|url> [--out <dir>] [--file <path>...]
+  ferry pair [--show | --add <uri> | --list | --code <6digits> --with <id>|--wait]
+  ferry daemon [--port 18800] [--dir DIR] [--signal URL]
+  ferry mcp [--key FILE] [--paired FILE] [--out DIR] [--signal URL]
+  ferry whoami [--key FILE]
+  ferry version
 
 send options:
-  --discover                find the peer via LAN announcements instead of --addr
-  --to NAME                 with --discover: pick the device whose name contains NAME
-  --discover-timeout D      how long to wait for announcements (default 5s)
-  --allow lan|punch|relay   allowed paths (M2: only lan)
-  --name NAME               device name shown to the peer (default: hostname)
+  --to-id HEX               target 64-hex device ID (auto-uses --signal %s)
+  --signal URL              signaling WebSocket URL (default %s when --to-id is set)
+  --allow PATHS             allowed paths: auto | lan,punch,relay | punch | relay (default auto)
+  --punch                   prefer UDP hole punching (default true in auto mode)
+  --stun SERVERS            comma-separated STUN servers (default BJ STUN)
+  --key FILE                device key file (default %s)
+  --paired FILE             trusted peer table (default %s)
+  --no-tls                  disable pinned TLS 1.3 over relay (debug only)
+  --no-ipc                  bypass running desktop/daemon IPC
+  --addr / --peer ADDR      direct LAN TCP target host:port
+  --discover                find peer via LAN broadcast/multicast
+  --to NAME                 with --discover: match device name substring
+  --discover-timeout D      LAN scan wait (default 5s)
+  --retry-for DURATION      retry dropped LAN transfer with .ftpart resume (default 2m)
+  --name NAME               local device name shown to peer (default: hostname)
   --log FILE                write JSONL events to FILE
   --timeout DURATION        per-frame wait (default 30s)
-  --chunk BYTES             chunk size (default 65536)
+  --chunk BYTES             chunk size (default %d)
 
 recv options:
-  --lan                     listen on all interfaces and announce on the LAN
+  --signal URL              receive over signaling (punch+relay race + hot upgrade)
+  --allow PATHS             auto (default) | punch,relay | relay
+  --lan                     listen on 0.0.0.0 and announce on the LAN
+  --listen ADDR             explicit TCP listen address host:port
   --out DIR                 output directory (created if missing)
-  --once                    accept a single connection (default true)
-  same --name/--log/--timeout/--chunk as send
-`)
+  --web                     serve a browser upload/download page on the LAN
+  --web-port PORT           LAN web listen port (0 = random)
+  --web-token TOKEN         LAN web path token (random by default)
+  --qr                      print an ASCII QR code for the LAN web URL
+  same --key/--paired/--stun/--no-tls/--name/--log/--timeout/--chunk as send
+`, client.DefaultSignalURL, client.DefaultSignalURL, defaultKeyPath(), defaultPairedPath(), proto.DefaultChunkSize)
 }
 
 type fileList []string
@@ -167,17 +208,18 @@ func runSend(args []string) int {
 	discover := fs.Bool("discover", false, "find the peer via LAN announcements")
 	to := fs.String("to", "", "with --discover: device name substring to pick")
 	discoverTimeout := fs.Duration("discover-timeout", 5*time.Second, "how long to wait for announcements")
-	allow := fs.String("allow", "lan", "allowed paths, comma separated")
+	allow := fs.String("allow", "auto", "allowed paths: auto, lan, punch, relay")
 	name := fs.String("name", defaultName(), "device name")
 	logPath := fs.String("log", "", "JSONL log file")
 	timeout := fs.Duration("timeout", 30*time.Second, "per-frame wait")
 	chunk := fs.Int("chunk", int(proto.DefaultChunkSize), "chunk size in bytes")
-	signalURL := fs.String("signal", "", "signaling URL (wss://…/signal) to send via the relay")
-	toID := fs.String("to-id", "", "target device id (64 hex) for --signal")
-	keyPath := fs.String("key", defaultKeyPath(), "device key file for --signal")
-	pairedPath := fs.String("paired", defaultPairedPath(), "trusted peer table for --signal")
+	signalURL := fs.String("signal", "", "signaling URL (wss://…/signal)")
+	toID := fs.String("to-id", "", "target device id (64 hex)")
+	keyPath := fs.String("key", defaultKeyPath(), "device key file")
+	pairedPath := fs.String("paired", defaultPairedPath(), "trusted peer table")
 	noTLS := fs.Bool("no-tls", false, "relay without the pinned TLS 1.3 layer (debug only)")
-	punchPath := fs.Bool("punch", false, "with --signal: send over a UDP hole-punched QUIC tunnel")
+	noIPC := fs.Bool("no-ipc", false, "bypass running Ferry daemon IPC")
+	punchPath := fs.Bool("punch", true, "with --signal: enable UDP hole punching and background hot upgrade")
 	stunServers := fs.String("stun", defaultSTUN, "comma separated STUN servers for --punch")
 	retryFor := fs.Duration("retry-for", 2*time.Minute, "keep retrying a dropped LAN transfer this long (resumes from the receiver's .ftpart)")
 	if err := fs.Parse(args); err != nil {
@@ -188,12 +230,12 @@ func runSend(args []string) int {
 		return code
 	}
 	if len(files) == 0 {
-		fmt.Fprintln(os.Stderr, "ft send: at least one --file is required")
+		fmt.Fprintln(os.Stderr, "ferry send: at least one --file is required")
 		return 2
 	}
 	logger, closeLog, err := openLog(*logPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ft send: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ferry send: %v\n", err)
 		return 1
 	}
 	defer closeLog()
@@ -208,56 +250,87 @@ func runSend(args []string) int {
 			return fail(logger, "discover", err)
 		}
 	}
-	if *signalURL != "" {
+
+	sigURL := strings.TrimSpace(*signalURL)
+	if sigURL == "" && *toID != "" {
+		sigURL = client.DefaultSignalURL
+	}
+
+	if sigURL != "" {
 		if *toID == "" {
-			fmt.Fprintln(os.Stderr, "ft send: --to-id is required with --signal")
+			fmt.Fprintln(os.Stderr, "ferry send: --to-id is required with --signal")
 			return 2
 		}
-		cctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-		defer cancel()
-		if *punchPath {
-			po := punchOptions{
-				SignalURL: *signalURL, KeyPath: *keyPath, PairedPath: *pairedPath,
-				Name: *name, ToID: *toID, Files: files, Chunk: *chunk,
-				Timeout: *timeout, STUN: splitCSV(*stunServers), Log: logger,
-			}
-			ro := relayOptions{
-				SignalURL: *signalURL, KeyPath: *keyPath, PairedPath: *pairedPath,
-				Name: *name, ToID: *toID, NoTLS: *noTLS,
-				Files: files, Chunk: *chunk, Timeout: *timeout, Log: logger,
-			}
-			if hasPath(paths, "relay") && !*noTLS {
-				sum, err := sendViaRace(cctx, po, ro)
-				if err != nil {
-					return fail(logger, "race", err)
+
+		relayOnly := hasPath(paths, "relay") && !hasPath(paths, "auto") && !hasPath(paths, "punch")
+		mode := "auto"
+		if relayOnly || !*punchPath {
+			mode = "relay"
+		}
+
+		// Delegate through local daemon IPC when using default identity & endpoint
+		// so we reuse its online signaling session and live LAN peer table.
+		if !*noIPC && !*noTLS && *keyPath == defaultKeyPath() && *pairedPath == defaultPairedPath() && sigURL == client.DefaultSignalURL {
+			if cl, derr := ipc.TryConnect(client.DefaultStateDir()); derr == nil {
+				sres, serr := cl.Send(context.Background(), ipc.SendRequest{
+					Peer:  *toID,
+					Files: files,
+					Mode:  mode,
+				})
+				if serr != nil {
+					return fail(logger, mode, serr)
 				}
-				printSummary(sum)
+				printSummary(summary{
+					OK: true, Path: sres.Path, Peer: sres.Peer, TransferID: sres.TransferID,
+					Files: sres.Files, Bytes: sres.Bytes, Chunks: sres.Chunks, DurationMS: sres.DurationMS,
+				})
 				return 0
 			}
-			sum, err := sendViaPunch(cctx, po)
-			if err != nil {
-				return fail(logger, "punch", err)
-			}
-			printSummary(sum)
-			return 0
 		}
-		sum, err := sendViaRelay(cctx, relayOptions{
-			SignalURL: *signalURL, KeyPath: *keyPath, PairedPath: *pairedPath,
-			Name: *name, ToID: *toID, NoTLS: *noTLS,
-			Files: files, Chunk: *chunk, Timeout: *timeout, Log: logger,
-		})
+
+		cctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		opts := client.Options{
+			SignalURL:   sigURL,
+			KeyPath:     *keyPath,
+			PairedPath:  *pairedPath,
+			Name:        pairing.SanitizeName(*name),
+			STUNServers: splitCSV(*stunServers),
+			Chunk:       *chunk,
+			Timeout:     *timeout,
+			NoTLS:       *noTLS,
+			Log:         logger,
+		}
+		var res client.Result
+		if mode == "relay" {
+			res, err = client.SendFiles(cctx, opts, *toID, files)
+		} else {
+			res, err = client.SendAuto(cctx, opts, *toID, files)
+		}
 		if err != nil {
-			return fail(logger, "relay", err)
+			return fail(logger, mode, err)
 		}
-		printSummary(sum)
+		peerOut := res.PeerName
+		if peerOut == "" {
+			peerOut = truncHex(*toID)
+		}
+		printSummary(summary{
+			OK: true, Path: channelPathName(res.Channel), Peer: peerOut, TransferID: res.TransferID,
+			Files: res.Files, Bytes: res.Bytes, Chunks: res.Chunks, DurationMS: res.Duration.Milliseconds(),
+		})
 		return 0
 	}
+
 	if target == "" {
-		fmt.Fprintln(os.Stderr, "ft send: --addr/--peer (or --discover) is required")
+		fmt.Fprintln(os.Stderr, "ferry send: --to-id, --addr/--peer, or --discover is required")
 		return 2
 	}
 
-	sum, err := sendLANTarget(target, paths[0], files, *chunk, *timeout, *retryFor, logger)
+	pathName := "lan"
+	if len(paths) > 0 && paths[0] != "auto" {
+		pathName = paths[0]
+	}
+	sum, err := sendLANTarget(target, pathName, files, *chunk, *timeout, *retryFor, logger)
 	if err != nil {
 		return fail(logger, "transfer", err)
 	}
@@ -294,11 +367,12 @@ func runRecv(args []string) int {
 	logPath := fs.String("log", "", "JSONL log file")
 	timeout := fs.Duration("timeout", 30*time.Second, "per-frame wait")
 	chunk := fs.Int("chunk", int(proto.DefaultChunkSize), "chunk size in bytes")
-	signalURL := fs.String("signal", "", "signaling URL (wss://…/signal) to receive via the relay")
+	allow := fs.String("allow", "auto", "allowed paths for --signal: auto, punch, relay")
+	signalURL := fs.String("signal", "", "signaling URL (wss://…/signal)")
 	keyPath := fs.String("key", defaultKeyPath(), "device key file for --signal")
 	pairedPath := fs.String("paired", defaultPairedPath(), "trusted peer table for --signal")
 	noTLS := fs.Bool("no-tls", false, "relay without the pinned TLS 1.3 layer (debug only)")
-	punchPath := fs.Bool("punch", false, "with --signal: receive over a UDP hole-punched QUIC tunnel")
+	punchPath := fs.Bool("punch", true, "with --signal: enable UDP hole punching and background hot upgrade")
 	stunServers := fs.String("stun", defaultSTUN, "comma separated STUN servers for --punch")
 	web := fs.Bool("web", false, "serve a browser page on the LAN instead of the file protocol")
 	webPort := fs.Int("web-port", 0, "LAN web listen port (0 = random)")
@@ -309,30 +383,34 @@ func runRecv(args []string) int {
 		return 2
 	}
 	if *out == "" {
-		fmt.Fprintln(os.Stderr, "ft recv: --out is required")
+		fmt.Fprintln(os.Stderr, "ferry recv: --out is required")
 		return 2
+	}
+	paths, code := checkAllow(*allow)
+	if code != 0 {
+		return code
 	}
 
 	logger, closeLog, err := openLog(*logPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ft recv: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ferry recv: %v\n", err)
 		return 1
 	}
 	defer closeLog()
 
 	if *web {
 		if err := os.MkdirAll(*out, 0o755); err != nil {
-			fmt.Fprintf(os.Stderr, "ft recv: %v\n", err)
+			fmt.Fprintf(os.Stderr, "ferry recv: %v\n", err)
 			return 1
 		}
 		srv, err := lanweb.New(*out, *webToken, logger)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ft recv: %v\n", err)
+			fmt.Fprintf(os.Stderr, "ferry recv: %v\n", err)
 			return 1
 		}
 		ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", *webPort))
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ft recv: %v\n", err)
+			fmt.Fprintf(os.Stderr, "ferry recv: %v\n", err)
 			return 1
 		}
 		port := ln.Addr().(*net.TCPAddr).Port
@@ -345,50 +423,44 @@ func runRecv(args []string) int {
 			}
 		}
 		if err := srv.ListenAndServe("", ln); err != nil {
-			fmt.Fprintf(os.Stderr, "ft recv: %v\n", err)
+			fmt.Fprintf(os.Stderr, "ferry recv: %v\n", err)
 			return 1
 		}
 		return 0
 	}
 
 	if *signalURL != "" {
-		cctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-		defer cancel()
-		if *punchPath {
-			po := punchOptions{
-				SignalURL: *signalURL, KeyPath: *keyPath, PairedPath: *pairedPath,
-				Name: *name, OutDir: *out, Chunk: *chunk, Timeout: *timeout,
-				STUN: splitCSV(*stunServers), Log: logger,
-			}
-			ro := relayOptions{
-				SignalURL: *signalURL, KeyPath: *keyPath, PairedPath: *pairedPath,
-				Name: *name, OutDir: *out, NoTLS: *noTLS,
-				Chunk: *chunk, Timeout: *timeout, Log: logger,
-			}
-			if !*noTLS {
-				sum, err := recvViaRace(cctx, po, ro)
-				if err != nil {
-					return fail(logger, "race", err)
-				}
-				printSummary(sum)
-				return 0
-			}
-			sum, err := recvViaPunch(cctx, po)
-			if err != nil {
-				return fail(logger, "punch", err)
-			}
-			printSummary(sum)
-			return 0
+		if err := os.MkdirAll(*out, 0o755); err != nil {
+			return fail(logger, "mkdir", err)
 		}
-		sum, err := recvViaRelay(cctx, relayOptions{
-			SignalURL: *signalURL, KeyPath: *keyPath, PairedPath: *pairedPath,
-			Name: *name, OutDir: *out, NoTLS: *noTLS,
-			Chunk: *chunk, Timeout: *timeout, Log: logger,
+		relayOnly := hasPath(paths, "relay") && !hasPath(paths, "auto") && !hasPath(paths, "punch")
+		disablePunch := relayOnly || !*punchPath
+
+		cctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		cctx, tcancel := context.WithTimeout(cctx, 5*time.Minute)
+		defer tcancel()
+
+		res, err := client.ReceiveOneAuto(cctx, client.ReceiveOptions{
+			KeyPath:      *keyPath,
+			SignalURL:    *signalURL,
+			OutDir:       *out,
+			PairedPath:   *pairedPath,
+			Name:         pairing.SanitizeName(*name),
+			STUNServers:  splitCSV(*stunServers),
+			Chunk:        *chunk,
+			Timeout:      *timeout,
+			DisablePunch: disablePunch,
+			NoTLS:        *noTLS,
+			Log:          logger,
 		})
 		if err != nil {
-			return fail(logger, "relay", err)
+			return fail(logger, "recv", err)
 		}
-		printSummary(sum)
+		printSummary(summary{
+			OK: true, Path: channelPathName(res.Channel), Peer: res.PeerName, TransferID: res.TransferID,
+			Files: res.Files, Bytes: res.Bytes, Chunks: res.Chunks, DurationMS: res.Duration.Milliseconds(),
+		})
 		return 0
 	}
 
@@ -420,14 +492,12 @@ func recvLAN(parent context.Context, listen string, lan bool, out, name string, 
 	}
 	defer p.Close()
 
-	// The address line is how the evidence script discovers an ephemeral port.
 	if logger != nil {
 		logger.Event("path.listen", map[string]any{"addr": p.Addr(), "path": p.Name(), "lan": lan})
 	}
 	if onListen != nil {
 		onListen(p.Addr())
 	}
-	// Optional LAN announcement: peers find this receiver without --addr.
 	announceCtx, stopAnnounce := context.WithCancel(parent)
 	defer stopAnnounce()
 	if lan {
@@ -487,7 +557,6 @@ func recvLAN(parent context.Context, listen string, lan bool, out, name string, 
 	}, nil
 }
 
-// hasPath reports whether name is in the --allow list.
 func hasPath(paths []string, name string) bool {
 	for _, p := range paths {
 		if p == name {
@@ -497,7 +566,6 @@ func hasPath(paths []string, name string) bool {
 	return false
 }
 
-// checkAllow validates --allow and returns the first usable path name.
 func checkAllow(allow string) ([]string, int) {
 	var paths []string
 	for _, p := range strings.Split(allow, ",") {
@@ -505,15 +573,15 @@ func checkAllow(allow string) ([]string, int) {
 		switch p {
 		case "":
 			continue
-		case "lan", "relay", "punch":
+		case "auto", "lan", "relay", "punch":
 			paths = append(paths, p)
 		default:
-			fmt.Fprintf(os.Stderr, "ft: unknown path %q\n", p)
+			fmt.Fprintf(os.Stderr, "ferry: unknown path %q\n", p)
 			return nil, 2
 		}
 	}
 	if len(paths) == 0 {
-		fmt.Fprintln(os.Stderr, "ft: --allow selects no usable path")
+		fmt.Fprintln(os.Stderr, "ferry: --allow selects no usable path")
 		return nil, 2
 	}
 	return paths, 0
@@ -536,7 +604,7 @@ func fail(logger *logging.Logger, stage string, err error) int {
 	}
 	enc := json.NewEncoder(os.Stdout)
 	_ = enc.Encode(summary{OK: false, Error: err.Error()})
-	fmt.Fprintf(os.Stderr, "ft: %s: %v\n", stage, err)
+	fmt.Fprintf(os.Stderr, "ferry: %s: %v\n", stage, err)
 	return 1
 }
 
@@ -548,14 +616,13 @@ func printSummary(s summary) {
 func defaultName() string {
 	h, err := os.Hostname()
 	if err != nil || h == "" {
-		return "ft-device"
+		return "ferry-device"
 	}
 	return h
 }
 
 var _ io.Writer = os.Stderr
 
-// listenerPort extracts the TCP port from a listen address.
 func listenerPort(addr string) int {
 	_, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -568,7 +635,6 @@ func listenerPort(addr string) int {
 	return n
 }
 
-// discoverPeer waits for a LAN announcement and returns its TCP address.
 func discoverPeer(logger *logging.Logger, name, want string, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout+time.Second)
 	defer cancel()
@@ -603,9 +669,6 @@ func discoverPeer(logger *logging.Logger, name, want string, timeout time.Durati
 	return dev.TCPAddr, nil
 }
 
-// topologyOf classifies an outbound peer address for diagnostics (D24/R6):
-// "local" for loopback, "hotspot" when the peer is our default gateway (the
-// phone that hosts the hotspot), otherwise "lan".
 func topologyOf(addr string) string {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -614,7 +677,6 @@ func topologyOf(addr string) string {
 	return classifyIP(net.ParseIP(host))
 }
 
-// topologyOfRemote classifies the inbound peer seen on nc.
 func topologyOfRemote(nc net.Conn) string {
 	if nc == nil {
 		return ""
@@ -639,10 +701,6 @@ func classifyIP(ip net.IP) string {
 	return "lan"
 }
 
-// defaultSTUN is the BJ STUN service published in docs/spec/protocol.md §8.4.
-const defaultSTUN = "123.57.253.208:40000,123.57.253.208:40001"
-
-// splitCSV splits a comma separated flag value, trimming blanks.
 func splitCSV(s string) []string {
 	var out []string
 	for _, p := range strings.Split(s, ",") {
@@ -653,12 +711,16 @@ func splitCSV(s string) []string {
 	return out
 }
 
-// lanURLs lists browser URLs for every non-loopback IPv4 address so the page
-// is reachable from whatever network the machine is currently on.
+func randomHex16() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("read random: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
+}
+
 func lanURLs(token string, port int) []string {
 	var out []string
-	// discovery.Eligible already drops VPN/TUN adapters and fake-ip ranges;
-	// advertising those to a browser would only produce dead LAN candidates.
 	if ifaces, err := discovery.Eligible(); err == nil {
 		for _, ifc := range ifaces {
 			out = append(out, fmt.Sprintf("http://%s:%d/%s/", ifc.IP.String(), port, token))

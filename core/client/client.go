@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cwlindean/filetransfer/core/discovery"
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/logging"
 	"github.com/cwlindean/filetransfer/core/pairing"
@@ -39,15 +40,20 @@ type Status struct {
 type Options struct {
 	SignalURL          string
 	SignalClient       *signaling.Client // optional persistent signaling client to reuse
+	Key                *identity.Key     // optional pre-loaded device key
 	KeyPath            string            // device key file
 	PairedPath         string            // trusted-peer table
 	Name               string            // device name shown to the peer
 	STUNServers        []string          // nil uses DefaultSTUNList; empty non-nil skips STUN
+	LANHint            *discovery.Hint   // optional interface hint (Android avoids netlink)
+	SkipLANEnum        bool              // true skips discovery.Eligible() when LANHint is nil
 	CandRoute          func(sid string, ch chan *signaling.Envelope) func()
 	Chunk              int
 	Timeout            time.Duration
-	HotUpgradeMinBytes int64 // 0 defaults to HotUpgradeMinBytes (4 MiB)
+	DialTimeout        time.Duration // LAN dial timeout (default 3s)
+	HotUpgradeMinBytes int64         // 0 defaults to HotUpgradeMinBytes (4 MiB)
 	DisableHotUpgrade  bool
+	DisablePunch       bool
 	NoTLS              bool
 	Log                *logging.Logger
 	OnStatus           func(Status)

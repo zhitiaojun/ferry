@@ -2,38 +2,23 @@ package mobile
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"net"
 	"os"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/cwlindean/filetransfer/core/client"
 	"github.com/cwlindean/filetransfer/core/discovery"
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/logging"
 	"github.com/cwlindean/filetransfer/core/pairing"
-	"github.com/cwlindean/filetransfer/core/pathmgr"
-	"github.com/cwlindean/filetransfer/core/proto"
-	"github.com/cwlindean/filetransfer/core/punch"
-	"github.com/cwlindean/filetransfer/core/relay"
-	"github.com/cwlindean/filetransfer/core/session"
 	"github.com/cwlindean/filetransfer/core/signaling"
-	"github.com/cwlindean/filetransfer/core/transfer"
 )
 
-const (
-	punchHeadStart      = 600 * time.Millisecond
-	punchMinBytesPerSec = 625_000
-	hotUpgradeMinBytes  = 4 << 20
-	hotUpgradeTimeout   = 10 * time.Second
-	relayFallbackWait   = 8 * time.Second
-)
-
-// autoReceiver is the single "receive" entry point of the app: one signaling
-// session, and whichever path (punch or relay) completes its handshake first
-// is used (D1/D2).
 type autoReceiver struct {
 	cancel      context.CancelFunc
 	done        chan struct{}
@@ -53,14 +38,23 @@ var (
 	sigOnlinePeers = map[string]bool{}
 	autoHoldCount  int
 	autoResumeCh   = make(chan struct{})
+	screenAwake    = true
+	netAvailable   = true
+	dynamicHint    *discovery.Hint
+	wakeCh         = make(chan struct{})
+
+	inFlightCount atomic.Int32
 
 	candRouteMu sync.Mutex
 	candRoutes  = map[string]chan *signaling.Envelope{}
+
+	readyRouteMu sync.Mutex
+	readyRoute   chan signaling.RelayReady
 )
 
-// StartAutoReceive starts the one-button receiver. It announces nothing: the
-// sender books either a punch attempt or a relay room, and the first session
-// that reaches the handshake wins.
+// StartAutoReceive starts the persistent background receiver over signaling.
+// It delegates per-transfer path racing, on-demand STUN gathering, birthday
+// hot-upgrade, and slow-punch fallback to core/client.ReceiveAuto.
 func StartAutoReceive(name, outDir, signalURL, keyPath, pairedPath, hintJSON, stunList string) (string, error) {
 	key, err := identity.LoadOrCreateKey(keyPath)
 	if err != nil {
@@ -73,9 +67,14 @@ func StartAutoReceive(name, outDir, signalURL, keyPath, pairedPath, hintJSON, st
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return "", fmt.Errorf("create output dir: %w", err)
 	}
+	if strings.TrimSpace(signalURL) == "" {
+		signalURL = DefaultSignalURL
+	}
+
 	autoMu.Lock()
 	if autoRcv != nil {
 		autoMu.Unlock()
+		UpdateNetworkHint(hintJSON)
 		return key.IDHex(), nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -91,15 +90,17 @@ func StartAutoReceive(name, outDir, signalURL, keyPath, pairedPath, hintJSON, st
 	sigState = "connecting"
 	sigClient = nil
 	sigOnlinePeers = map[string]bool{}
+	dynamicHint = parseHint(hintJSON)
 	sigMu.Unlock()
+	notifyConnectionChanged()
 
-	hint := parseHint(hintJSON)
 	servers := splitSTUN(stunList)
-	logger, logf := openLoggerFile(outDir)
+	logger, logCloser := openRotatingLoggerFile(outDir)
+
 	go func() {
 		defer close(r.done)
-		if logf != nil {
-			defer func() { _ = logf.Close() }()
+		if logCloser != nil {
+			defer func() { _ = logCloser.Close() }()
 		}
 		defer func() {
 			sigMu.Lock()
@@ -107,21 +108,13 @@ func StartAutoReceive(name, outDir, signalURL, keyPath, pairedPath, hintJSON, st
 			sigClient = nil
 			sigOnlinePeers = map[string]bool{}
 			sigMu.Unlock()
+			notifyConnectionChanged()
 		}()
+
+		backoff := 2 * time.Second
 		for ctx.Err() == nil {
-			for {
-				sigMu.Lock()
-				held := autoHoldCount > 0
-				resumeCh := autoResumeCh
-				sigMu.Unlock()
-				if !held {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				case <-resumeCh:
-				}
+			if !waitUntilActive(ctx) {
+				return
 			}
 
 			actx, acancel := context.WithCancel(ctx)
@@ -129,32 +122,171 @@ func StartAutoReceive(name, outDir, signalURL, keyPath, pairedPath, hintJSON, st
 			r.attemptCancel = acancel
 			r.mu.Unlock()
 
-			err := autoServe(actx, ctx, key, name, outDir, signalURL, pairedPath, hint, servers, logger)
+			wasOnline, err := autoServe(actx, ctx, key, name, outDir, signalURL, pairedPath, servers, logger)
 
 			acancel()
 			r.mu.Lock()
 			r.attemptCancel = nil
 			r.mu.Unlock()
 
-			if err != nil {
-				if logger != nil {
-					logger.Event("auto.recv_error", map[string]any{"error": err.Error()})
+			if ctx.Err() != nil {
+				return
+			}
+			if err != nil && logger != nil {
+				logger.Event("auto.recv_error", map[string]any{"error": err.Error()})
+			}
+
+			if !canConnectNow() {
+				continue
+			}
+			if wasOnline {
+				backoff = 2 * time.Second
+			} else if backoff < 60*time.Second {
+				backoff *= 2
+				if backoff > 60*time.Second {
+					backoff = 60 * time.Second
 				}
-				select {
-				case <-ctx.Done():
-					return
-				case <-r.reconnectCh:
-				case <-time.After(2 * time.Second):
-				}
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-r.reconnectCh:
+				backoff = 2 * time.Second
+			case <-time.After(backoff):
 			}
 		}
 	}()
 	return key.IDHex(), nil
 }
 
+func canConnectNow() bool {
+	sigMu.Lock()
+	ok := autoHoldCount == 0 && screenAwake && netAvailable
+	sigMu.Unlock()
+	return ok
+}
+
+func waitUntilActive(ctx context.Context) bool {
+	for {
+		sigMu.Lock()
+		held := autoHoldCount > 0
+		resumeCh := autoResumeCh
+		awake := screenAwake
+		netOK := netAvailable
+		wch := wakeCh
+		if !held && awake && netOK {
+			sigMu.Unlock()
+			return true
+		}
+		sigState = "offline"
+		sigMu.Unlock()
+		notifyConnectionChanged()
+
+		select {
+		case <-ctx.Done():
+			return false
+		case <-resumeCh:
+		case <-wch:
+		}
+	}
+}
+
+func pulseWake() {
+	sigMu.Lock()
+	if wakeCh != nil {
+		close(wakeCh)
+		wakeCh = make(chan struct{})
+	}
+	sigMu.Unlock()
+	autoMu.Lock()
+	r := autoRcv
+	autoMu.Unlock()
+	if r != nil {
+		select {
+		case r.reconnectCh <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func cancelActiveAttempt() {
+	autoMu.Lock()
+	r := autoRcv
+	autoMu.Unlock()
+	if r != nil {
+		r.mu.Lock()
+		ac := r.attemptCancel
+		r.mu.Unlock()
+		if ac != nil {
+			ac()
+		}
+	}
+}
+
+// UpdateNetworkHint updates the Wi-Fi / LAN interface hint without recreating
+// the receiver; if a signaling loop is active and awake, it nudges health check.
+func UpdateNetworkHint(hintJSON string) {
+	h := parseHint(hintJSON)
+	sigMu.Lock()
+	dynamicHint = h
+	sigMu.Unlock()
+}
+
+func currentHint() *discovery.Hint {
+	sigMu.Lock()
+	h := dynamicHint
+	sigMu.Unlock()
+	return h
+}
+
+// SetScreenAwake suspends background signaling/listening when the phone locks
+// (unless a transfer is currently active, in which case it suspends once done)
+// and reconnects immediately when the screen wakes.
+func SetScreenAwake(awake bool) {
+	sigMu.Lock()
+	prev := screenAwake
+	screenAwake = awake
+	sigMu.Unlock()
+	if prev == awake {
+		return
+	}
+	if awake {
+		pulseWake()
+		notifyConnectionChanged()
+		return
+	}
+	if inFlightCount.Load() == 0 {
+		cancelActiveAttempt()
+	}
+	notifyConnectionChanged()
+}
+
+// SetNetworkAvailable pauses background reconnect loops when Android reports no
+// usable network, and wakes them immediately on network restoration.
+func SetNetworkAvailable(available bool) {
+	sigMu.Lock()
+	prev := netAvailable
+	netAvailable = available
+	sigMu.Unlock()
+	if prev == available {
+		return
+	}
+	if available {
+		pulseWake()
+		notifyConnectionChanged()
+		return
+	}
+	cancelActiveAttempt()
+	notifyConnectionChanged()
+}
+
 // ReconnectAutoReceive checks whether the active signaling connection is dead or
 // stale and cancels the current attempt so StartAutoReceive redials at once.
 func ReconnectAutoReceive() {
+	if !canConnectNow() {
+		return
+	}
 	autoMu.Lock()
 	r := autoRcv
 	autoMu.Unlock()
@@ -205,6 +337,8 @@ func ConnectionStatus() string {
 	sigMu.Lock()
 	st := sigState
 	c := sigClient
+	awake := screenAwake
+	netOK := netAvailable
 	peers := make([]string, 0, len(sigOnlinePeers))
 	for id, ok := range sigOnlinePeers {
 		if ok {
@@ -226,17 +360,17 @@ func ConnectionStatus() string {
 	}
 	lanLst, lanMap := snapshotLANPeers()
 	b, _ := json.Marshal(map[string]any{
-		"signal_state":  st,
-		"last_pong_ms":  lastPongMS,
-		"lan_listening": lanLst,
-		"online_peers":  peers,
-		"lan_peers":     lanMap,
+		"signal_state":      st,
+		"last_pong_ms":      lastPongMS,
+		"lan_listening":     lanLst,
+		"online_peers":      peers,
+		"lan_peers":         lanMap,
+		"screen_awake":      awake,
+		"network_available": netOK,
 	})
 	return string(b)
 }
 
-// holdAutoSignal temporarily pauses StartAutoReceive's background reconnect loop
-// so a foreground Dial using the same device key cannot fight the receiver.
 func holdAutoSignal() func() {
 	sigMu.Lock()
 	autoHoldCount++
@@ -245,17 +379,7 @@ func holdAutoSignal() func() {
 	}
 	sigMu.Unlock()
 
-	autoMu.Lock()
-	r := autoRcv
-	autoMu.Unlock()
-	if r != nil {
-		r.mu.Lock()
-		ac := r.attemptCancel
-		r.mu.Unlock()
-		if ac != nil {
-			ac()
-		}
-	}
+	cancelActiveAttempt()
 
 	var once sync.Once
 	return func() {
@@ -281,8 +405,6 @@ func holdAutoSignal() func() {
 	}
 }
 
-// acquireSignalForPair returns an active signaling client if StartAutoReceive
-// is already online, or holds the receiver loop while dialing a temporary one.
 func acquireSignalForPair(ctx context.Context, signalURL string, key *identity.Key) (*signaling.Client, func(), error) {
 	cl, _, release, err := acquireSignalClient(ctx, signalURL, key, nil)
 	return cl, release, err
@@ -326,22 +448,43 @@ func unregisterCandRoute(sid string) {
 	candRouteMu.Unlock()
 }
 
-func dispatchCandEnvelope(e *signaling.Envelope, fallback chan *signaling.Envelope) {
-	if c, err := signaling.Decode[signaling.Candidates](e); err == nil && c.SessionID != "" {
-		candRouteMu.Lock()
-		ch := candRoutes[c.SessionID]
-		candRouteMu.Unlock()
-		if ch != nil {
-			select {
-			case ch <- e:
-			default:
-			}
-			return
+func dispatchCandEnvelope(e *signaling.Envelope) {
+	c, err := signaling.Decode[signaling.Candidates](e)
+	if err != nil || c.SessionID == "" {
+		return
+	}
+	candRouteMu.Lock()
+	ch := candRoutes[c.SessionID]
+	candRouteMu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- e:
+		default:
 		}
 	}
-	if fallback != nil {
+}
+
+func setReadyRoute(ch chan signaling.RelayReady) {
+	readyRouteMu.Lock()
+	readyRoute = ch
+	readyRouteMu.Unlock()
+}
+
+func clearReadyRoute(ch chan signaling.RelayReady) {
+	readyRouteMu.Lock()
+	if readyRoute == ch {
+		readyRoute = nil
+	}
+	readyRouteMu.Unlock()
+}
+
+func dispatchReady(rr signaling.RelayReady) {
+	readyRouteMu.Lock()
+	ch := readyRoute
+	readyRouteMu.Unlock()
+	if ch != nil {
 		select {
-		case fallback <- e:
+		case ch <- rr:
 		default:
 		}
 	}
@@ -364,59 +507,65 @@ func StopAutoReceive() error {
 	return nil
 }
 
-func autoServe(ctx, rootCtx context.Context, key *identity.Key, name, outDir, signalURL, pairedPath string, hint *discovery.Hint, servers []string, logger *logging.Logger) error {
+func autoServe(ctx, rootCtx context.Context, key *identity.Key, name, outDir, signalURL, pairedPath string, servers []string, logger *logging.Logger) (bool, error) {
 	sigMu.Lock()
-	if rootCtx.Err() == nil {
+	if rootCtx.Err() == nil && canConnectNowLocked() {
 		sigState = "connecting"
 	}
 	sigMu.Unlock()
+	notifyConnectionChanged()
 
-	g, err := gatherHint(ctx, servers, hint, logger)
+	dialCtx, dialCancel := context.WithTimeout(ctx, 10*time.Second)
+	cl, err := signaling.Dial(dialCtx, signalURL, key, logger)
+	dialCancel()
 	if err != nil {
-		return err
+		return false, err
 	}
-	defer g.Close()
 
-	client, err := signaling.Dial(ctx, signalURL, key, logger)
-	if err != nil {
-		return err
-	}
 	defer func() {
 		sigMu.Lock()
-		if sigClient == client {
+		if sigClient == cl {
 			sigClient = nil
 			sigOnlinePeers = map[string]bool{}
-			if rootCtx.Err() == nil {
-				sigState = "connecting"
-			} else {
+			if rootCtx.Err() != nil || !canConnectNowLocked() {
 				sigState = "offline"
+			} else {
+				sigState = "connecting"
 			}
 		}
 		sigMu.Unlock()
-		_ = client.Close()
+		notifyConnectionChanged()
+		_ = cl.Close()
 	}()
 
 	sigMu.Lock()
-	sigClient = client
+	sigClient = cl
 	sigState = "online"
 	sigOnlinePeers = map[string]bool{}
-	for _, p := range client.InitialPeers() {
+	for _, p := range cl.InitialPeers() {
 		if p.Online && p.DeviceID != "" {
 			sigOnlinePeers[p.DeviceID] = true
 		}
 	}
 	sigMu.Unlock()
+	notifyConnectionChanged()
 
-	requests := make(chan *signaling.Envelope, 4)
-	cands := make(chan *signaling.Envelope, 8)
-	readyCh := make(chan signaling.RelayReady, 2)
-	client.On(signaling.TypePresence, func(e *signaling.Envelope) {
-		p, err := signaling.Decode[signaling.Presence](e)
-		if err != nil || p.DeviceID == "" {
+	type offerItem struct {
+		req       signaling.SendRequest
+		peerPub   ed25519.PublicKey
+		peerName  string
+		candCh    chan *signaling.Envelope
+		unregCand func()
+	}
+	offerCh := make(chan offerItem, 4)
+
+	cl.On(signaling.TypePresence, func(e *signaling.Envelope) {
+		p, perr := signaling.Decode[signaling.Presence](e)
+		if perr != nil || p.DeviceID == "" {
 			return
 		}
 		sigMu.Lock()
-		if sigClient == client {
+		if sigClient == cl {
 			if p.Online {
 				sigOnlinePeers[p.DeviceID] = true
 			} else {
@@ -424,53 +573,89 @@ func autoServe(ctx, rootCtx context.Context, key *identity.Key, name, outDir, si
 			}
 		}
 		sigMu.Unlock()
+		notifyConnectionChanged()
 	})
-	client.On(signaling.TypeSendRequest, func(e *signaling.Envelope) {
-		select {
-		case requests <- e:
-		default:
+
+	cl.On(signaling.TypeSendRequest, func(e *signaling.Envelope) {
+		req, rerr := signaling.Decode[signaling.SendRequest](e)
+		if rerr != nil {
+			return
 		}
-	})
-	client.On(signaling.TypeCandidates, func(e *signaling.Envelope) {
-		dispatchCandEnvelope(e, cands)
-	})
-	client.On(signaling.TypeRelayReady, func(e *signaling.Envelope) {
-		r, err := signaling.Decode[signaling.RelayReady](e)
-		if err == nil {
-			select {
-			case readyCh <- r:
-			default:
+		pub, perr := client.PairedPeer(pairedPath, req.FromDevice)
+		if perr != nil {
+			_ = cl.Send(ctx, signaling.TypeError, signaling.ErrorBody{Code: "unauthorized", Message: perr.Error()})
+			return
+		}
+		peerName := truncID(req.FromDevice)
+		if store, serr := identity.LoadPaired(pairedPath); serr == nil {
+			if dev, ok := store.Get(req.FromDevice); ok && dev.Name != "" {
+				peerName = dev.Name
 			}
 		}
+		candCh := make(chan *signaling.Envelope, 8)
+		registerCandRoute(req.SessionID, candCh)
+		unreg := func() { unregisterCandRoute(req.SessionID) }
+		select {
+		case offerCh <- offerItem{req: req, peerPub: pub, peerName: peerName, candCh: candCh, unregCand: unreg}:
+		default:
+			unreg()
+		}
 	})
+
+	cl.On(signaling.TypeCandidates, func(e *signaling.Envelope) {
+		dispatchCandEnvelope(e)
+	})
+
+	cl.On(signaling.TypeRelayReady, func(e *signaling.Envelope) {
+		if rr, rerr := signaling.Decode[signaling.RelayReady](e); rerr == nil {
+			dispatchReady(rr)
+		}
+	})
+
 	if logger != nil {
 		logger.Event("auto.ready", map[string]any{"device_id": truncID(key.IDHex())})
 	}
 
-	var req signaling.SendRequest
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-client.Done():
-		return fmt.Errorf("signaling dropped: %v", client.Err())
-	case e := <-requests:
-		r, err := signaling.Decode[signaling.SendRequest](e)
-		if err != nil {
-			return err
-		}
-		req = r
-	}
-	peerPub, err := pairedPeer(pairedPath, req.FromDevice)
-	if err != nil {
-		_ = client.Send(ctx, signaling.TypeError, signaling.ErrorBody{Code: "unauthorized", Message: err.Error()})
-		return err
-	}
-	initPeerName := truncID(req.FromDevice)
-	if store, serr := identity.LoadPaired(pairedPath); serr == nil {
-		if dev, ok := store.Get(req.FromDevice); ok && dev.Name != "" {
-			initPeerName = dev.Name
+	for {
+		select {
+		case <-ctx.Done():
+			return true, nil
+		case <-cl.Done():
+			return true, fmt.Errorf("signaling dropped: %v", cl.Err())
+		case off := <-offerCh:
+			readyCh := make(chan signaling.RelayReady, 2)
+			setReadyRoute(readyCh)
+			receiveOneMobileAuto(rootCtx, cl, key, name, outDir, signalURL, pairedPath, servers, off.req, off.peerPub, off.peerName, off.candCh, readyCh, logger)
+			clearReadyRoute(readyCh)
+			off.unregCand()
+
+			if !canConnectNow() {
+				return true, nil
+			}
 		}
 	}
+}
+
+func canConnectNowLocked() bool {
+	return autoHoldCount == 0 && screenAwake && netAvailable
+}
+
+func receiveOneMobileAuto(
+	rootCtx context.Context,
+	cl *signaling.Client,
+	key *identity.Key,
+	name, outDir, signalURL, pairedPath string,
+	servers []string,
+	req signaling.SendRequest,
+	peerPub ed25519.PublicKey,
+	peerName string,
+	candCh <-chan *signaling.Envelope,
+	readyCh <-chan signaling.RelayReady,
+	logger *logging.Logger,
+) {
+	inFlightCount.Add(1)
+	defer inFlightCount.Add(-1)
+
 	var initTotal int64
 	firstFile := ""
 	if len(req.Files) > 0 {
@@ -479,319 +664,45 @@ func autoServe(ctx, rootCtx context.Context, key *identity.Key, name, outDir, si
 			initTotal += f.Size
 		}
 	}
-	txSeq := beginActiveTransfer("recv", initPeerName, firstFile, len(req.Files), initTotal)
+	txSeq := beginActiveTransfer("recv", peerName, firstFile, len(req.Files), initTotal)
 	defer endActiveTransfer(txSeq)
 
-	if err := client.Send(ctx, signaling.TypeSendResp, signaling.SendResponse{
-		ToDevice: req.FromDevice, TransferID: req.TransferID, Accept: true,
-	}); err != nil {
-		return err
-	}
+	rctx, cancel := context.WithTimeout(rootCtx, 10*time.Minute)
+	defer cancel()
 
-	serverCfg, err := identity.ServerTLS(key, peerPub)
-	if err != nil {
-		return err
-	}
-	q := pathmgr.NewQUIC(g.Conn, serverCfg)
-	defer q.Close()
-	if err := q.PrepareListen(ctx); err != nil {
-		return err
-	}
-	if err := client.Send(ctx, signaling.TypeCandidates, signaling.Candidates{
-		ToDevice: req.FromDevice, SessionID: req.SessionID, Candidates: signalingCandidates(g.Candidates),
-	}); err != nil {
-		return err
-	}
-	updateActiveTransfer(txSeq, "racing", "", "", "", 0, 0, -1, 0)
-
-	var peerCandsMu sync.Mutex
-	var savedPeerCands []signaling.Candidate
-	savePeerCands := func(cs []signaling.Candidate) {
-		peerCandsMu.Lock()
-		savedPeerCands = append([]signaling.Candidate(nil), cs...)
-		peerCandsMu.Unlock()
-	}
-	getSavedPeerCands := func() []signaling.Candidate {
-		peerCandsMu.Lock()
-		defer peerCandsMu.Unlock()
-		return append([]signaling.Candidate(nil), savedPeerCands...)
-	}
-
-	punchAttempt := pathmgr.Attempt[*session.Session]{
-		Name: "punch",
-		Fn: func(actx context.Context) (*session.Session, error) {
-			var peerCands []signaling.Candidate
-			t := time.NewTimer(10 * time.Second)
-			defer t.Stop()
-			for peerCands == nil {
-				select {
-				case <-actx.Done():
-					return nil, actx.Err()
-				case <-client.Done():
-					return nil, fmt.Errorf("signaling dropped: %v", client.Err())
-				case <-t.C:
-					return nil, fmt.Errorf("peer did not publish candidates")
-				case ce := <-cands:
-					c, err := signaling.Decode[signaling.Candidates](ce)
-					if err != nil {
-						return nil, err
-					}
-					peerCands = c.Candidates
-					if peerCands == nil {
-						peerCands = []signaling.Candidate{}
-					}
-					savePeerCands(peerCands)
-				}
-			}
-			peerLocal := localCandidates(peerCands)
-			addrs := punch.Resolve(peerLocal)
-			if len(addrs) == 0 {
-				return nil, fmt.Errorf("peer has no udp candidates")
-			}
-			pctx, cancel := context.WithCancel(actx)
-			defer cancel()
-			go g.Punch(pctx, peerLocal)
-			cctx, ccancel := context.WithTimeout(actx, 25*time.Second)
-			defer ccancel()
-			s, err := punch.Connect(cctx, q, addrs, key.ID(), parseDeviceID(req.FromDevice), sessionParams(key, name))
-			if err != nil {
-				return nil, err
-			}
-			cancel()
-			return s, nil
+	res, err := client.ReceiveAuto(rctx, client.ReceiveOptions{
+		Key:         key,
+		SignalURL:   signalURL,
+		OutDir:      outDir,
+		PairedPath:  pairedPath,
+		Name:        name,
+		STUNServers: servers,
+		LANHint:     currentHint(),
+		SkipLANEnum: true,
+		Log:         logger,
+		OnStatus: func(st client.Status) {
+			updateActiveTransfer(txSeq, st.Stage, st.Channel, "", st.FileName, st.FileIndex, st.FileCount, st.BytesDone, st.BytesTotal)
 		},
-	}
-	relayAttempt := pathmgr.Attempt[*session.Session]{
-		Name: "relay",
-		Fn: func(actx context.Context) (*session.Session, error) {
-			var ready signaling.RelayReady
-			select {
-			case <-actx.Done():
-				return nil, actx.Err()
-			case <-client.Done():
-				return nil, fmt.Errorf("signaling dropped: %v", client.Err())
-			case ready = <-readyCh:
-			}
-			rc, err := relay.Dial(actx, relayURL(signalURL, ready))
-			if err != nil {
-				return nil, err
-			}
-			conn, err := serverTLS(actx, net.Conn(rc), key, peerPub)
-			if err != nil {
-				return nil, err
-			}
-			s, err := session.Accept(conn, sessionParams(key, name))
-			if err != nil {
-				_ = conn.Close()
-				return nil, err
-			}
-			return s, nil
-		},
-	}
-
-	sess, winner, err := pathmgr.Race(ctx, punchAttempt, relayAttempt)
+	}, cl, req, peerPub, candCh, readyCh)
 	if err != nil {
-		return fmt.Errorf("race: %w", err)
-	}
-	peerName := pairing.SanitizeName(sess.Peer.Name)
-	if peerName != "" {
-		identity.UpdatePeerName(pairedPath, req.FromDevice, peerName)
-	} else if store, serr := identity.LoadPaired(pairedPath); serr == nil {
-		if dev, ok := store.Get(req.FromDevice); ok {
-			peerName = dev.Name
+		if logger != nil {
+			logger.Event("auto.recv_transfer_error", map[string]any{"peer": truncID(req.FromDevice), "error": err.Error()})
 		}
+		return
 	}
-	updateActiveTransfer(txSeq, "transferring", winner, peerName, "", 0, 0, -1, 0)
+	if res.PeerName != "" {
+		peerName = res.PeerName
+		updateActiveTransfer(txSeq, "", "", peerName, "", 0, 0, -1, 0)
+	}
+	via := channelCode(res.Channel)
+	recordReceivedFrom(outDir, via, peerName, res.Files, res.Bytes)
 	if logger != nil {
-		logger.Event("path.selected", map[string]any{"path": winner, "peer": truncID(req.FromDevice)})
+		logger.Event("auto.done", map[string]any{"path": via, "peer": truncID(req.FromDevice)})
 	}
-
-	type mobileUpgradePair struct {
-		sess    *session.Session
-		cleanup func()
-	}
-	var upPairCh chan mobileUpgradePair
-	var upDone chan struct{}
-	var upgradedCleanup func()
-	defer func() {
-		if upDone != nil {
-			<-upDone
-		}
-		if upPairCh != nil {
-			for {
-				select {
-				case up := <-upPairCh:
-					if up.sess != nil {
-						_ = up.sess.Close()
-					}
-					if up.cleanup != nil {
-						up.cleanup()
-					}
-				default:
-					goto drainedMobRecv
-				}
-			}
-		}
-	drainedMobRecv:
-		if upgradedCleanup != nil {
-			upgradedCleanup()
-		}
-	}()
-
-	if winner == "relay" && initTotal >= hotUpgradeMinBytes &&
-		(sess.Peer.Capabilities&proto.CapHotUpgrade) != 0 && req.SessionID != "" {
-		bgCtx, bgCancel := context.WithTimeout(ctx, hotUpgradeTimeout)
-		defer bgCancel()
-		upPairCh = make(chan mobileUpgradePair, 1)
-		upDone = make(chan struct{})
-		localMap := g.Mapping
-		go func() {
-			defer close(upDone)
-			peerCands := getSavedPeerCands()
-			if peerCands == nil {
-				waitC := time.NewTimer(2 * time.Second)
-				select {
-				case <-bgCtx.Done():
-					waitC.Stop()
-					return
-				case <-waitC.C:
-					return
-				case ce := <-cands:
-					waitC.Stop()
-					if c, derr := signaling.Decode[signaling.Candidates](ce); derr == nil {
-						peerCands = c.Candidates
-					}
-				}
-			}
-			peerLocal := localCandidates(peerCands)
-			if len(punch.Resolve(peerLocal)) == 0 {
-				return
-			}
-			bpCfg := punch.BirthdayConfig{
-				SelfID:         key.ID(),
-				PeerID:         parseDeviceID(req.FromDevice),
-				SessionID:      req.SessionID,
-				PeerCandidates: peerLocal,
-				LocalMapping:   localMap,
-				Log:            logger,
-			}
-			upS, upCl, berr := punch.BirthdayConnect(bgCtx, bpCfg, key, peerPub, sessionParams(key, name))
-			if berr != nil {
-				return
-			}
-			select {
-			case upPairCh <- mobileUpgradePair{sess: upS, cleanup: upCl}:
-			default:
-				_ = upS.Close()
-				if upCl != nil {
-					upCl()
-				}
-			}
-		}()
-	}
-
-	tcfg := transfer.Config{
-		ChunkSize: 0, Timeout: 30 * time.Second, Log: logger,
-		TransferID: hex16(req.TransferID),
-		OnDetailProgress: func(s transfer.ProgressSnapshot) {
-			updateActiveTransfer(txSeq, s.Stage, winner, "", s.FileName, s.FileIndex, s.FileCount, s.BytesDone, s.BytesTotal)
-		},
-	}
-	res, err := transfer.Receive(sess, outDir, tcfg)
-	if err != nil && winner == "relay" && upPairCh != nil {
-		var remote *session.RemoteError
-		wantsSwitch := errors.As(err, &remote) && remote.Code == proto.CodePathSwitch
-		var up mobileUpgradePair
-		gotUp := false
-		if wantsSwitch {
-			wt := time.NewTimer(3 * time.Second)
-			select {
-			case <-ctx.Done():
-				wt.Stop()
-			case <-upDone:
-				wt.Stop()
-				select {
-				case up = <-upPairCh:
-					gotUp = up.sess != nil
-				default:
-				}
-			case up = <-upPairCh:
-				wt.Stop()
-				gotUp = up.sess != nil
-			case <-wt.C:
-			}
-		} else {
-			select {
-			case up = <-upPairCh:
-				gotUp = up.sess != nil
-			default:
-			}
-		}
-		if gotUp {
-			_ = sess.Close()
-			sess = up.sess
-			upgradedCleanup = up.cleanup
-			winner = "punch"
-			if logger != nil {
-				logger.Event("path.hot_upgrade_punch", map[string]any{"peer": truncID(req.FromDevice)})
-			}
-			updateActiveTransfer(txSeq, "transferring", "punch", peerName, "", 0, 0, -1, 0)
-			res, err = transfer.Receive(sess, outDir, tcfg)
-		}
-	}
-	if err != nil && winner == "punch" {
-		_ = sess.Close()
-		updateActiveTransfer(txSeq, "connecting", "relay", peerName, "", 0, 0, -1, 0)
-		waitTimer := time.NewTimer(relayFallbackWait)
-		var ready signaling.RelayReady
-		gotFallback := false
-		select {
-		case <-ctx.Done():
-			waitTimer.Stop()
-		case <-client.Done():
-			waitTimer.Stop()
-		case <-waitTimer.C:
-		case ready = <-readyCh:
-			waitTimer.Stop()
-			gotFallback = true
-		}
-		if gotFallback {
-			rc, rerr := relay.Dial(ctx, relayURL(signalURL, ready))
-			if rerr != nil {
-				return rerr
-			}
-			conn, rerr := serverTLS(ctx, net.Conn(rc), key, peerPub)
-			if rerr != nil {
-				return rerr
-			}
-			relaySess, rerr := session.Accept(conn, sessionParams(key, name))
-			if rerr != nil {
-				_ = conn.Close()
-				return rerr
-			}
-			sess = relaySess
-			winner = "relay"
-			if logger != nil {
-				logger.Event("path.fallback_relay", map[string]any{"peer": truncID(req.FromDevice)})
-			}
-			updateActiveTransfer(txSeq, "transferring", "relay", peerName, "", 0, 0, -1, 0)
-			res, err = transfer.Receive(sess, outDir, tcfg)
-		}
-	}
-	if err != nil {
-		_ = sess.Close()
-		return err
-	}
-	sess.Drain(2 * time.Second)
-	recordReceivedFrom(outDir, winner, peerName, res.Files, res.Bytes)
-	if logger != nil {
-		logger.Event("auto.done", map[string]any{"path": winner, "peer": truncID(req.FromDevice)})
-	}
-	return nil
 }
 
-// SendAuto is the one-button sender: it books a relay room and starts the
-// punch at the same moment, then uses whichever session completes first.
+// SendAuto is the one-button sender: checks LAN discovery first, then delegates
+// punch+relay racing, birthday hot-upgrade, and slow-punch fallback to core/client.
 func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, stunList string) (string, error) {
 	var paths []string
 	if err := json.Unmarshal([]byte(pathsJSON), &paths); err != nil {
@@ -804,16 +715,22 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 	if name == "" {
 		name = "android"
 	}
+	if strings.TrimSpace(signalURL) == "" {
+		signalURL = DefaultSignalURL
+	}
 	key, err := identity.LoadOrCreateKey(keyPath)
 	if err != nil {
 		return "", err
 	}
-	peerPub, err := pairedPeer(pairedPath, toID)
-	if err != nil {
+	if _, err := pairedPeer(pairedPath, toID); err != nil {
 		return "", err
 	}
 	logger := openTempLogger()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+
+	inFlightCount.Add(1)
+	defer inFlightCount.Add(-1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	files, totalBytes, err := describeFiles(paths)
@@ -851,322 +768,60 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 		}
 	}
 
-	hint := parseHint(hintJSON)
-	g, err := gatherHint(ctx, splitSTUN(stunList), hint, logger)
-	if err != nil {
-		return "", err
-	}
-	defer g.Close()
-
-	sid, err := randHex16()
-	if err != nil {
-		return "", err
-	}
-	tid, err := randHex16()
-	if err != nil {
-		return "", err
-	}
-	client, reused, releaseSig, err := acquireSignalClient(ctx, signalURL, key, logger)
+	sigCl, reused, releaseSig, err := acquireSignalClient(ctx, signalURL, key, logger)
 	if err != nil {
 		return "", err
 	}
 	defer releaseSig()
 
-	events := make(chan *signaling.Envelope, 16)
-	for _, typ := range []string{signaling.TypeSendResp, signaling.TypeError} {
-		client.On(typ, func(e *signaling.Envelope) {
-			select {
-			case events <- e:
-			default:
-			}
-		})
-	}
-	defer client.Off(signaling.TypeSendResp)
-	defer client.Off(signaling.TypeError)
-	if reused {
-		registerCandRoute(sid, events)
-		defer unregisterCandRoute(sid)
+	var hint *discovery.Hint
+	if strings.TrimSpace(hintJSON) != "" {
+		hint = parseHint(hintJSON)
 	} else {
-		client.On(signaling.TypeCandidates, func(e *signaling.Envelope) {
-			select {
-			case events <- e:
-			default:
-			}
-		})
-		defer client.Off(signaling.TypeCandidates)
-	}
-	if err := client.Send(ctx, signaling.TypeSendRequest, signaling.SendRequest{
-		ToDevice: toID, SessionID: sid, TransferID: tid, Files: files,
-	}); err != nil {
-		return "", fmt.Errorf("send request: %w", err)
+		hint = currentHint()
 	}
 
-	var peerCands []signaling.Candidate
-	accepted := false
-	gotCands := false
-	deadline := time.NewTimer(15 * time.Second)
-	defer deadline.Stop()
-	var candDeadline *time.Timer
-	var candDeadlineC <-chan time.Time
-	for !accepted || !gotCands {
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-client.Done():
-			return "", fmt.Errorf("signaling dropped: %v", client.Err())
-		case <-deadline.C:
-			return "", fmt.Errorf("peer did not answer the request")
-		case <-candDeadlineC:
-			gotCands = true
-		case e := <-events:
-			switch e.Type {
-			case signaling.TypeError:
-				eb, _ := signaling.Decode[signaling.ErrorBody](e)
-				return "", fmt.Errorf("peer error: %s", eb.Message)
-			case signaling.TypeSendResp:
-				r, err := signaling.Decode[signaling.SendResponse](e)
-				if err != nil {
-					return "", err
-				}
-				if !r.Accept {
-					return "", fmt.Errorf("peer declined: %s", r.Reason)
-				}
-				accepted = true
-				updateActiveTransfer(txSeq, "racing", "", "", "", 0, 0, -1, 0)
-				if err := client.Send(ctx, signaling.TypeCandidates, signaling.Candidates{
-					ToDevice: toID, SessionID: sid, Candidates: signalingCandidates(g.Candidates),
-				}); err != nil {
-					return "", fmt.Errorf("send candidates: %w", err)
-				}
-				if !gotCands {
-					candDeadline = time.NewTimer(3 * time.Second)
-					defer candDeadline.Stop()
-					candDeadlineC = candDeadline.C
-				}
-			case signaling.TypeCandidates:
-				c, err := signaling.Decode[signaling.Candidates](e)
-				if err != nil {
-					return "", err
-				}
-				peerCands = c.Candidates
-				gotCands = true
-			}
-		}
-	}
-
-	peerLocal := localCandidates(peerCands)
-	peerAddrs := punch.Resolve(peerLocal)
-
-	dialRelaySession := func(actx context.Context) (*session.Session, error) {
-		room, err := openRelayRoom(actx, client, toID, tid)
-		if err != nil {
-			return nil, err
-		}
-		rc, err := relay.Dial(actx, relayURL(signalURL, room))
-		if err != nil {
-			return nil, err
-		}
-		conn, err := clientTLS(actx, net.Conn(rc), key, peerPub)
-		if err != nil {
-			return nil, err
-		}
-		s, err := session.Dial(conn, sessionParams(key, name))
-		if err != nil {
-			_ = conn.Close()
-			return nil, err
-		}
-		return s, nil
-	}
-
-	var sess *session.Session
-	var winner string
-	if len(peerAddrs) > 0 {
-		tlsCfg, err := identity.ClientTLS(key, peerPub)
-		if err != nil {
-			return "", err
-		}
-		q := pathmgr.NewQUIC(g.Conn, tlsCfg)
-		defer q.Close()
-		if err := q.PrepareListen(ctx); err != nil {
-			return "", err
-		}
-
-		punchFailed := make(chan struct{})
-		var punchOnce sync.Once
-		markPunchFailed := func() {
-			punchOnce.Do(func() { close(punchFailed) })
-		}
-
-		punchAttempt := pathmgr.Attempt[*session.Session]{
-			Name: "punch",
-			Fn: func(actx context.Context) (*session.Session, error) {
-				pctx, pcancel := context.WithTimeout(actx, 12*time.Second)
-				defer pcancel()
-				go g.Punch(pctx, peerLocal)
-				s, err := punch.Connect(pctx, q, peerAddrs, key.ID(), parseDeviceID(toID), sessionParams(key, name))
-				if err != nil {
-					markPunchFailed()
-					return nil, err
-				}
-				return s, nil
-			},
-		}
-		relayAttempt := pathmgr.Attempt[*session.Session]{
-			Name: "relay",
-			Fn: func(actx context.Context) (*session.Session, error) {
-				t := time.NewTimer(punchHeadStart)
-				select {
-				case <-actx.Done():
-					t.Stop()
-					return nil, actx.Err()
-				case <-punchFailed:
-					t.Stop()
-				case <-t.C:
-				}
-				return dialRelaySession(actx)
-			},
-		}
-		sess, winner, err = pathmgr.Race(ctx, punchAttempt, relayAttempt)
-		if err != nil {
-			return "", fmt.Errorf("race: %w", err)
-		}
-	} else {
-		sess, err = dialRelaySession(ctx)
-		if err != nil {
-			return "", err
-		}
-		winner = "relay"
-	}
-
-	peerName := pairing.SanitizeName(sess.Peer.Name)
-	if peerName != "" {
-		identity.UpdatePeerName(pairedPath, toID, peerName)
-	}
-	updateActiveTransfer(txSeq, "transferring", winner, peerName, "", 0, 0, -1, 0)
-	if logger != nil {
-		logger.Event("path.selected", map[string]any{"path": winner, "peer": truncID(toID)})
-	}
-
-	type mobileSendUpgradePair struct {
-		sess    *session.Session
-		cleanup func()
-	}
-	var upgradeSig chan struct{}
-	var upPairCh chan mobileSendUpgradePair
-	var upDone chan struct{}
-	var upgradedCleanup func()
-	defer func() {
-		if upDone != nil {
-			<-upDone
-		}
-		if upPairCh != nil {
-			for {
-				select {
-				case up := <-upPairCh:
-					if up.sess != nil {
-						_ = up.sess.Close()
-					}
-					if up.cleanup != nil {
-						up.cleanup()
-					}
-				default:
-					goto drainedMobSend
-				}
-			}
-		}
-	drainedMobSend:
-		if upgradedCleanup != nil {
-			upgradedCleanup()
-		}
-	}()
-
-	if winner == "relay" && totalBytes >= hotUpgradeMinBytes &&
-		(sess.Peer.Capabilities&proto.CapHotUpgrade) != 0 && len(peerAddrs) > 0 {
-		bgCtx, bgCancel := context.WithTimeout(ctx, hotUpgradeTimeout)
-		defer bgCancel()
-		upgradeSig = make(chan struct{})
-		upPairCh = make(chan mobileSendUpgradePair, 1)
-		upDone = make(chan struct{})
-		bpCfg := punch.BirthdayConfig{
-			SelfID:         key.ID(),
-			PeerID:         parseDeviceID(toID),
-			SessionID:      sid,
-			PeerCandidates: peerLocal,
-			LocalMapping:   g.Mapping,
-			Log:            logger,
-		}
-		go func() {
-			defer close(upDone)
-			upS, upCl, berr := punch.BirthdayConnect(bgCtx, bpCfg, key, peerPub, sessionParams(key, name))
-			if berr != nil {
-				return
-			}
-			select {
-			case upPairCh <- mobileSendUpgradePair{sess: upS, cleanup: upCl}:
-				close(upgradeSig)
-			default:
-				_ = upS.Close()
-				if upCl != nil {
-					upCl()
-				}
-			}
-		}()
-	}
-
-	start := time.Now()
-	tcfg := transfer.Config{
-		ChunkSize: 0, Timeout: 30 * time.Second, Log: logger,
-		TransferID: hex16(tid),
-		UpgradeCh:  upgradeSig,
-		OnDetailProgress: func(s transfer.ProgressSnapshot) {
-			updateActiveTransfer(txSeq, s.Stage, winner, "", s.FileName, s.FileIndex, s.FileCount, s.BytesDone, s.BytesTotal)
+	opts := client.Options{
+		SignalURL:   signalURL,
+		Key:         key,
+		KeyPath:     keyPath,
+		PairedPath:  pairedPath,
+		Name:        name,
+		STUNServers: splitSTUN(stunList),
+		LANHint:     hint,
+		SkipLANEnum: true,
+		Log:         logger,
+		OnStatus: func(st client.Status) {
+			updateActiveTransfer(txSeq, st.Stage, st.Channel, "", st.FileName, st.FileIndex, st.FileCount, st.BytesDone, st.BytesTotal)
 		},
 	}
-	if winner == "punch" && (sess.Peer.Capabilities&proto.CapRelayFallback) != 0 {
-		tcfg.MinBytesPerSec = punchMinBytesPerSec
+	if reused {
+		opts.SignalClient = sigCl
+		opts.CandRoute = func(sid string, ch chan *signaling.Envelope) func() {
+			registerCandRoute(sid, ch)
+			return func() { unregisterCandRoute(sid) }
+		}
 	}
 
-	res, err := transfer.Send(sess, paths, tcfg)
-	if errors.Is(err, transfer.ErrPathUpgrade) {
-		up := <-upPairCh
-		_ = sess.Close()
-		sess = up.sess
-		upgradedCleanup = up.cleanup
-		winner = "punch"
-		if logger != nil {
-			logger.Event("path.hot_upgrade_punch", map[string]any{"peer": truncID(toID), "transfer_id": tid})
-		}
-		updateActiveTransfer(txSeq, "transferring", "punch", peerName, "", 0, 0, -1, 0)
-		tcfg.UpgradeCh = nil
-		if (sess.Peer.Capabilities & proto.CapRelayFallback) != 0 {
-			tcfg.MinBytesPerSec = punchMinBytesPerSec
-		}
-		res, err = transfer.Send(sess, paths, tcfg)
-	}
-	if errors.Is(err, transfer.ErrSlowPath) {
-		if logger != nil {
-			logger.Event("path.fallback_slow_punch", map[string]any{"peer": truncID(toID), "transfer_id": tid})
-		}
-		_ = sess.Close()
-		updateActiveTransfer(txSeq, "connecting", "relay", peerName, "", 0, 0, -1, 0)
-		sess, err = dialRelaySession(ctx)
-		if err != nil {
-			return "", fmt.Errorf("fallback relay: %w", err)
-		}
-		winner = "relay"
-		updateActiveTransfer(txSeq, "transferring", "relay", peerName, "", 0, 0, -1, 0)
-		tcfg.MinBytesPerSec = 0
-		tcfg.UpgradeCh = nil
-		res, err = transfer.Send(sess, paths, tcfg)
-	}
-	_ = sess.Close()
+	res, err := client.SendAuto(ctx, opts, toID, paths)
 	if err != nil {
 		return "", err
 	}
 	out, _ := json.Marshal(map[string]any{
-		"ok": true, "path": winner, "peer": truncID(toID), "transfer_id": tid,
+		"ok": true, "path": channelCode(res.Channel), "peer": truncID(toID), "transfer_id": res.TransferID,
 		"files": res.Files, "bytes": res.Bytes, "chunks": res.Chunks,
-		"duration_ms": time.Since(start).Milliseconds(),
+		"duration_ms": res.Duration.Milliseconds(),
 	})
 	return string(out), nil
+}
+
+func channelCode(ch string) string {
+	switch ch {
+	case "LAN":
+		return "lan"
+	case "打洞":
+		return "punch"
+	default:
+		return "relay"
+	}
 }

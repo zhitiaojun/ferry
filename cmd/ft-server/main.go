@@ -18,7 +18,7 @@ import (
 	"github.com/cwlindean/filetransfer/server"
 )
 
-var version = "0.4.0-dev"
+var version = "1.0.0"
 
 func main() {
 	listen := flag.String("listen", "127.0.0.1:18790", "listen address (loopback only on BJ)")

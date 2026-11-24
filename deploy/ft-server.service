@@ -5,7 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/opt/ft-server/ft-server -listen 127.0.0.1:18790 -log /var/log/ft-server/events.jsonl
+EnvironmentFile=-/opt/ft-server/web.env
+ExecStart=/opt/ft-server/ft-server -listen 127.0.0.1:18790 -stun 0.0.0.0:40000,0.0.0.0:40001 -log /var/log/ft-server/events.jsonl
 Environment=GOMEMLIMIT=160MiB
 MemoryMax=256M
 Restart=on-failure

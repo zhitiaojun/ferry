@@ -35,9 +35,11 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force -Path out/windows, cmd/ft-setup/payload/menu/Assets | Out-Null
+          $ver = "${{ github.ref_name }}".TrimStart("v")
+          if (-not $ver -or $ver -eq "main") { $ver = "1.0.0-dev" }
 
-          go build -trimpath -o out/windows/ferry-windows-amd64.exe ./cmd/ft
-          go build -trimpath -ldflags="-H=windowsgui" -o out/windows/ferry-desktop-windows-amd64.exe ./cmd/ft-desktop
+          go build -trimpath -ldflags="-X main.version=$ver" -o out/windows/ferry-windows-amd64.exe ./cmd/ferry
+          go build -trimpath -ldflags="-H=windowsgui -X main.version=$ver" -o out/windows/ferry-desktop-windows-amd64.exe ./cmd/ft-desktop
           go build -trimpath -o cmd/ft-setup/payload/menu/ftstub.exe ./cmd/ft-msix-stub
 
           $cc = ""
@@ -59,7 +61,7 @@ jobs:
 
           go build -trimpath -ldflags="-H=windowsgui" -o out/windows/ferry-setup-windows-amd64.exe ./cmd/ft-setup
           go vet ./...
-          go test -count=1 ./cmd/ft ./cmd/ft-desktop
+          go test -count=1 ./cmd/ferry ./cmd/ft-desktop
       - uses: actions/upload-artifact@v4
         with:
           name: windows-artifacts
@@ -77,8 +79,10 @@ jobs:
       - name: Build Linux amd64 binaries
         run: |
           mkdir -p out/linux
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o out/linux/ferry-linux-amd64 ./cmd/ft
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o out/linux/ferry-server-linux-amd64 ./cmd/ft-server
+          VER="${GITHUB_REF_NAME#v}"
+          if [ -z "$VER" ] || [ "$VER" = "main" ]; then VER="1.0.0-dev"; fi
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-X main.version=$VER" -o out/linux/ferry-linux-amd64 ./cmd/ferry
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-X main.version=$VER" -o out/linux/ferry-server-linux-amd64 ./cmd/ft-server
       - uses: actions/upload-artifact@v4
         with:
           name: linux-artifacts
@@ -142,7 +146,7 @@ jobs:
 
           mkdir -p "$OUT" "$WORK/aar" "$WORK/classes" "$WORK/dex"
           CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384" \
-            gomobile bind -target=android/arm64 -androidapi 21 -o android/ft.aar ./core/mobile
+            gomobile bind -target=android/arm64 -androidapi 21 -ldflags="-X github.com/cwlindean/filetransfer/core/mobile.Version=${VER_NAME}" -o android/ft.aar ./core/mobile
 
           python3 - android/ft.aar "$WORK/aar" "$WORK" <<'PY'
           import sys, zipfile

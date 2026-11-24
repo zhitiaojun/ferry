@@ -9,13 +9,14 @@ import (
 	"os"
 	"time"
 
+	"github.com/cwlindean/filetransfer/core/client"
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/logging"
 	"github.com/cwlindean/filetransfer/core/pairing"
 	"github.com/cwlindean/filetransfer/core/signaling"
 )
 
-// pakeOptions configures `ft pair --code`.
+// pakeOptions configures `ferry pair --code`.
 type pakeOptions struct {
 	SignalURL string
 	KeyPath   string
@@ -39,7 +40,7 @@ func runPairPake(args []string) int {
 	code := fs.String("code", "", "one-time 6-digit code shared out of band")
 	with := fs.String("with", "", "peer device id (initiator)")
 	wait := fs.Bool("wait", false, "wait for an initiator instead of dialing one")
-	signalURL := fs.String("signal", "", "signaling URL (wss://…/signal)")
+	signalURL := fs.String("signal", client.DefaultSignalURL, "signaling URL (wss://…/signal)")
 	timeout := fs.Duration("timeout", 60*time.Second, "how long to wait for the peer")
 	logPath := fs.String("log", "", "JSONL log file")
 	if err := fs.Parse(args); err != nil {
@@ -77,18 +78,18 @@ func runPairPake(args []string) int {
 
 	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
 	defer cancel()
-	client, err := signaling.Dial(ctx, opts.SignalURL, key, opts.Log)
+	cl, err := signaling.Dial(ctx, opts.SignalURL, key, opts.Log)
 	if err != nil {
 		return pairFail(emit, err)
 	}
-	defer client.Close()
+	defer cl.Close()
 
 	mode := pairing.Initiate
 	if opts.Wait {
 		mode = pairing.Respond
 	}
 	host, _ := os.Hostname()
-	peer, err := pairing.RunWithName(ctx, client, key, paired, mode, opts.Code, opts.With, host, opts.Timeout)
+	peer, err := pairing.RunWithName(ctx, cl, key, paired, mode, opts.Code, opts.With, host, opts.Timeout)
 	if err != nil {
 		return pairFail(emit, err)
 	}
@@ -127,6 +128,6 @@ func pakeOptionsError(o pakeOptions) error {
 
 func pairFail(emit func(any), err error) int {
 	emit(map[string]any{"ok": false, "error": err.Error()})
-	fmt.Fprintf(os.Stderr, "ft: %v\n", err)
+	fmt.Fprintf(os.Stderr, "ferry: %v\n", err)
 	return 1
 }

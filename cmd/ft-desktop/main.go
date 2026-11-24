@@ -23,8 +23,11 @@ import (
 
 	"github.com/cwlindean/filetransfer/core/client"
 	"github.com/cwlindean/filetransfer/core/identity"
+	"github.com/cwlindean/filetransfer/core/ipc"
 	"github.com/cwlindean/filetransfer/core/signaling"
 )
+
+var version = "1.0.0"
 
 var (
 	flagDrop    = flag.Bool("drop", false, "show the drop window instead of the tray receiver")
@@ -35,9 +38,9 @@ var (
 	flagLog     = flag.String("log", "", "append JSONL events to this file")
 	flagKey     = flag.String("key", "", "device key file (default: %LOCALAPPDATA%\\Ferry\\device.key)")
 	flagPair    = flag.String("paired", "", "trusted device table (default: %LOCALAPPDATA%\\Ferry\\paired.json)")
-	flagSig     = flag.String("signal", "wss://ferry.cwlindean.cn/signal", "signaling URL used to send via the relay")
+	flagSig     = flag.String("signal", client.DefaultSignalURL, "signaling URL used to send via the relay")
 	flagSTUN    = flag.String("stun", client.DefaultSTUN, "comma-separated UDP STUN servers for hole punching")
-	flagWebBase = flag.String("web", "https://ferry.cwlindean.cn", "public website and temp share base URL")
+	flagWebBase = flag.String("web", client.DefaultWebBaseURL, "public website and temp share base URL")
 	flagSend    = flag.String("send", "", "diagnostic: send these comma-separated files to the paired device, then exit")
 	flagAuto    = flag.String("startup", "", "diagnostic: on/off/status for the HKCU Run entry, then exit")
 	flagMain    = flag.Bool("main", false, "open the main window at startup (default behavior unless -silent)")
@@ -151,7 +154,28 @@ func main() {
 		}
 	}
 	if len(files) > 0 && *flagSend == "" {
-		res, peer, err := sendViaRelay(app, files)
+		if *flagKey == "" && *flagPair == "" {
+			if cl, derr := ipc.TryConnect(defaultStateDir()); derr == nil {
+				sres, serr := cl.Send(context.Background(), ipc.SendRequest{
+					Files:       files,
+					Interactive: true,
+				})
+				if serr != nil {
+					if strings.Contains(serr.Error(), "已取消") {
+						return
+					}
+					app.event("desktop.send_error", map[string]any{"error": serr.Error(), "ipc": true})
+					fmt.Fprintln(os.Stderr, "send:", serr)
+					os.Exit(1)
+				}
+				fmt.Printf("{\"ok\":true,\"to\":%q,\"path\":%q,\"bytes\":%d,\"chunks\":%d}\n", sres.Peer, sres.Path, sres.Bytes, sres.Chunks)
+				return
+			}
+		}
+		res, peer, cancelled, err := sendInteractive(app, files)
+		if cancelled {
+			return
+		}
 		if err != nil {
 			app.event("desktop.send_error", map[string]any{"error": err.Error()})
 			fmt.Fprintln(os.Stderr, "send:", err)
@@ -161,6 +185,18 @@ func main() {
 		return
 	}
 	if *flagSend != "" {
+		if *flagKey == "" && *flagPair == "" {
+			if cl, derr := ipc.TryConnect(defaultStateDir()); derr == nil {
+				sres, serr := cl.Send(context.Background(), ipc.SendRequest{Files: files})
+				if serr != nil {
+					app.event("desktop.send_error", map[string]any{"error": serr.Error(), "ipc": true})
+					fmt.Fprintln(os.Stderr, "send:", serr)
+					os.Exit(1)
+				}
+				fmt.Printf("{\"ok\":true,\"to\":%q,\"path\":%q,\"bytes\":%d,\"chunks\":%d}\n", sres.Peer, sres.Path, sres.Bytes, sres.Chunks)
+				return
+			}
+		}
 		res, peer, err := sendViaRelay(app, files)
 		if err != nil {
 			app.event("desktop.send_error", map[string]any{"error": err.Error()})
@@ -417,51 +453,10 @@ func localAppData() (string, error) {
 	return "", fmt.Errorf("LOCALAPPDATA is not set")
 }
 
-var migrateStateOnce sync.Once
-
-// defaultStateDir returns %LOCALAPPDATA%\Ferry (or ~/.ferry), migrating any
-// existing device.key and paired.json from the legacy ft directory once.
+// defaultStateDir delegates to client.DefaultStateDir so GUI, CLI, and MCP
+// share %LOCALAPPDATA%\Ferry (or ~/.ferry) cleanly.
 func defaultStateDir() string {
-	var dir, old string
-	if d, err := localAppData(); err == nil {
-		dir = filepath.Join(d, "Ferry")
-		old = filepath.Join(d, "ft")
-	} else {
-		h := homeDir()
-		if h == "" {
-			return "."
-		}
-		dir = filepath.Join(h, ".ferry")
-		old = filepath.Join(h, ".ft")
-	}
-	migrateStateOnce.Do(func() {
-		migrateLegacyState(old, dir)
-	})
-	return dir
-}
-
-func migrateLegacyState(oldDir, newDir string) {
-	if oldDir == "" || oldDir == newDir {
-		return
-	}
-	type item struct {
-		name string
-		mode os.FileMode
-	}
-	for _, it := range []item{{"device.key", 0o600}, {"paired.json", 0o644}} {
-		dst := filepath.Join(newDir, it.name)
-		if _, err := os.Stat(dst); err == nil {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(oldDir, it.name))
-		if err != nil {
-			continue
-		}
-		if err := os.MkdirAll(newDir, 0o755); err != nil {
-			return
-		}
-		_ = os.WriteFile(dst, data, it.mode)
-	}
+	return client.DefaultStateDir()
 }
 
 // defaultPairedPath keeps the trusted-device table next to the device key.

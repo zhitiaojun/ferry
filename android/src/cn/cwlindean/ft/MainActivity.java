@@ -279,15 +279,69 @@ public class MainActivity extends Activity {
     private String lastRejectedQR = "";
     private long lastRejectMs;
 
-    private final Runnable pollTask = new Runnable() {
+    private final TransferService.UiBridge uiBridge = new TransferService.UiBridge() {
         @Override
-        public void run() {
-            pollReceivedOnce();
-            pollActiveTransferOnce();
-            pollConnectionStatusOnce();
-            if (recvRunning) {
-                ui.postDelayed(this, 1500);
-            }
+        public void onServiceStateChanged(boolean running, String port, String error) {
+            ui.post(() -> {
+                if (setRecvBtn != null) {
+                    setRecvBtn.setEnabled(true);
+                }
+                recvRunning = running;
+                lanPort = port != null ? port : "";
+                if (running) {
+                    acquireMulticastLock();
+                    pollConnectionStatusOnce();
+                } else {
+                    releaseMulticastLock();
+                    signalState = "offline";
+                    cloudOnlineSet.clear();
+                    lanOnlineSet.clear();
+                }
+                if (error != null && !error.isEmpty() && !running) {
+                    toast("开启接收失败：" + error);
+                }
+                refreshReceiveUi();
+                refreshSettingsInfo();
+            });
+        }
+
+        @Override
+        public void onConnectionSnapshot(String connJson) {
+            ui.post(() -> applyConnectionStatusJson(connJson));
+        }
+
+        @Override
+        public void onTransferProgressSnapshot(String progressJson) {
+            ui.post(() -> applyActiveTransferJson(progressJson));
+        }
+
+        @Override
+        public void onFilesReceived(List<JSONObject> entries, boolean refreshPeers) {
+            ui.post(() -> {
+                for (int i = entries.size() - 1; i >= 0; i--) {
+                    JSONObject o = entries.get(i);
+                    ReceivedEntry re = new ReceivedEntry(
+                            o.optString("name", ""),
+                            o.optString("uri", ""),
+                            o.optString("mime", "application/octet-stream"),
+                            o.optString("via", ""),
+                            o.optLong("bytes", 0),
+                            o.optLong("ts", System.currentTimeMillis()),
+                            o.optString("dir", "recv"),
+                            o.optString("peer", ""));
+                    recentEntries.add(0, re);
+                }
+                while (recentEntries.size() > 30) {
+                    recentEntries.remove(recentEntries.size() - 1);
+                }
+                renderRecentList();
+                if (!entries.isEmpty()) {
+                    toast("已保存到「" + currentDownloadShortLabel() + "」：" + entries.get(0).optString("name", ""));
+                }
+                if (refreshPeers) {
+                    loadPairedPeers();
+                }
+            });
         }
     };
 
@@ -330,12 +384,28 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onStart() {
+        super.onStart();
+        TransferService.setUiBridge(uiBridge);
+        recvRunning = TransferService.isRecvRunning();
+        lanPort = TransferService.getLanPort();
+        if (recvRunning) {
+            acquireMulticastLock();
+        }
+        refreshReceiveUi();
+        refreshSettingsInfo();
+        loadRecentState();
+        pollConnectionStatusOnce();
+        pollActiveTransferOnce();
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
-        pollReceivedOnce();
         if (recvRunning) {
             ioPool.execute(() -> {
                 try {
+                    Mobile.updateNetworkHint(lanHint());
                     Mobile.reconnectAutoReceive();
                 } catch (Exception ignored) {
                 }
@@ -351,6 +421,14 @@ public class MainActivity extends Activity {
     protected void onPause() {
         stopCamera();
         super.onPause();
+    }
+
+    @Override
+    protected void onStop() {
+        TransferService.setUiBridge(null);
+        stopProgressPolling();
+        releaseMulticastLock();
+        super.onStop();
     }
 
     @Override
@@ -379,11 +457,10 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        TransferService.setUiBridge(null);
         dismissShareSheet(true);
         closePairSheet();
-        progressPollingActive = false;
-        ui.removeCallbacks(progressPollTask);
-        ui.removeCallbacks(pollTask);
+        stopProgressPolling();
         stopDotPulse();
         releaseMulticastLock();
         ioPool.shutdownNow();
@@ -1418,7 +1495,7 @@ public class MainActivity extends Activity {
                 new LinearLayout.LayoutParams(MATCH, WRAP));
         grp2.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
 
-        TextView verVal = label(Mobile.Version, 13, cOnSurfaceVariant, false);
+        TextView verVal = label(Mobile.getVersion(), 13, cOnSurfaceVariant, false);
         verVal.setTypeface(Typeface.MONOSPACE);
         grp2.addView(settingInfoRow("版本", verVal, null),
                 new LinearLayout.LayoutParams(MATCH, WRAP));
@@ -2428,17 +2505,51 @@ public class MainActivity extends Activity {
             openTempJoinSheet(payload.trim());
             return;
         }
+        if (payload.startsWith("ftpair://")) {
+            new AlertDialog.Builder(this)
+                    .setTitle("信任这台设备？")
+                    .setMessage("设备 ID：" + shortPeerId(payload) + "\n\n导入后该设备可向你发送文件。")
+                    .setNegativeButton("取消", (d, w) -> {
+                        scanSucceeded.set(false);
+                        if (pairDialog != null && pairDialog.isShowing() && pairMode == 0) {
+                            startCameraIfReady();
+                        }
+                    })
+                    .setPositiveButton("导入并信任", (d, w) -> {
+                        if (scanStatusLabel != null) {
+                            scanStatusLabel.setText("已识别二维码，正在导入…");
+                        }
+                        ioPool.execute(() -> {
+                            try {
+                                Mobile.pairImport(payload, pairedFile().getAbsolutePath());
+                                ui.post(() -> {
+                                    if (pairDialog != null && pairDialog.isShowing()) {
+                                        toast("配对成功");
+                                        loadPairedPeers();
+                                        closePairSheet();
+                                    }
+                                });
+                            } catch (Exception e) {
+                                ui.post(() -> onScannedPairError(payload, e.getMessage()));
+                            }
+                        });
+                    })
+                    .setOnCancelListener(d -> {
+                        scanSucceeded.set(false);
+                        if (pairDialog != null && pairDialog.isShowing() && pairMode == 0) {
+                            startCameraIfReady();
+                        }
+                    })
+                    .show();
+            return;
+        }
         if (scanStatusLabel != null) {
             scanStatusLabel.setText("已识别二维码，正在配对…");
         }
         final String myName = deviceName;
         new Thread(() -> {
             try {
-                if (payload.startsWith("ftpair://")) {
-                    Mobile.pairImport(payload, pairedFile().getAbsolutePath());
-                } else {
-                    Mobile.pairWithURINamed(SIGNAL_URL, keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(), payload, myName);
-                }
+                Mobile.pairWithURINamed(SIGNAL_URL, keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(), payload, myName);
                 ui.post(() -> {
                     if (pairDialog != null && pairDialog.isShowing()) {
                         toast("配对成功");
@@ -2447,21 +2558,23 @@ public class MainActivity extends Activity {
                     }
                 });
             } catch (Exception e) {
-                ui.post(() -> {
-                    lastRejectedQR = payload;
-                    lastRejectMs = SystemClock.uptimeMillis();
-                    scanSucceeded.set(false);
-                    String errMsg = e.getMessage() == null ? "配对失败" : e.getMessage();
-                    if (scanStatusLabel != null) {
-                        scanStatusLabel.setText(errMsg);
-                    }
-                    toast(errMsg);
-                    if (pairDialog != null && pairDialog.isShowing() && pairMode == 0) {
-                        startCameraIfReady();
-                    }
-                });
+                ui.post(() -> onScannedPairError(payload, e.getMessage()));
             }
         }).start();
+    }
+
+    private void onScannedPairError(String payload, String msg) {
+        lastRejectedQR = payload;
+        lastRejectMs = SystemClock.uptimeMillis();
+        scanSucceeded.set(false);
+        String errMsg = (msg == null || msg.trim().isEmpty()) ? "配对失败" : msg;
+        if (scanStatusLabel != null) {
+            scanStatusLabel.setText(errMsg);
+        }
+        toast(errMsg);
+        if (pairDialog != null && pairDialog.isShowing() && pairMode == 0) {
+            startCameraIfReady();
+        }
     }
 
     private void stopCamera() {
@@ -2574,79 +2687,21 @@ public class MainActivity extends Activity {
         if (setRecvBtn != null) {
             setRecvBtn.setEnabled(false);
         }
-        final String name = deviceName;
-        new Thread(() -> {
-            String lanAddr = "";
-            String autoErr = "";
-            try {
-                lanAddr = Mobile.startReceiverWithKey(name, inboxDir().getAbsolutePath(),
-                        keyFile().getAbsolutePath(), lanHint());
-            } catch (Exception e) {
-                Log.e(TAG, "startReceiverWithKey", e);
-            }
-            try {
-                Mobile.startAutoReceive(name, inboxDir().getAbsolutePath(), SIGNAL_URL,
-                        keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(), lanHint(), "");
-            } catch (Exception e) {
-                Log.e(TAG, "startAutoReceive", e);
-                autoErr = e.getMessage();
-            }
-            final String addr = lanAddr;
-            final String err = autoErr;
-            ui.post(() -> {
-                if (setRecvBtn != null) {
-                    setRecvBtn.setEnabled(true);
-                }
-                if (addr.isEmpty() && err != null && !err.isEmpty()) {
-                    toast("开启接收失败：" + err);
-                    return;
-                }
-                recvRunning = true;
-                lanPort = extractPort(addr);
-                acquireMulticastLock();
-                startKeepAlive(lanPort.isEmpty() ? "正在等待接收文件" : "接收中 · 端口 " + lanPort);
-                refreshReceiveUi();
-                refreshSettingsInfo();
-                pollConnectionStatusOnce();
-                ui.removeCallbacks(pollTask);
-                ui.postDelayed(pollTask, 1000);
-            });
-        }).start();
+        Intent i = new Intent(this, TransferService.class).setAction(TransferService.ACTION_START_RECV);
+        if (Build.VERSION.SDK_INT >= 26) {
+            startForegroundService(i);
+        } else {
+            startService(i);
+        }
     }
 
     private void stopAllReceive() {
         if (setRecvBtn != null) {
             setRecvBtn.setEnabled(false);
         }
-        ui.removeCallbacks(pollTask);
-        new Thread(() -> {
-            try {
-                Mobile.stopReceiver();
-                Mobile.stopAutoReceive();
-                Mobile.stopRelayReceiver();
-                Mobile.stopPunchReceiver();
-            } catch (Exception e) {
-                Log.e(TAG, "stopAllReceive", e);
-            }
-            pollReceivedOnce();
-            ui.post(() -> {
-                if (setRecvBtn != null) {
-                    setRecvBtn.setEnabled(true);
-                }
-                recvRunning = false;
-                lanPort = "";
-                signalState = "offline";
-                cloudOnlineSet.clear();
-                lanOnlineSet.clear();
-                releaseMulticastLock();
-                if (!webRunning) {
-                    stopKeepAlive();
-                }
-                refreshReceiveUi();
-                refreshSettingsInfo();
-                toast("已关闭后台接收");
-            });
-        }).start();
+        Intent i = new Intent(this, TransferService.class).setAction(TransferService.ACTION_STOP_RECV);
+        startService(i);
+        toast("正在关闭后台接收…");
     }
 
     private final Runnable tempPollTask = new Runnable() {
@@ -3112,55 +3167,60 @@ public class MainActivity extends Activity {
         ioPool.execute(() -> {
             try {
                 String raw = Mobile.connectionStatus();
-                if (raw == null || raw.trim().isEmpty()) {
-                    return;
-                }
-                JSONObject o = new JSONObject(raw);
-                final String st = o.optString("signal_state", "offline");
-                final Set<String> nextCloud = new HashSet<>();
-                JSONArray cp = o.optJSONArray("online_peers");
-                if (cp != null) {
-                    for (int i = 0; i < cp.length(); i++) {
-                        String id = cp.optString(i, "");
-                        if (!id.isEmpty()) {
-                            nextCloud.add(id);
-                        }
-                    }
-                }
-                final Set<String> nextLan = new HashSet<>();
-                JSONObject lp = o.optJSONObject("lan_peers");
-                if (lp != null) {
-                    Iterator<String> it = lp.keys();
-                    while (it.hasNext()) {
-                        String id = it.next();
-                        if (!id.isEmpty() && !lp.optString(id, "").isEmpty()) {
-                            nextLan.add(id);
-                        }
-                    }
-                }
-                ui.post(() -> {
-                    boolean changed = !st.equals(signalState)
-                            || !nextCloud.equals(cloudOnlineSet)
-                            || !nextLan.equals(lanOnlineSet);
-                    if (!changed) {
-                        return;
-                    }
-                    signalState = st;
-                    cloudOnlineSet.clear();
-                    cloudOnlineSet.addAll(nextCloud);
-                    lanOnlineSet.clear();
-                    lanOnlineSet.addAll(nextLan);
-                    refreshReceiveUi();
-                    if (activePage == 1) {
-                        renderDevicesPage();
-                    }
-                    if (shareDialog != null && shareDialog.isShowing()) {
-                        refreshShareSheetPeers();
-                    }
-                });
+                ui.post(() -> applyConnectionStatusJson(raw));
             } catch (Exception ignored) {
             }
         });
+    }
+
+    private void applyConnectionStatusJson(String raw) {
+        if (raw == null || raw.trim().isEmpty()) {
+            return;
+        }
+        try {
+            JSONObject o = new JSONObject(raw);
+            final String st = o.optString("signal_state", "offline");
+            final Set<String> nextCloud = new HashSet<>();
+            JSONArray cp = o.optJSONArray("online_peers");
+            if (cp != null) {
+                for (int i = 0; i < cp.length(); i++) {
+                    String id = cp.optString(i, "");
+                    if (!id.isEmpty()) {
+                        nextCloud.add(id);
+                    }
+                }
+            }
+            final Set<String> nextLan = new HashSet<>();
+            JSONObject lp = o.optJSONObject("lan_peers");
+            if (lp != null) {
+                Iterator<String> it = lp.keys();
+                while (it.hasNext()) {
+                    String id = it.next();
+                    if (!id.isEmpty() && !lp.optString(id, "").isEmpty()) {
+                        nextLan.add(id);
+                    }
+                }
+            }
+            boolean changed = !st.equals(signalState)
+                    || !nextCloud.equals(cloudOnlineSet)
+                    || !nextLan.equals(lanOnlineSet);
+            if (!changed) {
+                return;
+            }
+            signalState = st;
+            cloudOnlineSet.clear();
+            cloudOnlineSet.addAll(nextCloud);
+            lanOnlineSet.clear();
+            lanOnlineSet.addAll(nextLan);
+            refreshReceiveUi();
+            if (activePage == 1) {
+                renderDevicesPage();
+            }
+            if (shareDialog != null && shareDialog.isShowing()) {
+                refreshShareSheetPeers();
+            }
+        } catch (Exception ignored) {
+        }
     }
 
     private void refreshTargetStatusUi() {
@@ -3274,45 +3334,36 @@ public class MainActivity extends Activity {
     // ================= Receive Poll -> Public Download or Custom Directory =================
 
     private void pollReceivedOnce() {
-        ioPool.execute(() -> {
-            try {
-                String raw = Mobile.pollReceived();
-                if (raw == null || raw.equals("[]") || raw.trim().isEmpty()) {
-                    return;
-                }
-                JSONArray arr = new JSONArray(raw);
-                boolean refreshPeers = false;
-                for (int i = 0; i < arr.length(); i++) {
-                    JSONObject o = arr.getJSONObject(i);
-                    String fileName = o.optString("file", "");
-                    String fullPath = o.optString("full_path", "");
-                    String via = o.optString("via", "");
-                    String peer = o.optString("peer", "");
-                    long bytes = o.optLong("bytes", 0);
-                    long ts = o.optLong("ts", System.currentTimeMillis());
-                    if (fileName.isEmpty() || fullPath.isEmpty()) {
-                        continue;
-                    }
-                    File src = new File(fullPath);
-                    if (!src.isFile()) {
-                        continue;
-                    }
-                    if (!peer.isEmpty()) {
-                        refreshPeers = true;
-                    }
-                    exportStagedFile(src, fileName, via, peer, bytes, ts);
-                }
-                if (refreshPeers) {
-                    loadPairedPeers();
-                }
-            } catch (Exception e) {
-                Log.w(TAG, "pollReceivedOnce", e);
-            }
-        });
+        if (TransferService.isRecvRunning()) {
+            Intent i = new Intent(this, TransferService.class).setAction(TransferService.ACTION_SWEEP_INBOX);
+            startService(i);
+            return;
+        }
+        sweepLeftoverInbox();
     }
 
     private void sweepLeftoverInbox() {
         ioPool.execute(() -> {
+            try {
+                String raw = Mobile.pollReceived();
+                if (raw != null && !raw.equals("[]") && !raw.trim().isEmpty()) {
+                    JSONArray arr = new JSONArray(raw);
+                    for (int i = 0; i < arr.length(); i++) {
+                        JSONObject o = arr.getJSONObject(i);
+                        String fileName = o.optString("file", "");
+                        String fullPath = o.optString("full_path", "");
+                        if (!fileName.isEmpty() && !fullPath.isEmpty()) {
+                            File src = new File(fullPath);
+                            if (src.isFile()) {
+                                exportStagedFile(src, fileName, o.optString("via", ""), o.optString("peer", ""),
+                                        o.optLong("bytes", 0), o.optLong("ts", System.currentTimeMillis()));
+                            }
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "sweepPoll", e);
+            }
             File[] files = inboxDir().listFiles();
             if (files == null) {
                 return;
@@ -3326,28 +3377,12 @@ public class MainActivity extends Activity {
     }
 
     private void exportStagedFile(File src, String fileName, String via, String peer, long bytes, long ts) {
-        String mime = guessMime(fileName);
-        String savedUri = null;
-        String destLabel = "下载";
-        String customUri = customDownloadTreeUri;
-        if (customUri != null && !customUri.isEmpty()) {
-            savedUri = saveToCustomTree(Uri.parse(customUri), src, fileName, mime);
-            if (savedUri != null) {
-                destLabel = currentDownloadShortLabel();
-            }
-        }
-        if (savedUri == null) {
-            savedUri = saveToPublicDownloads(src, fileName, mime);
-            destLabel = "下载";
-        }
-        if (savedUri == null) {
+        String[] saved = TransferService.exportStagedFile(this, src, fileName);
+        if (saved == null) {
             return;
         }
-        if (!src.delete()) {
-            Log.w(TAG, "could not delete staged file: " + src);
-        }
-        final String savedLabel = destLabel;
-        final ReceivedEntry entry = new ReceivedEntry(fileName, savedUri, mime, via, bytes, ts, "recv", peer);
+        final String savedLabel = saved[1];
+        final ReceivedEntry entry = new ReceivedEntry(fileName, saved[0], TransferService.guessMime(fileName), via, bytes, ts, "recv", peer);
         ui.post(() -> {
             addRecentEntry(entry);
             toast("已保存到「" + savedLabel + "」：" + fileName);
@@ -3632,9 +3667,7 @@ public class MainActivity extends Activity {
                     o.put("peer", r.peer);
                     arr.put(o);
                 }
-                try (OutputStream out = new FileOutputStream(recentFile())) {
-                    out.write(arr.toString().getBytes("UTF-8"));
-                }
+                TransferService.saveRecentList(this, arr);
             } catch (Exception e) {
                 Log.w(TAG, "persistRecentState", e);
             }
@@ -5299,7 +5332,9 @@ public class MainActivity extends Activity {
     }
 
     private void startKeepAlive(String text) {
-        Intent i = new Intent(this, TransferService.class).putExtra("text", text);
+        Intent i = new Intent(this, TransferService.class)
+                .setAction(TransferService.ACTION_UPDATE_TEXT)
+                .putExtra("text", text);
         if (Build.VERSION.SDK_INT >= 26) {
             startForegroundService(i);
         } else {
@@ -5308,7 +5343,9 @@ public class MainActivity extends Activity {
     }
 
     private void stopKeepAlive() {
-        stopService(new Intent(this, TransferService.class));
+        if (!TransferService.isRecvRunning()) {
+            stopService(new Intent(this, TransferService.class));
+        }
     }
 
     private void acquireMulticastLock() {
@@ -5354,38 +5391,7 @@ public class MainActivity extends Activity {
     }
 
     private String lanHint() {
-        try {
-            List<NetworkInterface> nifs = Collections.list(NetworkInterface.getNetworkInterfaces());
-            for (int pass = 0; pass < 2; pass++) {
-                for (NetworkInterface ni : nifs) {
-                    String n = ni.getName();
-                    if (n == null || !ni.isUp() || ni.isLoopback() || ni.isVirtual()) {
-                        continue;
-                    }
-                    if (n.startsWith("rmnet") || n.startsWith("p2p") || n.startsWith("dummy")
-                            || n.startsWith("tun") || n.startsWith("ip6tnl")) {
-                        continue;
-                    }
-                    if (pass == 0 && !n.toLowerCase(Locale.US).startsWith("wlan")) {
-                        continue;
-                    }
-                    for (InterfaceAddress ia : ni.getInterfaceAddresses()) {
-                        InetAddress a = ia.getAddress();
-                        if (a instanceof Inet4Address && !a.isLoopbackAddress() && !a.isLinkLocalAddress()) {
-                            JSONObject o = new JSONObject();
-                            o.put("name", n);
-                            o.put("index", ni.getIndex());
-                            o.put("ip", a.getHostAddress());
-                            o.put("prefix", ia.getNetworkPrefixLength());
-                            return o.toString();
-                        }
-                    }
-                }
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "lanHint", e);
-        }
-        return "";
+        return TransferService.lanHint(this);
     }
 
     private static boolean isAutoTarget(String peer) {

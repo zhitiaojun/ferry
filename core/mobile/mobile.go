@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cwlindean/filetransfer/core/client"
 	"github.com/cwlindean/filetransfer/core/discovery"
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/logging"
@@ -29,8 +31,8 @@ import (
 	"github.com/cwlindean/filetransfer/core/transfer"
 )
 
-// Version is the core version shown in the Android UI.
-const Version = "1.0.0"
+// Version is the core version shown in the Android UI (overridden via -ldflags in release builds).
+var Version = "1.0.0"
 
 type lanPeerEntry struct {
 	TCPAddr  string
@@ -51,9 +53,9 @@ type receiver struct {
 	devID  [32]byte
 	ln     *pathmgr.TCP
 	lanLst *discovery.Listener
-	cancel context.CancelFunc
-	logger *logging.Logger
-	logf   *os.File
+	cancel    context.CancelFunc
+	logger    *logging.Logger
+	logCloser io.Closer
 
 	stopOnce sync.Once
 }
@@ -110,20 +112,20 @@ func startReceiver(name, outDir, keyPath, hintJSON string) (string, error) {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return "", fmt.Errorf("create output dir: %w", err)
 	}
-	logf, err := os.OpenFile(stateLogPath(outDir, "events.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return "", fmt.Errorf("open log: %w", err)
-	}
-	logger := logging.New(logf)
+	logger, logCloser := openRotatingLoggerFile(outDir)
 	ln, err := pathmgr.NewTCPListener("0.0.0.0:0")
 	if err != nil {
-		_ = logf.Close()
+		if logCloser != nil {
+			_ = logCloser.Close()
+		}
 		return "", err
 	}
 	port := portOf(ln.Addr())
 	if port == 0 {
 		_ = ln.Close()
-		_ = logf.Close()
+		if logCloser != nil {
+			_ = logCloser.Close()
+		}
 		return "", fmt.Errorf("receiver: bad listen address %q", ln.Addr())
 	}
 
@@ -135,10 +137,10 @@ func startReceiver(name, outDir, keyPath, hintJSON string) (string, error) {
 		Log:      logger,
 		Hint:     hint,
 	})
-	if lerr != nil {
+	if lerr != nil && logger != nil {
 		logger.Event("discovery.listen.error", map[string]any{"error": lerr.Error()})
 	}
-	r := &receiver{name: name, outDir: outDir, devID: devID, ln: ln, lanLst: lanLst, cancel: cancel, logger: logger, logf: logf}
+	r := &receiver{name: name, outDir: outDir, devID: devID, ln: ln, lanLst: lanLst, cancel: cancel, logger: logger, logCloser: logCloser}
 	rcv = r
 	go func() {
 		err := discovery.Announce(ctx, discovery.Config{
@@ -156,8 +158,9 @@ func startReceiver(name, outDir, keyPath, hintJSON string) (string, error) {
 		lanPeersMu.Lock()
 		lanListening = true
 		lanPeersMu.Unlock()
+		notifyConnectionChanged()
 		go func() {
-			if err := lanLst.Run(ctx); err != nil && ctx.Err() == nil {
+			if err := lanLst.Run(ctx); err != nil && ctx.Err() == nil && logger != nil {
 				logger.Event("discovery.listen.run_error", map[string]any{"error": err.Error()})
 			}
 		}()
@@ -173,10 +176,12 @@ func syncLANPeers(ctx context.Context, lst *discovery.Listener) {
 	for {
 		devs := lst.Devices()
 		now := time.Now()
+		changed := false
 		lanPeersMu.Lock()
 		for id, entry := range lanPeers {
 			if now.Sub(entry.LastSeen) > discovery.DeviceTTL {
 				delete(lanPeers, id)
+				changed = true
 			}
 		}
 		for _, d := range devs {
@@ -184,9 +189,15 @@ func syncLANPeers(ctx context.Context, lst *discovery.Listener) {
 				continue
 			}
 			idHex := hex.EncodeToString(d.DeviceID[:])
+			if prev, ok := lanPeers[idHex]; !ok || prev.TCPAddr != d.TCPAddr {
+				changed = true
+			}
 			lanPeers[idHex] = lanPeerEntry{TCPAddr: d.TCPAddr, LastSeen: d.LastSeen}
 		}
 		lanPeersMu.Unlock()
+		if changed {
+			notifyConnectionChanged()
+		}
 
 		select {
 		case <-ctx.Done():
@@ -247,7 +258,10 @@ func (r *receiver) stop() {
 		lanListening = false
 		lanPeers = map[string]lanPeerEntry{}
 		lanPeersMu.Unlock()
-		_ = r.logf.Close()
+		notifyConnectionChanged()
+		if r.logCloser != nil {
+			_ = r.logCloser.Close()
+		}
 	})
 }
 
@@ -396,6 +410,11 @@ func sendFilesLAN(ctx context.Context, peerAddr, name string, devID [32]byte, pa
 	defer cancel()
 	nc, err := d.Dial(dctx)
 	if err != nil {
+		res.Error = err.Error()
+		return res, err
+	}
+	if err := client.CheckLANPath(nc); err != nil {
+		_ = nc.Close()
 		res.Error = err.Error()
 		return res, err
 	}

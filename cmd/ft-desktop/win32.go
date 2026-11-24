@@ -108,6 +108,8 @@ const (
 	wmApp        = 0x8000
 	wmTray       = wmApp + 1
 	wmShowMain   = wmApp + 2
+	wmPickPeer   = wmApp + 3
+	wmOpenPair   = wmApp + 4
 
 	htCaption     = 2
 	htLeft        = 10

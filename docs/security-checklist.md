@@ -18,7 +18,7 @@
 |---|---|---|
 | 单帧载荷 ≤ 1 MiB | `core/proto/frame.go` `MaxPayload`，`ReadFrame` 超限报错 | `core/proto` 单测与金标向量 `invalid.json`（`frame_too_large`） |
 | 信令信封 ≤ 64 KiB 且版本必须为 1 | `core/signaling/message.go` `Parse` | `core/signaling/message_test.go` |
-| WebSocket 读上限：信令/中继 1 MiB，设备侧 web 房间 4 MiB（浏览器 64 KiB 帧） | `server/server.go` `SetReadLimit`、`cmd/ft/webhost.go` | 中继 10 MB 上传实测（`evidence/stage2/20261108-1521-web-upload10m.log`） |
+| WebSocket 读上限：信令/中继 1 MiB，设备侧 web 房间 4 MiB（浏览器 64 KiB 帧） | `server/server.go` `SetReadLimit`、`core/tempshare/webhost.go` | 中继 10 MB 上传实测（`evidence/stage2/20261108-1521-web-upload10m.log`） |
 
 ## 3. 清单与内存
 
@@ -28,7 +28,7 @@
 ## 4. 日志脱敏
 
 - 日志只写设备 id（截断 12 字符）、传输 id、字节数、路径档位、错误码；不写私钥、令牌、pair 载荷、文件内容。
-- 核对方式：`grep -rn "log.Event" server cmd/ft core | grep -iE "token|payload|secret|key"` 应只命中字段名而非取值；PAKE 的 `pair_begin/pair_relay` 载荷不落日志。
+- 核对方式：`grep -rn "log.Event" server cmd/ferry core | grep -iE "token|payload|secret|key"` 应只命中字段名而非取值；PAKE 的 `pair_begin/pair_relay` 载荷不落日志。
 - 服务器 `server.relay_open` 记录 `from/to/transfer`，`relay.close` 记录字节数（R7 反证用），均不含令牌。
 
 ## 5. 私钥存储
@@ -54,7 +54,7 @@
 | Web 6 位码查询 | 20 次/5 分钟，200 ms 假延迟，不返回设备列表 | 同上 |
 | Web 设备注册有效期 | 10 分钟心跳续期 | `WebLimits.DeviceTTL` |
 
-## 7. 仍未覆盖（M6 剩余）
+## 7. 已收尾与边界说明
 
-- 安卓端“陌生设备确认弹窗”：目前 App 只做 URI 导入，PAKE 配对走 CLI；需在 App 内加输入 6 位码 + 确认对话框。
-- 按 IP 的限频目前用连接设备 id 计数（信令层已登录设备），未对未登录连接的 `pair` 前置流量限频；如需可按 IP 在反代层加 limit_req。
+- 安卓端已完成 App 内 6 位码 SPAKE2 配对、`ferry://` 扫码与 `ftpair://` 导入/扫码二次确认弹窗。
+- 按 IP 的限频目前已覆盖登录限频（`Server.allowLogin`）与已登录设备的配对限频（`Server.allowPair`）；未登录握手入口的速率可在反代层按需追加 `limit_req`。

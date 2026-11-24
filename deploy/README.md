@@ -44,8 +44,8 @@ cp /etc/letsencrypt/live/ft.cwlindean.cn/fullchain.pem .../ssl/
 cp /etc/letsencrypt/live/ft.cwlindean.cn/privkey.pem   .../ssl/
 nginx -t && nginx -s reload
 
-# 5. 自测
-curl -s https://ft.cwlindean.cn/healthz
+# 5. 自测（STUN 端口需在安全组放行 40000-40001/udp）
+curl -s https://ferry.cwlindean.cn/healthz
 ```
 
 ## 回滚

@@ -6,27 +6,17 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
+	"github.com/cwlindean/filetransfer/core/client"
 	"github.com/cwlindean/filetransfer/core/identity"
 )
 
-// defaultPairedPath is ~/.ft/paired.json.
-func defaultPairedPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "paired.json"
-	}
-	return filepath.Join(home, ".ft", "paired.json")
-}
+func defaultPairedPath() string { return client.DefaultPairedPath() }
 
 // runPair prints this device's pairing URI, imports a peer's URI, or lists the
-// trusted peers. The URI is the payload a QR code would carry (protocol §8.6);
-// the scanner proves the one-time secret in-band once pairing lands (M6).
+// trusted peers.
 func runPair(args []string) int {
-	// The one-time-code flow has its own flag set; keep `ft pair --show/--add`
-	// unchanged for QR based pairing.
 	for _, a := range args {
 		if a == "--code" || a == "-code" || strings.HasPrefix(a, "--code=") || strings.HasPrefix(a, "-code=") {
 			return runPairPake(args)
@@ -54,12 +44,12 @@ func runPair(args []string) int {
 	case *show:
 		key, err := loadDeviceKey(*keyPath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ft: %v\n", err)
+			fmt.Fprintf(os.Stderr, "ferry: %v\n", err)
 			return 1
 		}
 		secret := make([]byte, identity.PairSecretLen)
 		if _, err := rand.Read(secret); err != nil {
-			fmt.Fprintf(os.Stderr, "ft: read random: %v\n", err)
+			fmt.Fprintf(os.Stderr, "ferry: read random: %v\n", err)
 			return 1
 		}
 		uri := identity.PairURI(key.ID(), key.Public(), *name, secret)
@@ -75,20 +65,20 @@ func runPair(args []string) int {
 	case *add != "":
 		peer, secret, err := identity.ParsePairURI(*add)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ft: %v\n", err)
+			fmt.Fprintf(os.Stderr, "ferry: %v\n", err)
 			return 1
 		}
 		store, err := identity.LoadPaired(*pairedPath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ft: %v\n", err)
+			fmt.Fprintf(os.Stderr, "ferry: %v\n", err)
 			return 1
 		}
 		if err := store.Add(peer); err != nil {
-			fmt.Fprintf(os.Stderr, "ft: %v\n", err)
+			fmt.Fprintf(os.Stderr, "ferry: %v\n", err)
 			return 1
 		}
 		if err := store.Save(); err != nil {
-			fmt.Fprintf(os.Stderr, "ft: save paired table: %v\n", err)
+			fmt.Fprintf(os.Stderr, "ferry: save paired table: %v\n", err)
 			return 1
 		}
 		emit(map[string]any{
@@ -104,7 +94,7 @@ func runPair(args []string) int {
 	case *listFlag:
 		store, err := identity.LoadPaired(*pairedPath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ft: %v\n", err)
+			fmt.Fprintf(os.Stderr, "ferry: %v\n", err)
 			return 1
 		}
 		devices := store.List()
@@ -112,7 +102,7 @@ func runPair(args []string) int {
 		return 0
 
 	default:
-		fmt.Fprintln(os.Stderr, "ft: pair needs --show, --add <uri> or --list")
+		fmt.Fprintln(os.Stderr, "ferry: pair needs --show, --add <uri>, --list, or --code <6digits>")
 		return 2
 	}
 }

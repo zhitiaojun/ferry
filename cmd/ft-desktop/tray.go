@@ -15,7 +15,9 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/cwlindean/filetransfer/core/discovery"
 	"github.com/cwlindean/filetransfer/core/identity"
+	"github.com/cwlindean/filetransfer/core/ipc"
 	"github.com/cwlindean/filetransfer/core/pairing"
 	"github.com/cwlindean/filetransfer/core/proto"
 	"github.com/cwlindean/filetransfer/core/session"
@@ -81,6 +83,16 @@ func runTray(a *app, keyPath string) int {
 	presCtx, stopPresence := context.WithCancel(context.Background())
 	defer stopPresence()
 	a.startPresence(presCtx, key)
+
+	if ipcSrv, ierr := ipc.Start(defaultStateDir(), &desktopIPC{app: a, key: key}, ipc.StartOptions{
+		KeyPath:    keyPath,
+		PairedPath: a.pairedPath,
+	}); ierr != nil {
+		a.event("desktop.ipc_error", map[string]any{"error": ierr.Error()})
+	} else {
+		defer ipcSrv.Close()
+		a.event("desktop.ipc_ready", map[string]any{"addr": ipcSrv.Addr()})
+	}
 
 	// Tray window + icon.
 	if !t.createWindow() {
@@ -177,7 +189,7 @@ func (t *tray) addIcon() {
 		uCallbackMessage: wmTray,
 		hIcon:            loadAppIcon(32),
 	}
-	utf16Into(nid.szTip[:], "轻渡 Ferry：局域网接收中，右键菜单")
+	utf16Into(nid.szTip[:], "轻渡 Ferry：接收中，右键打开菜单")
 	nid.cbSize = uint32(unsafe.Sizeof(nid))
 	procShellNotifyIconW.Call(nimAdd, uintptr(unsafe.Pointer(&nid)))
 	t.nid = nid
@@ -280,10 +292,17 @@ func (t *tray) command(id uint16) {
 }
 
 func localAddr(port int) string {
+	if ifaces, err := discovery.Eligible(); err == nil {
+		for _, ifc := range ifaces {
+			if ip4 := ifc.IP.To4(); ip4 != nil {
+				return fmt.Sprintf("%s:%d", ip4.String(), port)
+			}
+		}
+	}
 	addrs, _ := net.InterfaceAddrs()
 	for _, a := range addrs {
 		ipn, ok := a.(*net.IPNet)
-		if !ok || ipn.IP.IsLoopback() || ipn.IP.To4() == nil {
+		if !ok || ipn.IP.IsLoopback() || ipn.IP.To4() == nil || discovery.IsTunnelFakeIP(ipn.IP) {
 			continue
 		}
 		return fmt.Sprintf("%s:%d", ipn.IP.String(), port)
@@ -383,6 +402,14 @@ func trayWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintpt
 	case wmShowMain:
 		if trayHandle != nil {
 			openMainWindow(trayHandle.app)
+		}
+		return 0
+	case wmPickPeer:
+		handleUIPickPeer()
+		return 0
+	case wmOpenPair:
+		if trayHandle != nil {
+			openPairWindow(existingMainWindow(), trayHandle.app)
 		}
 		return 0
 	case wmDestroy:
