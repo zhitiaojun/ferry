@@ -24,8 +24,10 @@ import (
 )
 
 const (
-	punchHeadStart      = 2 * time.Second
+	punchHeadStart      = 600 * time.Millisecond
 	punchMinBytesPerSec = 625_000
+	hotUpgradeMinBytes  = 4 << 20
+	hotUpgradeTimeout   = 10 * time.Second
 	relayFallbackWait   = 8 * time.Second
 )
 
@@ -502,6 +504,19 @@ func autoServe(ctx, rootCtx context.Context, key *identity.Key, name, outDir, si
 	}
 	updateActiveTransfer(txSeq, "racing", "", "", "", 0, 0, -1, 0)
 
+	var peerCandsMu sync.Mutex
+	var savedPeerCands []signaling.Candidate
+	savePeerCands := func(cs []signaling.Candidate) {
+		peerCandsMu.Lock()
+		savedPeerCands = append([]signaling.Candidate(nil), cs...)
+		peerCandsMu.Unlock()
+	}
+	getSavedPeerCands := func() []signaling.Candidate {
+		peerCandsMu.Lock()
+		defer peerCandsMu.Unlock()
+		return append([]signaling.Candidate(nil), savedPeerCands...)
+	}
+
 	punchAttempt := pathmgr.Attempt[*session.Session]{
 		Name: "punch",
 		Fn: func(actx context.Context) (*session.Session, error) {
@@ -522,6 +537,10 @@ func autoServe(ctx, rootCtx context.Context, key *identity.Key, name, outDir, si
 						return nil, err
 					}
 					peerCands = c.Candidates
+					if peerCands == nil {
+						peerCands = []signaling.Candidate{}
+					}
+					savePeerCands(peerCands)
 				}
 			}
 			peerLocal := localCandidates(peerCands)
@@ -586,6 +605,91 @@ func autoServe(ctx, rootCtx context.Context, key *identity.Key, name, outDir, si
 	if logger != nil {
 		logger.Event("path.selected", map[string]any{"path": winner, "peer": truncID(req.FromDevice)})
 	}
+
+	type mobileUpgradePair struct {
+		sess    *session.Session
+		cleanup func()
+	}
+	var upPairCh chan mobileUpgradePair
+	var upDone chan struct{}
+	var upgradedCleanup func()
+	defer func() {
+		if upDone != nil {
+			<-upDone
+		}
+		if upPairCh != nil {
+			for {
+				select {
+				case up := <-upPairCh:
+					if up.sess != nil {
+						_ = up.sess.Close()
+					}
+					if up.cleanup != nil {
+						up.cleanup()
+					}
+				default:
+					goto drainedMobRecv
+				}
+			}
+		}
+	drainedMobRecv:
+		if upgradedCleanup != nil {
+			upgradedCleanup()
+		}
+	}()
+
+	if winner == "relay" && initTotal >= hotUpgradeMinBytes &&
+		(sess.Peer.Capabilities&proto.CapHotUpgrade) != 0 && req.SessionID != "" {
+		bgCtx, bgCancel := context.WithTimeout(ctx, hotUpgradeTimeout)
+		defer bgCancel()
+		upPairCh = make(chan mobileUpgradePair, 1)
+		upDone = make(chan struct{})
+		localMap := g.Mapping
+		go func() {
+			defer close(upDone)
+			peerCands := getSavedPeerCands()
+			if peerCands == nil {
+				waitC := time.NewTimer(2 * time.Second)
+				select {
+				case <-bgCtx.Done():
+					waitC.Stop()
+					return
+				case <-waitC.C:
+					return
+				case ce := <-cands:
+					waitC.Stop()
+					if c, derr := signaling.Decode[signaling.Candidates](ce); derr == nil {
+						peerCands = c.Candidates
+					}
+				}
+			}
+			peerLocal := localCandidates(peerCands)
+			if len(punch.Resolve(peerLocal)) == 0 {
+				return
+			}
+			bpCfg := punch.BirthdayConfig{
+				SelfID:         key.ID(),
+				PeerID:         parseDeviceID(req.FromDevice),
+				SessionID:      req.SessionID,
+				PeerCandidates: peerLocal,
+				LocalMapping:   localMap,
+				Log:            logger,
+			}
+			upS, upCl, berr := punch.BirthdayConnect(bgCtx, bpCfg, key, peerPub, sessionParams(key, name))
+			if berr != nil {
+				return
+			}
+			select {
+			case upPairCh <- mobileUpgradePair{sess: upS, cleanup: upCl}:
+			default:
+				_ = upS.Close()
+				if upCl != nil {
+					upCl()
+				}
+			}
+		}()
+	}
+
 	tcfg := transfer.Config{
 		ChunkSize: 0, Timeout: 30 * time.Second, Log: logger,
 		TransferID: hex16(req.TransferID),
@@ -594,6 +698,47 @@ func autoServe(ctx, rootCtx context.Context, key *identity.Key, name, outDir, si
 		},
 	}
 	res, err := transfer.Receive(sess, outDir, tcfg)
+	if err != nil && winner == "relay" && upPairCh != nil {
+		var remote *session.RemoteError
+		wantsSwitch := errors.As(err, &remote) && remote.Code == proto.CodePathSwitch
+		var up mobileUpgradePair
+		gotUp := false
+		if wantsSwitch {
+			wt := time.NewTimer(3 * time.Second)
+			select {
+			case <-ctx.Done():
+				wt.Stop()
+			case <-upDone:
+				wt.Stop()
+				select {
+				case up = <-upPairCh:
+					gotUp = up.sess != nil
+				default:
+				}
+			case up = <-upPairCh:
+				wt.Stop()
+				gotUp = up.sess != nil
+			case <-wt.C:
+			}
+		} else {
+			select {
+			case up = <-upPairCh:
+				gotUp = up.sess != nil
+			default:
+			}
+		}
+		if gotUp {
+			_ = sess.Close()
+			sess = up.sess
+			upgradedCleanup = up.cleanup
+			winner = "punch"
+			if logger != nil {
+				logger.Event("path.hot_upgrade_punch", map[string]any{"peer": truncID(req.FromDevice)})
+			}
+			updateActiveTransfer(txSeq, "transferring", "punch", peerName, "", 0, 0, -1, 0)
+			res, err = transfer.Receive(sess, outDir, tcfg)
+		}
+	}
 	if err != nil && winner == "punch" {
 		_ = sess.Close()
 		updateActiveTransfer(txSeq, "connecting", "relay", peerName, "", 0, 0, -1, 0)
@@ -901,10 +1046,78 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 	if logger != nil {
 		logger.Event("path.selected", map[string]any{"path": winner, "peer": truncID(toID)})
 	}
+
+	type mobileSendUpgradePair struct {
+		sess    *session.Session
+		cleanup func()
+	}
+	var upgradeSig chan struct{}
+	var upPairCh chan mobileSendUpgradePair
+	var upDone chan struct{}
+	var upgradedCleanup func()
+	defer func() {
+		if upDone != nil {
+			<-upDone
+		}
+		if upPairCh != nil {
+			for {
+				select {
+				case up := <-upPairCh:
+					if up.sess != nil {
+						_ = up.sess.Close()
+					}
+					if up.cleanup != nil {
+						up.cleanup()
+					}
+				default:
+					goto drainedMobSend
+				}
+			}
+		}
+	drainedMobSend:
+		if upgradedCleanup != nil {
+			upgradedCleanup()
+		}
+	}()
+
+	if winner == "relay" && totalBytes >= hotUpgradeMinBytes &&
+		(sess.Peer.Capabilities&proto.CapHotUpgrade) != 0 && len(peerAddrs) > 0 {
+		bgCtx, bgCancel := context.WithTimeout(ctx, hotUpgradeTimeout)
+		defer bgCancel()
+		upgradeSig = make(chan struct{})
+		upPairCh = make(chan mobileSendUpgradePair, 1)
+		upDone = make(chan struct{})
+		bpCfg := punch.BirthdayConfig{
+			SelfID:         key.ID(),
+			PeerID:         parseDeviceID(toID),
+			SessionID:      sid,
+			PeerCandidates: peerLocal,
+			LocalMapping:   g.Mapping,
+			Log:            logger,
+		}
+		go func() {
+			defer close(upDone)
+			upS, upCl, berr := punch.BirthdayConnect(bgCtx, bpCfg, key, peerPub, sessionParams(key, name))
+			if berr != nil {
+				return
+			}
+			select {
+			case upPairCh <- mobileSendUpgradePair{sess: upS, cleanup: upCl}:
+				close(upgradeSig)
+			default:
+				_ = upS.Close()
+				if upCl != nil {
+					upCl()
+				}
+			}
+		}()
+	}
+
 	start := time.Now()
 	tcfg := transfer.Config{
 		ChunkSize: 0, Timeout: 30 * time.Second, Log: logger,
 		TransferID: hex16(tid),
+		UpgradeCh:  upgradeSig,
 		OnDetailProgress: func(s transfer.ProgressSnapshot) {
 			updateActiveTransfer(txSeq, s.Stage, winner, "", s.FileName, s.FileIndex, s.FileCount, s.BytesDone, s.BytesTotal)
 		},
@@ -914,6 +1127,22 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 	}
 
 	res, err := transfer.Send(sess, paths, tcfg)
+	if errors.Is(err, transfer.ErrPathUpgrade) {
+		up := <-upPairCh
+		_ = sess.Close()
+		sess = up.sess
+		upgradedCleanup = up.cleanup
+		winner = "punch"
+		if logger != nil {
+			logger.Event("path.hot_upgrade_punch", map[string]any{"peer": truncID(toID), "transfer_id": tid})
+		}
+		updateActiveTransfer(txSeq, "transferring", "punch", peerName, "", 0, 0, -1, 0)
+		tcfg.UpgradeCh = nil
+		if (sess.Peer.Capabilities & proto.CapRelayFallback) != 0 {
+			tcfg.MinBytesPerSec = punchMinBytesPerSec
+		}
+		res, err = transfer.Send(sess, paths, tcfg)
+	}
 	if errors.Is(err, transfer.ErrSlowPath) {
 		if logger != nil {
 			logger.Event("path.fallback_slow_punch", map[string]any{"peer": truncID(toID), "transfer_id": tid})
@@ -927,6 +1156,7 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 		winner = "relay"
 		updateActiveTransfer(txSeq, "transferring", "relay", peerName, "", 0, 0, -1, 0)
 		tcfg.MinBytesPerSec = 0
+		tcfg.UpgradeCh = nil
 		res, err = transfer.Send(sess, paths, tcfg)
 	}
 	_ = sess.Close()

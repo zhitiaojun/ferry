@@ -611,3 +611,90 @@ func TestSlowPathWatchdogSkipsSmallRemaining(t *testing.T) {
 		t.Fatalf("receive: %v", rr.err)
 	}
 }
+
+func TestPathUpgradeAbortsWithCodePathSwitchAndResumes(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "upgrade.bin")
+	const totalSize = 3 << 20
+	writePattern(t, src, totalSize)
+	outDir := filepath.Join(dir, "out")
+
+	a, b := net.Pipe()
+	pacedB := &throttledConn{Conn: b, bytesPerSec: 1_200_000} // ~1.2 MB/s so upgrade hits mid-transfer
+
+	recvCh := make(chan error, 1)
+	go func() {
+		sb, err := session.Accept(pacedB, testParams("recv"))
+		if err != nil {
+			recvCh <- err
+			return
+		}
+		defer sb.Close()
+		_, rerr := Receive(sb, outDir, Config{Timeout: 5 * time.Second})
+		recvCh <- rerr
+	}()
+
+	sa, err := session.Dial(a, testParams("send"))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer sa.Close()
+
+	upgradeCh := make(chan struct{})
+	tid := [16]byte{9, 9, 9}
+	go func() {
+		time.Sleep(250 * time.Millisecond)
+		close(upgradeCh)
+	}()
+
+	_, sendErr := Send(sa, []string{src}, Config{
+		ChunkSize:           64 << 10,
+		WindowBytes:         256 << 10,
+		Timeout:             5 * time.Second,
+		TransferID:          tid,
+		UpgradeCh:           upgradeCh,
+		UpgradeMinRemaining: 1 << 20,
+	})
+	_ = sa.Close()
+
+	recvErr := <-recvCh
+	if !errors.Is(sendErr, ErrPathUpgrade) {
+		t.Fatalf("expected ErrPathUpgrade, got %v", sendErr)
+	}
+	var remote *session.RemoteError
+	if !errors.As(recvErr, &remote) || remote.Code != proto.CodePathSwitch {
+		t.Fatalf("expected RemoteError CodePathSwitch on receiver, got %v", recvErr)
+	}
+
+	st, err := os.Stat(filepath.Join(outDir, "upgrade.bin.ftpart"))
+	if err != nil || st.Size() == 0 || st.Size() >= totalSize {
+		t.Fatalf("expected partial .ftpart on disk, got st=%v err=%v", st, err)
+	}
+
+	// Resume on a second session and verify final SHA-256 matches.
+	_, recvRes := roundTrip(t, []string{src}, outDir, 0, Config{TransferID: tid})
+	if recvRes.Bytes != totalSize-st.Size() {
+		t.Fatalf("resumed bytes = %d, want %d", recvRes.Bytes, totalSize-st.Size())
+	}
+	if got, want := fileHash(t, filepath.Join(outDir, "upgrade.bin")), fileHash(t, src); got != want {
+		t.Fatalf("hash mismatch after upgrade resume")
+	}
+}
+
+func TestPathUpgradeIgnoredWhenRemainingSmall(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "small_upg.bin")
+	writePattern(t, src, 512<<10) // < UpgradeMinRemaining (2 MiB)
+	outDir := filepath.Join(dir, "out")
+
+	upgradeCh := make(chan struct{})
+	close(upgradeCh) // already signaled before transfer
+
+	_, recvRes := roundTrip(t, []string{src}, outDir, 0, Config{
+		UpgradeCh:           upgradeCh,
+		UpgradeMinRemaining: 2 << 20,
+	})
+	if recvRes.Bytes != 512<<10 {
+		t.Fatalf("bytes = %d, want %d", recvRes.Bytes, 512<<10)
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cwlindean/filetransfer/core/proto"
@@ -87,6 +88,11 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 		slow = startSlowWatchdog(s, batchTotal, cfg)
 		defer slow.stop()
 	}
+	var upg *upgradeMonitor
+	if cfg.UpgradeCh != nil {
+		upg = startUpgradeMonitor(s, batchTotal, cfg)
+		defer upg.stop()
+	}
 
 	for i, p := range paths {
 		if entries[i].Size == 0 {
@@ -118,6 +124,9 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 		if slow != nil {
 			slow.setConfirmed(completedBefore+int64(off), sessionBase)
 		}
+		if upg != nil {
+			upg.setBatchDone(completedBefore + int64(off))
+		}
 		if cfg.OnDetailProgress != nil {
 			cfg.OnDetailProgress(ProgressSnapshot{
 				Stage:      "transferring",
@@ -128,8 +137,14 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 				BytesTotal: batchTotal,
 			})
 		}
-		h, n, c, err := sendFile(s, tid, uint32(i), len(entries), entries[i].Name, entries[i].Size, p, buf, cfg, off, completedBefore, sessionBase, batchTotal, slow)
+		h, n, c, err := sendFile(s, tid, uint32(i), len(entries), entries[i].Name, entries[i].Size, p, buf, cfg, off, completedBefore, sessionBase, batchTotal, slow, upg)
 		if err != nil {
+			if errors.Is(err, ErrPathUpgrade) {
+				if upg != nil {
+					upg.stop()
+				}
+				return nil, ErrPathUpgrade
+			}
 			if !errors.Is(err, ErrSlowPath) {
 				_ = s.SendError(proto.CodeIOError, "send %s: %v", entries[i].Name, err)
 			}
@@ -144,6 +159,9 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 
 	if slow != nil {
 		slow.stop()
+	}
+	if upg != nil {
+		upg.stop()
 	}
 
 	if cfg.OnDetailProgress != nil && len(entries) > 0 {
@@ -208,6 +226,7 @@ func sendFile(
 	sessionBase int64,
 	batchTotal int64,
 	slow *slowWatchdog,
+	upg *upgradeMonitor,
 ) ([32]byte, int64, int, error) {
 	var zero [32]byte
 
@@ -236,6 +255,10 @@ func sendFile(
 		slow.attachCond(cond)
 		defer slow.attachCond(nil)
 	}
+	if upg != nil {
+		upg.attachCond(cond)
+		defer upg.attachCond(nil)
+	}
 
 	sentOff := startOffset
 	ackedOff := startOffset
@@ -243,24 +266,33 @@ func sendFile(
 
 	ackDone := make(chan error, 1)
 	go func() {
-		ackDone <- readFileAcks(s, tid, index, fileCount, fileName, fileSize, startOffset, completedBefore, sessionBase, batchTotal, cfg, slow, &mu, cond, &sentOff, &ackedOff, &recvErr)
+		ackDone <- readFileAcks(s, tid, index, fileCount, fileName, fileSize, startOffset, completedBefore, sessionBase, batchTotal, cfg, slow, upg, &mu, cond, &sentOff, &ackedOff, &recvErr)
 	}()
 
 	chunks := 0
 	var writeErr error
 	for {
+		if upg != nil && upg.isTriggered() {
+			writeErr = ErrPathUpgrade
+			break
+		}
 		n, rerr := f.Read(buf)
 		if n > 0 {
 			chunk := buf[:n]
 			sum := sha256.Sum256(chunk)
 
 			mu.Lock()
-			for (sentOff-ackedOff) >= windowBytes && recvErr == nil && (slow == nil || !slow.isTriggered()) {
+			for (sentOff-ackedOff) >= windowBytes && recvErr == nil && (slow == nil || !slow.isTriggered()) && (upg == nil || !upg.isTriggered()) {
 				cond.Wait()
 			}
 			if slow != nil && slow.isTriggered() {
 				mu.Unlock()
 				writeErr = ErrSlowPath
+				break
+			}
+			if upg != nil && upg.isTriggered() {
+				mu.Unlock()
+				writeErr = ErrPathUpgrade
 				break
 			}
 			if recvErr != nil {
@@ -299,10 +331,21 @@ func sendFile(
 
 	if writeErr == nil {
 		mu.Lock()
-		for ackedOff < fileSize && recvErr == nil && (slow == nil || !slow.isTriggered()) {
+		for ackedOff < fileSize && recvErr == nil && (slow == nil || !slow.isTriggered()) && (upg == nil || !upg.isTriggered()) {
 			cond.Wait()
 		}
 		mu.Unlock()
+	}
+
+	if upg != nil && upg.isTriggered() {
+		// Notify peer while readFileAcks is still draining in-flight ACKs so
+		// unbuffered transports (such as net.Pipe) cannot deadlock, then stop ACK reader.
+		_ = s.Conn().SetWriteDeadline(time.Now().Add(300 * time.Millisecond))
+		_ = s.SendError(proto.CodePathSwitch, "upgrading to direct path")
+		_ = s.Conn().SetWriteDeadline(time.Time{})
+		_ = s.Conn().SetReadDeadline(time.Now())
+		<-ackDone
+		return zero, 0, 0, ErrPathUpgrade
 	}
 
 	ackErr := <-ackDone
@@ -338,6 +381,7 @@ func readFileAcks(
 	batchTotal int64,
 	cfg Config,
 	slow *slowWatchdog,
+	upg *upgradeMonitor,
 	mu *sync.Mutex,
 	cond *sync.Cond,
 	sentOff *uint64,
@@ -388,6 +432,9 @@ func readFileAcks(
 
 		if slow != nil {
 			slow.setConfirmed(completedBefore+int64(curAck), sessionBase+int64(curAck-startOffset))
+		}
+		if upg != nil {
+			upg.setBatchDone(completedBefore + int64(curAck))
 		}
 		if cfg.OnProgress != nil {
 			cfg.OnProgress(int64(curAck))
@@ -555,6 +602,101 @@ func (w *slowWatchdog) run() {
 				return
 			}
 		}
+	}
+}
+
+type upgradeMonitor struct {
+	s          *session.Session
+	batchTotal int64
+	minRem     int64
+	upgradeCh  <-chan struct{}
+
+	batchDone atomic.Int64
+	triggered atomic.Bool
+
+	mu      sync.Mutex
+	cond    *sync.Cond
+	stopped bool
+	stopCh  chan struct{}
+	doneCh  chan struct{}
+}
+
+func startUpgradeMonitor(s *session.Session, batchTotal int64, cfg Config) *upgradeMonitor {
+	u := &upgradeMonitor{
+		s:          s,
+		batchTotal: batchTotal,
+		minRem:     cfg.upgradeMinRemaining(),
+		upgradeCh:  cfg.UpgradeCh,
+		stopCh:     make(chan struct{}),
+		doneCh:     make(chan struct{}),
+	}
+	go u.run()
+	return u
+}
+
+func (u *upgradeMonitor) setBatchDone(v int64) {
+	for {
+		cur := u.batchDone.Load()
+		if v <= cur {
+			return
+		}
+		if u.batchDone.CompareAndSwap(cur, v) {
+			return
+		}
+	}
+}
+
+func (u *upgradeMonitor) attachCond(c *sync.Cond) {
+	u.mu.Lock()
+	u.cond = c
+	u.mu.Unlock()
+}
+
+func (u *upgradeMonitor) isTriggered() bool {
+	return u.triggered.Load()
+}
+
+func (u *upgradeMonitor) stop() {
+	u.mu.Lock()
+	if u.stopped {
+		u.mu.Unlock()
+		return
+	}
+	u.stopped = true
+	close(u.stopCh)
+	u.mu.Unlock()
+	<-u.doneCh
+}
+
+func (u *upgradeMonitor) run() {
+	defer close(u.doneCh)
+	select {
+	case <-u.stopCh:
+		return
+	case <-u.upgradeCh:
+	}
+
+	if u.batchTotal-u.batchDone.Load() < u.minRem {
+		return
+	}
+	u.triggered.Store(true)
+
+	u.mu.Lock()
+	cond := u.cond
+	u.mu.Unlock()
+	if cond != nil {
+		cond.L.Lock()
+		cond.Broadcast()
+		cond.L.Unlock()
+	}
+
+	// Safety fuse: if a blocked SendMsg stalls teardown, expire deadlines.
+	fuse := time.NewTimer(500 * time.Millisecond)
+	defer fuse.Stop()
+	select {
+	case <-u.stopCh:
+	case <-fuse.C:
+		_ = u.s.Conn().SetDeadline(time.Now())
 	}
 }
 

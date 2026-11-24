@@ -153,8 +153,13 @@ func (r *room) byteCounts() (int64, int64) {
 
 // New returns a server with default limits.
 func New(log *logging.Logger) *Server {
+	return NewWithLimits(DefaultLimits(), log)
+}
+
+// NewWithLimits returns a server configured with custom limits.
+func NewWithLimits(limits Limits, log *logging.Logger) *Server {
 	return &Server{
-		limits:      DefaultLimits(),
+		limits:      limits,
 		log:         log,
 		web:         NewWeb(os.Getenv("FT_WEB_PASSWORD"), DefaultWebLimits(), log),
 		start:       time.Now(),

@@ -26,14 +26,26 @@ import (
 const (
 	// DefaultSTUN is the public BJ STUN pair used for UDP candidate discovery.
 	DefaultSTUN = "123.57.253.208:40000,123.57.253.208:40001"
-	// PunchHeadStart delays opening a relay room while UDP hole punching tries first.
-	PunchHeadStart = 2 * time.Second
+	// PunchHeadStart gives Cone/UPnP punching a brief head start before dialing
+	// the relay; symmetric/TUN environments fall into relay within 600 ms.
+	PunchHeadStart = 600 * time.Millisecond
 	// PunchMinBytesPerSec is the 5 Mbps floor below which a punched transfer
 	// falls back to the relay and resumes from .ftpart.
 	PunchMinBytesPerSec int64 = 625_000
+	// HotUpgradeMinBytes skips background birthday punching on small batches
+	// that finish over the 200M relay before P2P setup would pay off.
+	HotUpgradeMinBytes int64 = 4 << 20
+	// HotUpgradeTimeout bounds background birthday-paradox NAT punching.
+	HotUpgradeTimeout = 10 * time.Second
 	// RelayFallbackWait is how long a receiver waits for a fallback relay room
 	// when an active punched transfer fails mid-stream.
 	RelayFallbackWait = 8 * time.Second
+)
+
+// Test hooks overridden only inside package client unit tests.
+var (
+	testBirthdayPortRange [2]int
+	testDisableFastPunch  bool
 )
 
 // DefaultSTUNList returns the default BJ STUN server list.
@@ -49,16 +61,18 @@ func DefaultSTUNList() []string {
 
 // ReceiveOptions configures an auto-path inbound transfer (UDP punch or relay).
 type ReceiveOptions struct {
-	Key         *identity.Key
-	SignalURL   string
-	OutDir      string
-	PairedPath  string
-	Name        string
-	STUNServers []string // nil uses DefaultSTUNList; empty non-nil skips STUN
-	Timeout     time.Duration
-	NoTLS       bool
-	Log         *logging.Logger
-	OnStatus    func(Status)
+	Key                *identity.Key
+	SignalURL          string
+	OutDir             string
+	PairedPath         string
+	Name               string
+	STUNServers        []string // nil uses DefaultSTUNList; empty non-nil skips STUN
+	Timeout            time.Duration
+	HotUpgradeMinBytes int64 // 0 defaults to HotUpgradeMinBytes (4 MiB)
+	DisableHotUpgrade  bool
+	NoTLS              bool
+	Log                *logging.Logger
+	OnStatus           func(Status)
 }
 
 // SendAuto prefers UDP hole punching (with a PunchHeadStart over relay when
@@ -244,7 +258,7 @@ func SendAuto(ctx context.Context, o Options, toID string, files []string) (Resu
 	var sess *session.Session
 	var winner string
 
-	if g != nil && len(peerAddrs) > 0 {
+	if g != nil && len(peerAddrs) > 0 && !testDisableFastPunch {
 		tlsCfg, derr := identity.ClientTLS(key, peerPub)
 		if derr != nil {
 			return Result{}, derr
@@ -318,12 +332,90 @@ func SendAuto(ctx context.Context, o Options, toID string, files []string) (Resu
 		BytesTotal: total,
 	})
 
+	hotMin := o.HotUpgradeMinBytes
+	if hotMin <= 0 {
+		hotMin = HotUpgradeMinBytes
+	}
+
+	type upgradePair struct {
+		sess    *session.Session
+		cleanup func()
+	}
+	var upgradeSig chan struct{}
+	var upPairCh chan upgradePair
+	var upDone chan struct{}
+	var upgradedCleanup func()
+	defer func() {
+		if upDone != nil {
+			<-upDone
+		}
+		if upPairCh != nil {
+			for {
+				select {
+				case up := <-upPairCh:
+					if up.sess != nil {
+						_ = up.sess.Close()
+					}
+					if up.cleanup != nil {
+						up.cleanup()
+					}
+				default:
+					goto drained
+				}
+			}
+		}
+	drained:
+		if upgradedCleanup != nil {
+			upgradedCleanup()
+		}
+	}()
+
+	if winner == "relay" && !o.DisableHotUpgrade && total >= hotMin &&
+		(sess.Peer.Capabilities&proto.CapHotUpgrade) != 0 && len(peerAddrs) > 0 {
+		bgCtx, bgCancel := context.WithTimeout(ctx, HotUpgradeTimeout)
+		defer bgCancel()
+		upgradeSig = make(chan struct{})
+		upPairCh = make(chan upgradePair, 1)
+		upDone = make(chan struct{})
+		var localMap punch.Behavior
+		if g != nil {
+			localMap = g.Mapping
+		}
+		bpCfg := punch.BirthdayConfig{
+			SelfID:         key.ID(),
+			PeerID:         parseDeviceID(toID),
+			SessionID:      sessionID,
+			PeerCandidates: peerLocal,
+			LocalMapping:   localMap,
+			PortMin:        testBirthdayPortRange[0],
+			PortMax:        testBirthdayPortRange[1],
+			Log:            o.Log,
+		}
+		go func() {
+			defer close(upDone)
+			upS, upCl, berr := punch.BirthdayConnect(bgCtx, bpCfg, key, peerPub, sessionParams(key, localName))
+			if berr != nil {
+				return
+			}
+			select {
+			case upPairCh <- upgradePair{sess: upS, cleanup: upCl}:
+				close(upgradeSig)
+			default:
+				_ = upS.Close()
+				if upCl != nil {
+					upCl()
+				}
+			}
+		}()
+	}
+
 	start := time.Now()
 	tcfg := transfer.Config{
 		ChunkSize:  uint32(o.Chunk),
 		Timeout:    o.Timeout,
 		Log:        o.Log,
 		TransferID: hex16(transferID),
+		UpgradeCh:  upgradeSig,
 		OnDetailProgress: func(snap transfer.ProgressSnapshot) {
 			emitStatus(Status{
 				Stage:      snap.Stage,
@@ -336,11 +428,40 @@ func SendAuto(ctx context.Context, o Options, toID string, files []string) (Resu
 			})
 		},
 	}
+	if o.HotUpgradeMinBytes > 0 {
+		tcfg.UpgradeMinRemaining = o.HotUpgradeMinBytes / 2
+		if tcfg.UpgradeMinRemaining < 256<<10 {
+			tcfg.UpgradeMinRemaining = 256 << 10
+		}
+	}
 	if winner == "punch" && (sess.Peer.Capabilities&proto.CapRelayFallback) != 0 {
 		tcfg.MinBytesPerSec = PunchMinBytesPerSec
 	}
 
 	res, err := transfer.Send(sess, files, tcfg)
+	if errors.Is(err, transfer.ErrPathUpgrade) {
+		up := <-upPairCh
+		_ = sess.Close()
+		sess = up.sess
+		upgradedCleanup = up.cleanup
+		winner = "punch"
+		if o.Log != nil {
+			o.Log.Event("path.hot_upgrade_punch", map[string]any{"peer": truncHex(toID), "transfer_id": transferID})
+		}
+		emitStatus(Status{
+			Stage:      "transferring",
+			Channel:    "punch",
+			FileIndex:  1,
+			FileCount:  len(infos),
+			FileName:   firstName,
+			BytesTotal: total,
+		})
+		tcfg.UpgradeCh = nil
+		if (sess.Peer.Capabilities & proto.CapRelayFallback) != 0 {
+			tcfg.MinBytesPerSec = PunchMinBytesPerSec
+		}
+		res, err = transfer.Send(sess, files, tcfg)
+	}
 	if errors.Is(err, transfer.ErrSlowPath) {
 		if o.Log != nil {
 			o.Log.Event("path.fallback_slow_punch", map[string]any{"peer": truncHex(toID), "transfer_id": transferID})
@@ -368,6 +489,7 @@ func SendAuto(ctx context.Context, o Options, toID string, files []string) (Resu
 			BytesTotal: total,
 		})
 		tcfg.MinBytesPerSec = 0
+		tcfg.UpgradeCh = nil
 		res, err = transfer.Send(sess, files, tcfg)
 	}
 	_ = sess.Close()
@@ -463,7 +585,20 @@ func ReceiveAuto(
 	localName := pairing.SanitizeName(o.Name)
 	var attempts []pathmgr.Attempt[*session.Session]
 
-	if gerr == nil && g != nil {
+	var peerCandsMu sync.Mutex
+	var savedPeerCands []signaling.Candidate
+	savePeerCands := func(cs []signaling.Candidate) {
+		peerCandsMu.Lock()
+		savedPeerCands = append([]signaling.Candidate(nil), cs...)
+		peerCandsMu.Unlock()
+	}
+	getSavedPeerCands := func() []signaling.Candidate {
+		peerCandsMu.Lock()
+		defer peerCandsMu.Unlock()
+		return append([]signaling.Candidate(nil), savedPeerCands...)
+	}
+
+	if gerr == nil && g != nil && !testDisableFastPunch {
 		serverCfg, err := identity.ServerTLS(o.Key, peerPub)
 		if err != nil {
 			return Result{}, err
@@ -496,6 +631,7 @@ func ReceiveAuto(
 						if peerCands == nil {
 							peerCands = []signaling.Candidate{}
 						}
+						savePeerCands(peerCands)
 					}
 				}
 				peerLocal := localCandidates(peerCands)
@@ -547,6 +683,100 @@ func ReceiveAuto(
 		BytesTotal: total,
 	})
 
+	hotMin := o.HotUpgradeMinBytes
+	if hotMin <= 0 {
+		hotMin = HotUpgradeMinBytes
+	}
+
+	type recvUpgradePair struct {
+		sess    *session.Session
+		cleanup func()
+	}
+	var upPairCh chan recvUpgradePair
+	var upDone chan struct{}
+	var upgradedCleanup func()
+	defer func() {
+		if upDone != nil {
+			<-upDone
+		}
+		if upPairCh != nil {
+			for {
+				select {
+				case up := <-upPairCh:
+					if up.sess != nil {
+						_ = up.sess.Close()
+					}
+					if up.cleanup != nil {
+						up.cleanup()
+					}
+				default:
+					goto drainedRecv
+				}
+			}
+		}
+	drainedRecv:
+		if upgradedCleanup != nil {
+			upgradedCleanup()
+		}
+	}()
+
+	if winner == "relay" && !o.DisableHotUpgrade && total >= hotMin &&
+		(sess.Peer.Capabilities&proto.CapHotUpgrade) != 0 && req.SessionID != "" {
+		bgCtx, bgCancel := context.WithTimeout(ctx, HotUpgradeTimeout)
+		defer bgCancel()
+		upPairCh = make(chan recvUpgradePair, 1)
+		upDone = make(chan struct{})
+		var localMap punch.Behavior
+		if g != nil {
+			localMap = g.Mapping
+		}
+		go func() {
+			defer close(upDone)
+			peerCands := getSavedPeerCands()
+			if peerCands == nil && candCh != nil {
+				waitC := time.NewTimer(2 * time.Second)
+				select {
+				case <-bgCtx.Done():
+					waitC.Stop()
+					return
+				case <-waitC.C:
+					return
+				case ce := <-candCh:
+					waitC.Stop()
+					if c, derr := signaling.Decode[signaling.Candidates](ce); derr == nil {
+						peerCands = c.Candidates
+					}
+				}
+			}
+			peerLocal := localCandidates(peerCands)
+			if len(punch.Resolve(peerLocal)) == 0 {
+				return
+			}
+			bpCfg := punch.BirthdayConfig{
+				SelfID:         o.Key.ID(),
+				PeerID:         parseDeviceID(req.FromDevice),
+				SessionID:      req.SessionID,
+				PeerCandidates: peerLocal,
+				LocalMapping:   localMap,
+				PortMin:        testBirthdayPortRange[0],
+				PortMax:        testBirthdayPortRange[1],
+				Log:            o.Log,
+			}
+			upS, upCl, berr := punch.BirthdayConnect(bgCtx, bpCfg, o.Key, peerPub, sessionParams(o.Key, localName))
+			if berr != nil {
+				return
+			}
+			select {
+			case upPairCh <- recvUpgradePair{sess: upS, cleanup: upCl}:
+			default:
+				_ = upS.Close()
+				if upCl != nil {
+					upCl()
+				}
+			}
+		}()
+	}
+
 	start := time.Now()
 	tcfg := transfer.Config{
 		Timeout:    o.Timeout,
@@ -566,6 +796,54 @@ func ReceiveAuto(
 	}
 
 	res, err := transfer.Receive(sess, o.OutDir, tcfg)
+	if err != nil && winner == "relay" && upPairCh != nil {
+		var remote *session.RemoteError
+		wantsSwitch := errors.As(err, &remote) && remote.Code == proto.CodePathSwitch
+		var up recvUpgradePair
+		gotUp := false
+		if wantsSwitch {
+			wt := time.NewTimer(3 * time.Second)
+			select {
+			case <-ctx.Done():
+				wt.Stop()
+			case <-upDone:
+				wt.Stop()
+				select {
+				case up = <-upPairCh:
+					gotUp = up.sess != nil
+				default:
+				}
+			case up = <-upPairCh:
+				wt.Stop()
+				gotUp = up.sess != nil
+			case <-wt.C:
+			}
+		} else {
+			select {
+			case up = <-upPairCh:
+				gotUp = up.sess != nil
+			default:
+			}
+		}
+		if gotUp {
+			_ = sess.Close()
+			sess = up.sess
+			upgradedCleanup = up.cleanup
+			winner = "punch"
+			if o.Log != nil {
+				o.Log.Event("path.hot_upgrade_punch", map[string]any{"peer": truncHex(req.FromDevice), "transfer_id": req.TransferID})
+			}
+			emitStatus(Status{
+				Stage:      "transferring",
+				Channel:    "punch",
+				FileIndex:  1,
+				FileCount:  len(req.Files),
+				FileName:   firstName,
+				BytesTotal: total,
+			})
+			res, err = transfer.Receive(sess, o.OutDir, tcfg)
+		}
+	}
 	if err != nil && winner == "punch" {
 		_ = sess.Close()
 		emitStatus(Status{

@@ -8,6 +8,7 @@ const (
 	CapMultipath     uint32 = 1 << 1
 	CapTLSPin        uint32 = 1 << 2
 	CapRelayFallback uint32 = 1 << 3
+	CapHotUpgrade    uint32 = 1 << 4
 )
 
 // FIN status values (§3.8).

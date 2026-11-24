@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"net"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -444,6 +445,118 @@ func TestSlowPunchFallbackToRelayResumesPartFile(t *testing.T) {
 		t.Fatalf("expected resumed bytes %d, got %d (send total %d)", totalBytes-partialBytes, rr.res.Bytes, res.Bytes)
 	}
 	if got := fileSHA256(t, filepath.Join(outDir, "resume.bin")); got != wantSum {
+		t.Fatalf("sha256 mismatch: got %s want %s", got, wantSum)
+	}
+}
+
+func TestRelayFirstHotUpgradeToPunchResumesPartFile(t *testing.T) {
+	probeSock, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	basePort := probeSock.LocalAddr().(*net.UDPAddr).Port
+	_ = probeSock.Close()
+
+	lo := basePort - 200
+	if lo < 1024 {
+		lo = 1024
+	}
+	hi := basePort + 1000
+	if hi > 65535 {
+		hi = 65535
+	}
+
+	prevRange := testBirthdayPortRange
+	prevDisable := testDisableFastPunch
+	testBirthdayPortRange = [2]int{lo, hi}
+	testDisableFastPunch = true
+	t.Cleanup(func() {
+		testBirthdayPortRange = prevRange
+		testDisableFastPunch = prevDisable
+	})
+
+	lim := server.DefaultLimits()
+	lim.RelayRate = 1 << 20 // 1 MiB/s paced relay so hot upgrade lands mid-transfer
+	srv := server.NewWithLimits(lim, nil)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	sigURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/signal"
+
+	dir := t.TempDir()
+	sendKeyPath, _, sendPairedPath, recvPairedPath, _, recvKey := setupPairedKeys(t, dir)
+	outDir := filepath.Join(dir, "out")
+	src := filepath.Join(dir, "hot_upgrade.bin")
+	wantSum := writeTestPayload(t, src, 6<<20)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	recvCl, err := signaling.Dial(ctx, sigURL, recvKey, nil)
+	if err != nil {
+		t.Fatalf("recv signaling: %v", err)
+	}
+	defer recvCl.Close()
+
+	reqCh := make(chan signaling.SendRequest, 1)
+	candCh := make(chan *signaling.Envelope, 8)
+	readyCh := make(chan signaling.RelayReady, 2)
+	recvCl.On(signaling.TypeSendRequest, func(e *signaling.Envelope) {
+		if r, rerr := signaling.Decode[signaling.SendRequest](e); rerr == nil {
+			reqCh <- r
+		}
+	})
+	recvCl.On(signaling.TypeCandidates, func(e *signaling.Envelope) {
+		candCh <- e
+	})
+	recvCl.On(signaling.TypeRelayReady, func(e *signaling.Envelope) {
+		if rr, rerr := signaling.Decode[signaling.RelayReady](e); rerr == nil {
+			readyCh <- rr
+		}
+	})
+
+	type recvOut struct {
+		res Result
+		err error
+	}
+	recvDone := make(chan recvOut, 1)
+	go func() {
+		req := <-reqCh
+		peerPub, perr := PairedPeer(recvPairedPath, req.FromDevice)
+		if perr != nil {
+			recvDone <- recvOut{err: perr}
+			return
+		}
+		res, rerr := ReceiveAuto(ctx, ReceiveOptions{
+			Key:                recvKey,
+			SignalURL:          sigURL,
+			OutDir:             outDir,
+			PairedPath:         recvPairedPath,
+			Name:               "recv-pc",
+			STUNServers:        []string{},
+			HotUpgradeMinBytes: 2 << 20,
+		}, recvCl, req, peerPub, candCh, readyCh)
+		recvDone <- recvOut{res: res, err: rerr}
+	}()
+
+	sendRes, err := SendAuto(ctx, Options{
+		SignalURL:          sigURL,
+		KeyPath:            sendKeyPath,
+		PairedPath:         sendPairedPath,
+		Name:               "send-pc",
+		STUNServers:        []string{},
+		HotUpgradeMinBytes: 2 << 20,
+	}, recvKey.IDHex(), []string{src})
+	if err != nil {
+		t.Fatalf("SendAuto: %v", err)
+	}
+	rr := <-recvDone
+	if rr.err != nil {
+		t.Fatalf("ReceiveAuto: %v", rr.err)
+	}
+	if sendRes.Channel != "打洞" || rr.res.Channel != "打洞" {
+		t.Fatalf("expected hot upgrade to punch (打洞), got send=%q recv=%q", sendRes.Channel, rr.res.Channel)
+	}
+	if got := fileSHA256(t, filepath.Join(outDir, "hot_upgrade.bin")); got != wantSum {
 		t.Fatalf("sha256 mismatch: got %s want %s", got, wantSum)
 	}
 }

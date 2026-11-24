@@ -27,6 +27,7 @@ type Gathered struct {
 	Conn *net.UDPConn
 	// Mapping is the NAT behavior inferred from the STUN servers, if reachable.
 	Mapping Behavior
+	cleanup func()
 }
 
 // Gather collects LAN and STUN candidates for this host. STUN failures are
@@ -81,6 +82,21 @@ func gather(ctx context.Context, stunServers []string, timeout time.Duration, hi
 		})
 	}
 
+	var pmRes struct {
+		addr    string
+		cleanup func()
+		ok      bool
+	}
+	pmDone := make(chan struct{})
+	if len(ifaces) > 0 {
+		go func() {
+			defer close(pmDone)
+			pmRes.addr, pmRes.cleanup, pmRes.ok = mapPort(ctx, localPort, ifaces, defaultPortmapTimeout)
+		}()
+	} else {
+		close(pmDone)
+	}
+
 	client := NewClient(conn)
 	mappings := make([]netip.AddrPort, 0, len(stunServers))
 	for _, server := range stunServers {
@@ -108,6 +124,26 @@ func gather(ctx context.Context, stunServers []string, timeout time.Duration, hi
 			})
 		}
 	}
+	<-pmDone
+	if pmRes.ok && pmRes.addr != "" {
+		out.cleanup = pmRes.cleanup
+		dup := false
+		for _, c := range out.Candidates {
+			if c.Addr == pmRes.addr {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			out.Candidates = append(out.Candidates, Candidate{
+				Kind:     "portmap",
+				Addr:     pmRes.addr,
+				Priority: 95,
+			})
+		}
+	} else if pmRes.cleanup != nil {
+		pmRes.cleanup()
+	}
 	// STUN queries left a read deadline in the past; the QUIC listener that
 	// later reads this socket would fail every read. Clear it before returning.
 	_ = conn.SetReadDeadline(time.Time{})
@@ -134,9 +170,17 @@ func gather(ctx context.Context, stunServers []string, timeout time.Duration, hi
 	return out, nil
 }
 
-// Close releases the UDP socket.
+// Close releases the UDP socket and any UPnP/NAT-PMP port mapping.
 func (g *Gathered) Close() error {
-	if g == nil || g.Conn == nil {
+	if g == nil {
+		return nil
+	}
+	if g.cleanup != nil {
+		fn := g.cleanup
+		g.cleanup = nil
+		go fn()
+	}
+	if g.Conn == nil {
 		return nil
 	}
 	return g.Conn.Close()

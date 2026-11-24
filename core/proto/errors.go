@@ -24,6 +24,7 @@ const (
 	CodeRelaySessionMissing ErrorCode = 0x000F
 	CodeUnsupportedChunk    ErrorCode = 0x0010
 	CodePayloadInvalid      ErrorCode = 0x0011
+	CodePathSwitch          ErrorCode = 0x0012
 	CodeInternal            ErrorCode = 0xFFFF
 )
 
@@ -45,6 +46,7 @@ var codeNames = map[ErrorCode]string{
 	CodeRelaySessionMissing: "relay_session_not_found",
 	CodeUnsupportedChunk:    "unsupported_chunk_size",
 	CodePayloadInvalid:      "payload_invalid",
+	CodePathSwitch:          "path_switch",
 	CodeInternal:            "internal",
 }
 

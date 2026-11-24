@@ -21,6 +21,10 @@ import (
 // confirmed throughput stays below the threshold with enough bytes remaining.
 var ErrSlowPath = errors.New("transfer: path below minimum speed")
 
+// ErrPathUpgrade is returned by Send when UpgradeCh signals that a faster
+// direct path is ready and enough bytes remain to justify switching.
+var ErrPathUpgrade = errors.New("transfer: upgrading to faster path")
+
 const (
 	// DefaultWindowBytes bounds unacknowledged bytes kept in flight per file.
 	DefaultWindowBytes = 4 << 20
@@ -47,11 +51,13 @@ type Config struct {
 	ChunkSize        uint32
 	WindowBytes      int
 	Timeout          time.Duration
-	MinBytesPerSec   int64
-	SlowGrace        time.Duration
-	SlowWindow       time.Duration
-	SlowMinRemaining int64
-	Log              *logging.Logger
+	MinBytesPerSec      int64
+	SlowGrace           time.Duration
+	SlowWindow          time.Duration
+	SlowMinRemaining    int64
+	UpgradeCh           <-chan struct{}
+	UpgradeMinRemaining int64
+	Log                 *logging.Logger
 	// TransferID overrides the random id when the caller already committed to
 	// one (e.g. the signaling transfer id); zero means "generate".
 	TransferID [16]byte
@@ -100,6 +106,13 @@ func (c Config) slowMinRemaining() int64 {
 		return DefaultSlowMinRemaining
 	}
 	return c.SlowMinRemaining
+}
+
+func (c Config) upgradeMinRemaining() int64 {
+	if c.UpgradeMinRemaining <= 0 {
+		return DefaultSlowMinRemaining
+	}
+	return c.UpgradeMinRemaining
 }
 
 func (c Config) timeout() time.Duration {

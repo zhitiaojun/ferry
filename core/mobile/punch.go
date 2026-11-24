@@ -470,7 +470,7 @@ func sessionParams(key *identity.Key, name string) session.Params {
 	return session.Params{
 		DeviceID:     key.ID(),
 		Name:         name,
-		Capabilities: proto.CapResume | proto.CapRelayFallback,
+		Capabilities: proto.CapResume | proto.CapRelayFallback | proto.CapHotUpgrade,
 	}
 }
 

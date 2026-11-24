@@ -37,18 +37,20 @@ type Status struct {
 
 // Options configures one transfer.
 type Options struct {
-	SignalURL    string
-	SignalClient *signaling.Client // optional persistent signaling client to reuse
-	KeyPath      string            // device key file
-	PairedPath   string            // trusted-peer table
-	Name         string            // device name shown to the peer
-	STUNServers  []string          // nil uses DefaultSTUNList; empty non-nil skips STUN
-	CandRoute    func(sid string, ch chan *signaling.Envelope) func()
-	Chunk        int
-	Timeout      time.Duration
-	NoTLS        bool
-	Log          *logging.Logger
-	OnStatus     func(Status)
+	SignalURL          string
+	SignalClient       *signaling.Client // optional persistent signaling client to reuse
+	KeyPath            string            // device key file
+	PairedPath         string            // trusted-peer table
+	Name               string            // device name shown to the peer
+	STUNServers        []string          // nil uses DefaultSTUNList; empty non-nil skips STUN
+	CandRoute          func(sid string, ch chan *signaling.Envelope) func()
+	Chunk              int
+	Timeout            time.Duration
+	HotUpgradeMinBytes int64 // 0 defaults to HotUpgradeMinBytes (4 MiB)
+	DisableHotUpgrade  bool
+	NoTLS              bool
+	Log                *logging.Logger
+	OnStatus           func(Status)
 }
 
 // Result summarises a completed transfer.
@@ -273,7 +275,7 @@ func sessionParams(key *identity.Key, name string) session.Params {
 	return session.Params{
 		DeviceID:     key.ID(),
 		Name:         name,
-		Capabilities: proto.CapResume | proto.CapRelayFallback,
+		Capabilities: proto.CapResume | proto.CapRelayFallback | proto.CapHotUpgrade,
 	}
 }
 
