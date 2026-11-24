@@ -764,16 +764,14 @@ public class MainActivity extends Activity {
         recvStatusWrap.setOrientation(LinearLayout.HORIZONTAL);
         recvStatusWrap.setGravity(Gravity.CENTER_VERTICAL);
         recvStatusWrap.setPadding(dp(8), dp(4), dp(8), dp(4));
-        recvStatusWrap.setBackground(ripple(roundBox(Color.TRANSPARENT, 0, 99), 99));
-        recvStatusWrap.setOnClickListener(v -> toggleReceive());
 
         recvPulseDot = new View(this);
-        recvPulseDot.setBackground(oval(cOnSurfaceVariant));
+        recvPulseDot.setBackground(oval(cOutline));
         LinearLayout.LayoutParams dotLp = new LinearLayout.LayoutParams(dp(7), dp(7));
         dotLp.rightMargin = dp(5);
         recvStatusWrap.addView(recvPulseDot, dotLp);
 
-        sendRecvStatusBtn = label("未开启接收", 12, cOnSurfaceVariant, false);
+        sendRecvStatusBtn = label("离线", 12, cOnSurfaceVariant, false);
         recvStatusWrap.addView(sendRecvStatusBtn, new LinearLayout.LayoutParams(WRAP, WRAP));
         cardTop.addView(recvStatusWrap, new LinearLayout.LayoutParams(WRAP, WRAP));
         sendCard.addView(cardTop, new LinearLayout.LayoutParams(MATCH, WRAP));
@@ -3165,45 +3163,44 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void refreshReceiveUi() {
+    private void refreshTargetStatusUi() {
+        String stText = "离线";
+        int stColor = cOnSurfaceVariant;
+        int dotClr = cOutline;
+        boolean online = false;
+        if (selectedTarget == null || selectedTarget.isEmpty()) {
+            stText = "未选择";
+        } else if (!isAutoTarget(selectedTarget) || lanOnlineSet.contains(selectedTarget)) {
+            stText = "局域网";
+            stColor = cPrimary;
+            dotClr = cPrimary;
+            online = true;
+        } else if ("online".equals(signalState) && cloudOnlineSet.contains(selectedTarget)) {
+            stText = "云端在线";
+            stColor = cPrimary;
+            dotClr = cPrimary;
+            online = true;
+        } else if ("connecting".equals(signalState)) {
+            stText = "重连中…";
+            stColor = cWarn;
+            dotClr = cWarn;
+        }
         if (sendRecvStatusBtn != null) {
-            String stText = "未开启接收";
-            int stColor = cOnSurfaceVariant;
-            if (recvRunning) {
-                switch (signalState) {
-                    case "online":
-                        stText = "已在线";
-                        stColor = cPrimary;
-                        break;
-                    case "connecting":
-                        stText = "重连中…";
-                        stColor = cWarn;
-                        break;
-                    default:
-                        stText = "仅局域网";
-                        stColor = cOnSurfaceVariant;
-                        break;
-                }
-            }
             sendRecvStatusBtn.setText(stText);
             sendRecvStatusBtn.setTextColor(stColor);
         }
         if (recvPulseDot != null) {
-            int dotClr = cOutline;
-            if (recvRunning) {
-                if ("online".equals(signalState)) {
-                    dotClr = cPrimary;
-                } else if ("connecting".equals(signalState)) {
-                    dotClr = cWarn;
-                }
-            }
             recvPulseDot.setBackground(oval(dotClr));
         }
-        if (recvRunning && "online".equals(signalState)) {
+        if (online) {
             startDotPulse();
         } else {
             stopDotPulse();
         }
+    }
+
+    private void refreshReceiveUi() {
+        refreshTargetStatusUi();
         if (homeSignalBar != null && homeSigDot != null && homeSigText != null && homeSigHost != null) {
             String barText = "信令服务器：未连接（后台接收已关闭）";
             int barBg = cCard;
@@ -4689,6 +4686,7 @@ public class MainActivity extends Activity {
         if (sendTargetTitle != null) {
             sendTargetTitle.setText("发往 " + resolveTargetName(selectedTarget));
         }
+        refreshTargetStatusUi();
 
         peerChipRow.removeAllViews();
         for (int i = 0; i < combined.size(); i++) {
