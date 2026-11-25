@@ -7,6 +7,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -27,7 +28,7 @@ import (
 
 // Status reports live progress stages for file transfers.
 type Status struct {
-	Stage      string // "connecting" | "waiting" | "racing" | "transferring" | "verifying"
+	Stage      string // "connecting" | "waiting" | "racing" | "transferring" | "paused" | "verifying"
 	Channel    string // "" | "lan" | "punch" | "relay"
 	FileIndex  int
 	FileCount  int
@@ -55,6 +56,7 @@ type Options struct {
 	DisableHotUpgrade  bool
 	DisablePunch       bool
 	NoTLS              bool
+	Control            *transfer.Controller
 	Log                *logging.Logger
 	OnStatus           func(Status)
 }
@@ -99,6 +101,16 @@ func Peers(pairedPath string) ([]Peer, error) {
 func SendFiles(ctx context.Context, o Options, toID string, files []string) (Result, error) {
 	if len(files) == 0 {
 		return Result{}, fmt.Errorf("no files to send")
+	}
+	if o.Control != nil {
+		if o.Control.IsCancelled() {
+			return Result{}, transfer.ErrCancelled
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		unreg := o.Control.OnCancel(cancel)
+		defer unreg()
 	}
 	infos, total, err := describeFiles(files)
 	if err != nil {
@@ -238,7 +250,7 @@ func SendFiles(ctx context.Context, o Options, toID string, files []string) (Res
 
 	start := time.Now()
 	res, err := transfer.Send(s, files, transfer.Config{
-		ChunkSize: uint32(o.Chunk), Timeout: o.Timeout, Log: o.Log,
+		ChunkSize: uint32(o.Chunk), Timeout: o.Timeout, Control: o.Control, Log: o.Log,
 		TransferID: hex16(transferID),
 		OnDetailProgress: func(snap transfer.ProgressSnapshot) {
 			emitStatus(Status{
@@ -321,6 +333,14 @@ func hex16(s string) [16]byte {
 		return [16]byte{}
 	}
 	return out
+}
+
+func isTransferCancelled(err error) bool {
+	if errors.Is(err, transfer.ErrCancelled) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	var rem *session.RemoteError
+	return errors.As(err, &rem) && rem.Code == proto.CodeCancelled
 }
 
 func truncHex(id string) string {

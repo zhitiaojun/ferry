@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/cwlindean/filetransfer/core/discovery"
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/ipc"
+	"github.com/cwlindean/filetransfer/core/transfer"
 )
 
 type pickPeerRequest struct {
@@ -264,17 +266,23 @@ func (d *desktopIPC) sendDirectLAN(ctx context.Context, addr string, files []str
 		}
 	}
 	txID := a.beginTransfer("send", addr, filepath.Base(files[0]), len(files), totalBytes)
+	ctrl := transfer.NewController()
+	a.attachTransferControl(txID, ctrl, true, true)
 	defer a.endTransfer(txID)
 
 	res, err := client.SendLAN(ctx, client.Options{
 		KeyPath:    a.keyPath,
 		PairedPath: a.pairedPath,
 		Name:       a.deviceName(),
+		Control:    ctrl,
 		OnStatus: func(st client.Status) {
 			a.updateTransfer(txID, st.Stage, "LAN", "", st.FileName, st.FileIndex, st.FileCount, st.BytesDone, st.BytesTotal)
 		},
 	}, addr, files)
 	if err != nil {
+		if ctrl.IsCancelled() || errors.Is(err, transfer.ErrCancelled) {
+			return ipc.SendResponse{OK: false, Error: "已取消传输"}
+		}
 		return ipc.SendResponse{OK: false, Error: err.Error()}
 	}
 	peerLabel := res.PeerName
@@ -319,6 +327,8 @@ func (d *desktopIPC) sendToSelectedPeer(ctx context.Context, peer client.Peer, f
 			}
 		}
 		txID := a.beginTransfer("send", peerLabel(peer), filepath.Base(files[0]), len(files), totalBytes)
+		ctrl := transfer.NewController()
+		a.attachTransferControl(txID, ctrl, true, true)
 		defer a.endTransfer(txID)
 
 		opts := client.Options{
@@ -329,6 +339,7 @@ func (d *desktopIPC) sendToSelectedPeer(ctx context.Context, peer client.Peer, f
 			STUNServers:  a.stunServers,
 			CandRoute:    a.registerCandRoute,
 			DisablePunch: mode == "relay",
+			Control:      ctrl,
 			OnStatus: func(st client.Status) {
 				ch := ""
 				switch st.Channel {
@@ -356,6 +367,9 @@ func (d *desktopIPC) sendToSelectedPeer(ctx context.Context, peer client.Peer, f
 			res, err = client.SendAuto(ctx, opts, peer.ID, files)
 		}
 		if err != nil {
+			if ctrl.IsCancelled() || errors.Is(err, transfer.ErrCancelled) {
+				return ipc.SendResponse{OK: false, Error: "已取消传输"}
+			}
 			return ipc.SendResponse{OK: false, Error: err.Error()}
 		}
 		return ipcResultFromClient(peerLabel(peer), res)

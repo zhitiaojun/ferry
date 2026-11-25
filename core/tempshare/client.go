@@ -20,6 +20,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/cwlindean/filetransfer/core/lanweb"
+	"github.com/cwlindean/filetransfer/core/transfer"
 )
 
 // ResolvedSession describes a temporary transfer session resolved from a URL or 6-digit code.
@@ -157,14 +158,33 @@ func probeAndKeepRelay(ctx context.Context, sess *ResolvedSession) (*ProbeResult
 
 // DownloadAll downloads all shared files into outDir, preferring LAN and falling back to relay.
 func DownloadAll(ctx context.Context, sess *ResolvedSession, outDir string) (via string, saved []string, err error) {
-	return DownloadAllWithProgress(ctx, sess, outDir, nil)
+	return DownloadAllWithControl(ctx, sess, outDir, nil, nil)
 }
 
 // DownloadAllWithProgress downloads all shared files into outDir, preferring LAN
 // and falling back to relay, reporting live transfer progress via onProgress.
 func DownloadAllWithProgress(ctx context.Context, sess *ResolvedSession, outDir string, onProgress func(TransferProgress)) (via string, saved []string, err error) {
+	return DownloadAllWithControl(ctx, sess, outDir, nil, onProgress)
+}
+
+// DownloadAllWithControl is like DownloadAllWithProgress and supports pause,
+// resume, and cancellation via ctrl.
+func DownloadAllWithControl(ctx context.Context, sess *ResolvedSession, outDir string, ctrl *transfer.Controller, onProgress func(TransferProgress)) (via string, saved []string, err error) {
+	if ctrl != nil {
+		if ctrl.IsCancelled() {
+			return "", nil, transfer.ErrCancelled
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		unreg := ctrl.OnCancel(cancel)
+		defer unreg()
+	}
 	probe, ws, err := probeAndKeepRelay(ctx, sess)
 	if err != nil {
+		if ctrl != nil && ctrl.IsCancelled() {
+			return "", nil, transfer.ErrCancelled
+		}
 		return "", nil, err
 	}
 	if ws != nil {
@@ -204,8 +224,11 @@ func DownloadAllWithProgress(ctx context.Context, sess *ResolvedSession, outDir 
 	if probe.Via == "lan" {
 		dlClient := &http.Client{Timeout: 10 * time.Minute}
 		for idx, f := range probe.Files {
-			dest, derr := downloadLANFile(ctx, dlClient, probe.LANBase, f, outDir, txID, idx+1, fileCount, completed, totalBytes, onProgress)
+			dest, derr := downloadLANFile(ctx, dlClient, probe.LANBase, f, outDir, txID, idx+1, fileCount, completed, totalBytes, ctrl, onProgress)
 			if derr != nil {
+				if ctrl != nil && ctrl.IsCancelled() {
+					return "lan", saved, transfer.ErrCancelled
+				}
 				return "lan", saved, derr
 			}
 			completed += f.Size
@@ -215,8 +238,11 @@ func DownloadAllWithProgress(ctx context.Context, sess *ResolvedSession, outDir 
 	}
 
 	for idx, f := range probe.Files {
-		dest, derr := relayDownloadFile(ctx, ws, f.Name, outDir, txID, idx+1, fileCount, completed, totalBytes, f.Size, onProgress)
+		dest, derr := relayDownloadFile(ctx, ws, f.Name, outDir, txID, idx+1, fileCount, completed, totalBytes, f.Size, ctrl, onProgress)
 		if derr != nil {
+			if ctrl != nil && ctrl.IsCancelled() {
+				return "relay", saved, transfer.ErrCancelled
+			}
 			return "relay", saved, derr
 		}
 		completed += f.Size
@@ -227,14 +253,30 @@ func DownloadAllWithProgress(ctx context.Context, sess *ResolvedSession, outDir 
 
 // UploadFiles uploads local files to the host, preferring LAN and falling back to relay.
 func UploadFiles(ctx context.Context, sess *ResolvedSession, paths []string) (via string, uploaded []string, err error) {
-	return UploadFilesWithProgress(ctx, sess, paths, nil)
+	return UploadFilesWithControl(ctx, sess, paths, nil, nil)
 }
 
 // UploadFilesWithProgress uploads local files to the host, preferring LAN and
 // falling back to relay, reporting live transfer progress via onProgress.
 func UploadFilesWithProgress(ctx context.Context, sess *ResolvedSession, paths []string, onProgress func(TransferProgress)) (via string, uploaded []string, err error) {
+	return UploadFilesWithControl(ctx, sess, paths, nil, onProgress)
+}
+
+// UploadFilesWithControl is like UploadFilesWithProgress and supports pause,
+// resume, and cancellation via ctrl.
+func UploadFilesWithControl(ctx context.Context, sess *ResolvedSession, paths []string, ctrl *transfer.Controller, onProgress func(TransferProgress)) (via string, uploaded []string, err error) {
 	if len(paths) == 0 {
 		return "", nil, fmt.Errorf("no files selected")
+	}
+	if ctrl != nil {
+		if ctrl.IsCancelled() {
+			return "", nil, transfer.ErrCancelled
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		unreg := ctrl.OnCancel(cancel)
+		defer unreg()
 	}
 	sizes := make([]int64, len(paths))
 	var totalBytes int64
@@ -246,6 +288,9 @@ func UploadFilesWithProgress(ctx context.Context, sess *ResolvedSession, paths [
 	}
 	probe, ws, err := probeAndKeepRelay(ctx, sess)
 	if err != nil {
+		if ctrl != nil && ctrl.IsCancelled() {
+			return "", nil, transfer.ErrCancelled
+		}
 		return "", nil, err
 	}
 	if ws != nil {
@@ -278,7 +323,10 @@ func UploadFilesWithProgress(ctx context.Context, sess *ResolvedSession, paths [
 	if probe.Via == "lan" {
 		upClient := &http.Client{Timeout: 30 * time.Minute}
 		for idx, p := range paths {
-			if uerr := uploadLANFile(ctx, upClient, probe.LANBase, p, txID, idx+1, fileCount, completed, totalBytes, onProgress); uerr != nil {
+			if uerr := uploadLANFile(ctx, upClient, probe.LANBase, p, txID, idx+1, fileCount, completed, totalBytes, ctrl, onProgress); uerr != nil {
+				if ctrl != nil && ctrl.IsCancelled() {
+					return "lan", uploaded, transfer.ErrCancelled
+				}
 				return "lan", uploaded, uerr
 			}
 			completed += sizes[idx]
@@ -288,8 +336,11 @@ func UploadFilesWithProgress(ctx context.Context, sess *ResolvedSession, paths [
 	}
 
 	for idx, p := range paths {
-		name, uerr := relayUploadFile(ctx, ws, p, txID, idx+1, fileCount, completed, totalBytes, onProgress)
+		name, uerr := relayUploadFile(ctx, ws, p, txID, idx+1, fileCount, completed, totalBytes, ctrl, onProgress)
 		if uerr != nil {
+			if ctrl != nil && ctrl.IsCancelled() {
+				return "relay", uploaded, transfer.ErrCancelled
+			}
 			return "relay", uploaded, uerr
 		}
 		completed += sizes[idx]
@@ -333,6 +384,7 @@ func relayList(ctx context.Context, ws *websocket.Conn) ([]lanweb.File, error) {
 }
 
 type progressIO struct {
+	ctx        context.Context
 	r          io.Reader
 	txID       uint64
 	direction  string
@@ -344,10 +396,73 @@ type progressIO struct {
 	totalBytes int64
 	curBytes   int64
 	lastEmit   time.Time
+	ctrl       *transfer.Controller
 	onProgress func(TransferProgress)
 }
 
+func waitWhilePaused(ctx context.Context, ctrl *transfer.Controller, ws *websocket.Conn, emitStage func(stage string)) error {
+	if ctrl == nil {
+		return nil
+	}
+	if ctrl.IsCancelled() {
+		return transfer.ErrCancelled
+	}
+	if !ctrl.IsPaused() {
+		return nil
+	}
+	if emitStage != nil {
+		emitStage("paused")
+	}
+	var ticker *time.Ticker
+	var pingC <-chan time.Time
+	if ws != nil {
+		ticker = time.NewTicker(10 * time.Second)
+		pingC = ticker.C
+		defer ticker.Stop()
+	}
+	for ctrl.IsPaused() && !ctrl.IsCancelled() {
+		select {
+		case <-ctx.Done():
+			if ctrl.IsCancelled() {
+				return transfer.ErrCancelled
+			}
+			return ctx.Err()
+		case <-ctrl.StateCh():
+		case <-pingC:
+			if ws != nil {
+				pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				_ = ws.Ping(pctx)
+				cancel()
+			}
+		}
+	}
+	if ctrl.IsCancelled() {
+		return transfer.ErrCancelled
+	}
+	if emitStage != nil {
+		emitStage("transferring")
+	}
+	return nil
+}
+
 func (p *progressIO) Read(b []byte) (int, error) {
+	if err := waitWhilePaused(p.ctx, p.ctrl, nil, func(st string) {
+		if p.onProgress != nil {
+			p.onProgress(TransferProgress{
+				ID:         p.txID,
+				Direction:  p.direction,
+				Channel:    p.channel,
+				Stage:      st,
+				FileName:   p.fileName,
+				FileIndex:  p.fileIndex,
+				FileCount:  p.fileCount,
+				BytesDone:  p.baseBytes + p.curBytes,
+				BytesTotal: p.totalBytes,
+			})
+		}
+	}); err != nil {
+		return 0, err
+	}
 	n, err := p.r.Read(b)
 	if n > 0 && p.onProgress != nil {
 		p.curBytes += int64(n)
@@ -371,7 +486,7 @@ func (p *progressIO) Read(b []byte) (int, error) {
 	return n, err
 }
 
-func downloadLANFile(ctx context.Context, client *http.Client, lanBase string, f lanweb.File, outDir string, txID uint64, fileIdx, fileCount int, completedBefore, totalBytes int64, onProgress func(TransferProgress)) (string, error) {
+func downloadLANFile(ctx context.Context, client *http.Client, lanBase string, f lanweb.File, outDir string, txID uint64, fileIdx, fileCount int, completedBefore, totalBytes int64, ctrl *transfer.Controller, onProgress func(TransferProgress)) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, lanBase+"/f/"+url.PathEscape(f.Name), nil)
 	if err != nil {
 		return "", err
@@ -405,8 +520,9 @@ func downloadLANFile(ctx context.Context, client *http.Client, lanBase string, f
 	}
 	h := sha256.New()
 	src := io.Reader(resp.Body)
-	if onProgress != nil {
+	if onProgress != nil || ctrl != nil {
 		src = &progressIO{
+			ctx:        ctx,
 			r:          resp.Body,
 			txID:       txID,
 			direction:  "recv",
@@ -417,6 +533,7 @@ func downloadLANFile(ctx context.Context, client *http.Client, lanBase string, f
 			baseBytes:  completedBefore,
 			totalBytes: totalBytes,
 			lastEmit:   time.Now(),
+			ctrl:       ctrl,
 			onProgress: onProgress,
 		}
 	}
@@ -453,7 +570,7 @@ func downloadLANFile(ctx context.Context, client *http.Client, lanBase string, f
 	return dest, nil
 }
 
-func uploadLANFile(ctx context.Context, client *http.Client, lanBase, path string, txID uint64, fileIdx, fileCount int, completedBefore, totalBytes int64, onProgress func(TransferProgress)) error {
+func uploadLANFile(ctx context.Context, client *http.Client, lanBase, path string, txID uint64, fileIdx, fileCount int, completedBefore, totalBytes int64, ctrl *transfer.Controller, onProgress func(TransferProgress)) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -484,8 +601,9 @@ func uploadLANFile(ctx context.Context, client *http.Client, lanBase, path strin
 		var copied int64
 		if werr == nil {
 			src := io.Reader(f)
-			if onProgress != nil {
+			if onProgress != nil || ctrl != nil {
 				src = &progressIO{
+					ctx:        ctx,
 					r:          f,
 					txID:       txID,
 					direction:  "send",
@@ -496,6 +614,7 @@ func uploadLANFile(ctx context.Context, client *http.Client, lanBase, path strin
 					baseBytes:  completedBefore,
 					totalBytes: totalBytes,
 					lastEmit:   time.Now(),
+					ctrl:       ctrl,
 					onProgress: onProgress,
 				}
 			}
@@ -537,7 +656,7 @@ func uploadLANFile(ctx context.Context, client *http.Client, lanBase, path strin
 	return nil
 }
 
-func relayDownloadFile(ctx context.Context, ws *websocket.Conn, name, outDir string, txID uint64, fileIdx, fileCount int, completedBefore, totalBytes, fileSize int64, onProgress func(TransferProgress)) (string, error) {
+func relayDownloadFile(ctx context.Context, ws *websocket.Conn, name, outDir string, txID uint64, fileIdx, fileCount int, completedBefore, totalBytes, fileSize int64, ctrl *transfer.Controller, onProgress func(TransferProgress)) (string, error) {
 	reqB, _ := json.Marshal(map[string]string{"t": "get", "name": name})
 	if err := ws.Write(ctx, websocket.MessageText, reqB); err != nil {
 		return "", err
@@ -558,6 +677,23 @@ func relayDownloadFile(ctx context.Context, ws *websocket.Conn, name, outDir str
 	defer cleanup()
 
 	for {
+		if err := waitWhilePaused(ctx, ctrl, ws, func(st string) {
+			if onProgress != nil {
+				onProgress(TransferProgress{
+					ID:         txID,
+					Direction:  "recv",
+					Channel:    "relay",
+					Stage:      st,
+					FileName:   name,
+					FileIndex:  fileIdx,
+					FileCount:  fileCount,
+					BytesDone:  completedBefore + written,
+					BytesTotal: totalBytes,
+				})
+			}
+		}); err != nil {
+			return "", err
+		}
 		typ, data, err := ws.Read(ctx)
 		if err != nil {
 			return "", err
@@ -661,7 +797,7 @@ func relayDownloadFile(ctx context.Context, ws *websocket.Conn, name, outDir str
 	}
 }
 
-func relayUploadFile(ctx context.Context, ws *websocket.Conn, path string, txID uint64, fileIdx, fileCount int, completedBefore, totalBytes int64, onProgress func(TransferProgress)) (string, error) {
+func relayUploadFile(ctx context.Context, ws *websocket.Conn, path string, txID uint64, fileIdx, fileCount int, completedBefore, totalBytes int64, ctrl *transfer.Controller, onProgress func(TransferProgress)) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
@@ -711,6 +847,23 @@ func relayUploadFile(ctx context.Context, ws *websocket.Conn, path string, txID 
 	var sent int64
 	lastEmit := time.Now()
 	for {
+		if err := waitWhilePaused(ctx, ctrl, ws, func(st string) {
+			if onProgress != nil {
+				onProgress(TransferProgress{
+					ID:         txID,
+					Direction:  "send",
+					Channel:    "relay",
+					Stage:      st,
+					FileName:   fname,
+					FileIndex:  fileIdx,
+					FileCount:  fileCount,
+					BytesDone:  completedBefore + sent,
+					BytesTotal: totalBytes,
+				})
+			}
+		}); err != nil {
+			return "", err
+		}
 		n, rerr := f.Read(buf)
 		if n > 0 {
 			if werr := ws.Write(ctx, websocket.MessageBinary, buf[:n]); werr != nil {

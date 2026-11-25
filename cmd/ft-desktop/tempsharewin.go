@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/lanweb"
 	"github.com/cwlindean/filetransfer/core/tempshare"
+	"github.com/cwlindean/filetransfer/core/transfer"
 )
 
 const (
@@ -34,8 +36,10 @@ const (
 	tsHoverToJoin = 4
 	tsHoverCopy   = 5
 	tsHoverStop   = 6
-	tsHoverJoinGo = 7
-	tsHoverBack   = 8
+	tsHoverJoinGo   = 7
+	tsHoverBack     = 8
+	tsHoverTxPause  = 9
+	tsHoverTxCancel = 10
 )
 
 var (
@@ -75,6 +79,9 @@ type tempWin struct {
 	txPct      float64
 	txSpeedBPS int64
 	txID       uint64
+	txStage    string
+	txPaused   bool
+	txCtrl     *transfer.Controller
 	txSamples  []txSpeedSample
 
 	codeEdit syscall.Handle
@@ -96,6 +103,8 @@ type tempWin struct {
 	codeBoxR   rectT
 	joinGoRect rectT
 	backRect   rectT
+	txPauseR   rectT
+	txCancelR  rectT
 }
 
 // openTempShareWindow opens the Acrylic temporary share window (send/recv HTTPS QR or join by 6-digit code).
@@ -345,6 +354,7 @@ func (w *tempWin) layout(cw, ch int32) {
 	w.sendCardR, w.recvCardR, w.toJoinR = rectT{}, rectT{}, rectT{}
 	w.qrRect, w.copyRect, w.stopRect = rectT{}, rectT{}, rectT{}
 	w.codeBoxR, w.joinGoRect, w.backRect = rectT{}, rectT{}, rectT{}
+	w.txPauseR, w.txCancelR = rectT{}, rectT{}
 
 	switch w.mode {
 	case tsModeSelect:
@@ -557,9 +567,10 @@ func (w *tempWin) paint(hwnd syscall.Handle) {
 		txTitle := w.txTitle
 		txMeta := w.txMeta
 		txPct := w.txPct
+		txPaused := w.txPaused
 		tempWinMu.Unlock()
 		if txActive {
-			w.drawTempProgress(cv, rectT{pad, cy + w.px(58), cr.right - pad, cy + w.px(110)}, txTitle, txMeta, txPct)
+			w.drawTempProgress(cv, rectT{pad, cy + w.px(58), cr.right - pad, cy + w.px(110)}, txTitle, txMeta, txPct, txPaused)
 		} else {
 			cv.drawAlphaText(w.fontSm, infoText, rectT{pad, cy + w.px(62), cr.right - pad, cy + w.px(88)},
 				dtCenter|dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink3)
@@ -603,11 +614,41 @@ func (w *tempWin) paint(hwnd syscall.Handle) {
 		txTitle := w.txTitle
 		txMeta := w.txMeta
 		txPct := w.txPct
+		txPaused := w.txPaused
+		txStage := w.txStage
+		hasCtrl := w.txCtrl != nil
 		tempWinMu.Unlock()
+		w.txPauseR, w.txCancelR = rectT{}, rectT{}
 		statusTop := w.px(274)
 		if txActive {
-			w.drawTempProgress(cv, rectT{pad, w.px(270), cr.right - pad, w.px(324)}, txTitle, txMeta, txPct)
+			w.drawTempProgress(cv, rectT{pad, w.px(270), cr.right - pad, w.px(324)}, txTitle, txMeta, txPct, txPaused)
 			statusTop = w.px(336)
+			if hasCtrl {
+				btnT := w.px(332)
+				btnB := w.px(360)
+				cwBtn := w.px(66)
+				w.txCancelR = rectT{cr.right - pad - cwBtn, btnT, cr.right - pad, btnB}
+				if txStage != "verifying" {
+					w.txPauseR = rectT{w.txCancelR.left - w.px(8) - w.px(66), btnT, w.txCancelR.left - w.px(8), btnB}
+					pLabel := "暂停"
+					if txPaused {
+						pLabel = "继续"
+					}
+					pFill := w.pal.paper2
+					if w.hover == tsHoverTxPause {
+						pFill = w.pal.accentSoft
+					}
+					cv.drawAlphaRoundRect(w.txPauseR, float64(w.px(6)), pFill, 235, w.pal.line, 255, 1.0)
+					cv.drawAlphaText(w.fontSm, pLabel, w.txPauseR, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
+				}
+				cFill := w.pal.paper2
+				if w.hover == tsHoverTxCancel {
+					cFill = w.pal.paper3
+				}
+				cv.drawAlphaRoundRect(w.txCancelR, float64(w.px(6)), cFill, 235, w.pal.danger, 200, 1.0)
+				cv.drawAlphaText(w.fontSm, "取消", w.txCancelR, dtCenter|dtSingleLine|dtVCenter, w.pal.danger)
+				statusTop = w.px(368)
+			}
 		}
 		if w.errMsg != "" {
 			cv.drawAlphaText(w.fontSm, w.errMsg, rectT{pad, statusTop, cr.right - pad, w.px(420)},
@@ -637,6 +678,10 @@ func (w *tempWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
 		z = tsHoverCopy
 	case w.mode == tsModeHost && ptIn(w.stopRect, x, y):
 		z = tsHoverStop
+	case w.mode == tsModeJoin && w.txPauseR.right > w.txPauseR.left && ptIn(w.txPauseR, x, y):
+		z = tsHoverTxPause
+	case w.mode == tsModeJoin && w.txCancelR.right > w.txCancelR.left && ptIn(w.txCancelR, x, y):
+		z = tsHoverTxCancel
 	case w.mode == tsModeJoin && ptIn(w.joinGoRect, x, y):
 		z = tsHoverJoinGo
 	case w.mode == tsModeJoin && ptIn(w.backRect, x, y):
@@ -693,6 +738,22 @@ func (w *tempWin) onClick(hwnd syscall.Handle, x, y int32) {
 		}
 	case tsModeJoin:
 		switch {
+		case ptIn(w.txPauseR, x, y):
+			tempWinMu.Lock()
+			ctrl := w.txCtrl
+			tempWinMu.Unlock()
+			if ctrl != nil {
+				ctrl.TogglePause()
+				procInvalidateRect.Call(uintptr(hwnd), 0, 0)
+			}
+		case ptIn(w.txCancelR, x, y):
+			tempWinMu.Lock()
+			ctrl := w.txCtrl
+			tempWinMu.Unlock()
+			if ctrl != nil {
+				ctrl.Cancel()
+				procInvalidateRect.Call(uintptr(hwnd), 0, 0)
+			}
 		case ptIn(w.backRect, x, y) && !w.busy:
 			w.hideJoinEdit()
 			w.mode = tsModeSelect
@@ -844,8 +905,30 @@ func (w *tempWin) joinByCode() {
 			if peerName == "" {
 				peerName = "临时快传"
 			}
+			ctrl := transfer.NewController()
 			txSeq := a.beginTransfer("recv", peerName, "", 0, 0)
-			via, saved, err := tempshare.DownloadAllWithProgress(context.Background(), sess, a.receiveDir(), func(p tempshare.TransferProgress) {
+			a.attachTransferControl(txSeq, ctrl, true, true)
+			tempWinMu.Lock()
+			if cur := tempWins[hwnd]; cur != nil {
+				cur.txCtrl = ctrl
+				cur.txPaused = false
+			}
+			tempWinMu.Unlock()
+			ctrl.SetOnState(func(paused bool) {
+				tempWinMu.Lock()
+				if cur := tempWins[hwnd]; cur != nil {
+					cur.txPaused = paused
+					if paused {
+						cur.txSpeedBPS = 0
+						cur.txStage = "paused"
+					} else if cur.txStage == "paused" {
+						cur.txStage = "transferring"
+					}
+				}
+				tempWinMu.Unlock()
+				procPostMessageW.Call(uintptr(hwnd), wmTempUpdate, 0, 0)
+			})
+			via, saved, err := tempshare.DownloadAllWithControl(context.Background(), sess, a.receiveDir(), ctrl, func(p tempshare.TransferProgress) {
 				updateTempWinProgress(hwnd, p)
 				if !p.Done {
 					ch := "中继"
@@ -856,7 +939,18 @@ func (w *tempWin) joinByCode() {
 				}
 			})
 			a.endTransfer(txSeq)
+			tempWinMu.Lock()
+			if cur := tempWins[hwnd]; cur != nil {
+				cur.txCtrl = nil
+				cur.txPaused = false
+				cur.txStage = ""
+			}
+			tempWinMu.Unlock()
 			if err != nil {
+				if ctrl.IsCancelled() || errors.Is(err, transfer.ErrCancelled) {
+					w.finishJoinCancelled(hwnd, "已取消下载")
+					return
+				}
 				w.finishJoinError(hwnd, "下载失败："+err.Error())
 				return
 			}
@@ -896,8 +990,30 @@ func (w *tempWin) joinByCode() {
 		if peerName == "" {
 			peerName = "临时快传"
 		}
+		ctrl := transfer.NewController()
 		txSeq := a.beginTransfer("send", peerName, "", len(files), 0)
-		via, uploaded, err := tempshare.UploadFilesWithProgress(context.Background(), sess, files, func(p tempshare.TransferProgress) {
+		a.attachTransferControl(txSeq, ctrl, true, true)
+		tempWinMu.Lock()
+		if cur := tempWins[hwnd]; cur != nil {
+			cur.txCtrl = ctrl
+			cur.txPaused = false
+		}
+		tempWinMu.Unlock()
+		ctrl.SetOnState(func(paused bool) {
+			tempWinMu.Lock()
+			if cur := tempWins[hwnd]; cur != nil {
+				cur.txPaused = paused
+				if paused {
+					cur.txSpeedBPS = 0
+					cur.txStage = "paused"
+				} else if cur.txStage == "paused" {
+					cur.txStage = "transferring"
+				}
+			}
+			tempWinMu.Unlock()
+			procPostMessageW.Call(uintptr(hwnd), wmTempUpdate, 0, 0)
+		})
+		via, uploaded, err := tempshare.UploadFilesWithControl(context.Background(), sess, files, ctrl, func(p tempshare.TransferProgress) {
 			updateTempWinProgress(hwnd, p)
 			if !p.Done {
 				ch := "中继"
@@ -908,7 +1024,18 @@ func (w *tempWin) joinByCode() {
 			}
 		})
 		a.endTransfer(txSeq)
+		tempWinMu.Lock()
+		if cur := tempWins[hwnd]; cur != nil {
+			cur.txCtrl = nil
+			cur.txPaused = false
+			cur.txStage = ""
+		}
+		tempWinMu.Unlock()
 		if err != nil {
+			if ctrl.IsCancelled() || errors.Is(err, transfer.ErrCancelled) {
+				w.finishJoinCancelled(hwnd, "已取消上传")
+				return
+			}
 			w.finishJoinError(hwnd, "上传失败："+err.Error())
 			return
 		}
@@ -937,9 +1064,31 @@ func (w *tempWin) finishJoinError(hwnd syscall.Handle, msg string) {
 	if cur != nil {
 		cur.busy = false
 		cur.txActive = false
+		cur.txPaused = false
+		cur.txStage = ""
+		cur.txCtrl = nil
 		cur.txSamples = nil
 		cur.errMsg = msg
 		cur.status = ""
+	}
+	tempWinMu.Unlock()
+	if cur != nil {
+		procPostMessageW.Call(uintptr(hwnd), wmTempUpdate, 0, 0)
+	}
+}
+
+func (w *tempWin) finishJoinCancelled(hwnd syscall.Handle, msg string) {
+	tempWinMu.Lock()
+	cur := tempWins[hwnd]
+	if cur != nil {
+		cur.busy = false
+		cur.txActive = false
+		cur.txPaused = false
+		cur.txStage = ""
+		cur.txCtrl = nil
+		cur.txSamples = nil
+		cur.errMsg = ""
+		cur.status = msg
 	}
 	tempWinMu.Unlock()
 	if cur != nil {
@@ -961,11 +1110,16 @@ func updateTempWinProgress(hwnd syscall.Handle, p tempshare.TransferProgress) {
 			w.txSpeedBPS = 0
 			w.txSamples = nil
 			w.txID = 0
+			w.txStage = ""
+			w.txPaused = false
 		}
 		tempWinMu.Unlock()
 		procPostMessageW.Call(uintptr(hwnd), wmTempUpdate, 0, 0)
 		return
 	}
+	paused := p.Stage == "paused" || (w.txCtrl != nil && w.txCtrl.IsPaused())
+	w.txStage = p.Stage
+	w.txPaused = paused
 	if w.txID != p.ID || len(w.txSamples) == 0 || (w.txSamples[len(w.txSamples)-1].bytes > p.BytesDone) {
 		w.txID = p.ID
 		w.txSamples = []txSpeedSample{{t: now, bytes: p.BytesDone}}
@@ -976,7 +1130,7 @@ func updateTempWinProgress(hwnd syscall.Handle, p tempshare.TransferProgress) {
 		}
 	}
 	var speedBPS int64
-	if p.Stage != "verifying" && len(w.txSamples) >= 2 {
+	if !paused && p.Stage != "verifying" && len(w.txSamples) >= 2 {
 		first := w.txSamples[0]
 		dt := now.Sub(first.t).Seconds()
 		db := p.BytesDone - first.bytes
@@ -989,6 +1143,9 @@ func updateTempWinProgress(hwnd syscall.Handle, p tempshare.TransferProgress) {
 	verb := "发送"
 	if p.Direction == "recv" {
 		verb = "接收"
+	}
+	if paused {
+		verb = "已暂停"
 	}
 	chLabel := "中继"
 	if p.Channel == "lan" {
@@ -1020,7 +1177,9 @@ func updateTempWinProgress(hwnd syscall.Handle, p tempshare.TransferProgress) {
 	} else {
 		meta = append(meta, "准备传输…")
 	}
-	if p.Stage == "verifying" {
+	if paused {
+		meta = append(meta, "已暂停")
+	} else if p.Stage == "verifying" {
 		meta = append(meta, "校验写入中…")
 	} else if speedBPS > 0 {
 		meta = append(meta, formatSpeed(speedBPS))
@@ -1040,8 +1199,12 @@ func updateTempWinProgress(hwnd syscall.Handle, p tempshare.TransferProgress) {
 	procPostMessageW.Call(uintptr(hwnd), wmTempUpdate, 0, 0)
 }
 
-func (w *tempWin) drawTempProgress(cv *glassCanvas, r rectT, title, meta string, pct float64) {
-	cv.drawAlphaRoundRect(r, float64(w.px(8)), w.pal.paper2, 240, w.pal.accent, 180, 1.0)
+func (w *tempWin) drawTempProgress(cv *glassCanvas, r rectT, title, meta string, pct float64, paused bool) {
+	accentCol := w.pal.accent
+	if paused {
+		accentCol = w.pal.amber
+	}
+	cv.drawAlphaRoundRect(r, float64(w.px(8)), w.pal.paper2, 240, accentCol, 180, 1.0)
 	inL := r.left + w.px(10)
 	inR := r.right - w.px(10)
 	cv.drawAlphaText(w.fontSm, title, rectT{inL, r.top + w.px(5), inR, r.top + w.px(21)},
@@ -1060,7 +1223,7 @@ func (w *tempWin) drawTempProgress(cv *glassCanvas, r rectT, title, meta string,
 	if barR.left+fw > barR.right {
 		fw = barR.right - barR.left
 	}
-	cv.drawAlphaRoundRect(rectT{barR.left, barR.top, barR.left + fw, barR.bottom}, float64(w.px(3)), w.pal.accent, 255, 0, 0, 0)
+	cv.drawAlphaRoundRect(rectT{barR.left, barR.top, barR.left + fw, barR.bottom}, float64(w.px(3)), accentCol, 255, 0, 0, 0)
 	cv.drawAlphaText(w.fontSm, meta, rectT{inL, r.top + w.px(32), inR, r.bottom - w.px(4)},
 		dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
 }

@@ -45,6 +45,16 @@ func SendLAN(ctx context.Context, o Options, addr string, files []string) (Resul
 	if addr == "" {
 		return Result{}, fmt.Errorf("empty LAN address")
 	}
+	if o.Control != nil {
+		if o.Control.IsCancelled() {
+			return Result{}, transfer.ErrCancelled
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		unreg := o.Control.OnCancel(cancel)
+		defer unreg()
+	}
 	infos, total, err := describeFiles(files)
 	if err != nil {
 		return Result{}, err
@@ -110,7 +120,7 @@ func SendLAN(ctx context.Context, o Options, addr string, files []string) (Resul
 	}
 	start := time.Now()
 	res, err := transfer.Send(s, files, transfer.Config{
-		ChunkSize: uint32(o.Chunk), Timeout: o.Timeout, StartTimeout: 65 * time.Second, Log: o.Log,
+		ChunkSize: uint32(o.Chunk), Timeout: o.Timeout, StartTimeout: 65 * time.Second, Control: o.Control, Log: o.Log,
 		TransferID: hex16(tid),
 		OnDetailProgress: func(snap transfer.ProgressSnapshot) {
 			emitStatus(Status{

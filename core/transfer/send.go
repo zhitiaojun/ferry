@@ -23,6 +23,18 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 	if len(paths) == 0 {
 		return nil, errors.New("transfer: no input files")
 	}
+	if cfg.Control != nil && cfg.Control.IsCancelled() {
+		return nil, ErrCancelled
+	}
+	var inSendFile atomic.Bool
+	if cfg.Control != nil {
+		unreg := cfg.Control.OnCancel(func() {
+			if !inSendFile.Load() {
+				_ = s.Conn().SetReadDeadline(time.Now())
+			}
+		})
+		defer unreg()
+	}
 
 	entries := make([]proto.FileEntry, 0, len(paths))
 	for _, p := range paths {
@@ -68,10 +80,21 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 	}
 
 	if err := s.SendMsg(proto.TypeManifest, manifest); err != nil {
+		if cfg.Control != nil && cfg.Control.IsCancelled() {
+			return nil, ErrCancelled
+		}
 		return nil, err
 	}
-	startIdx, startOff, err := waitStart(s, tid, cfg.startTimeout())
+	startIdx, startOff, err := waitStart(s, tid, cfg.startTimeout(), cfg.Control)
 	if err != nil {
+		if errors.Is(err, ErrCancelled) || (cfg.Control != nil && cfg.Control.IsCancelled()) {
+			if errors.Is(err, ErrCancelled) {
+				_ = s.Conn().SetWriteDeadline(time.Now().Add(300 * time.Millisecond))
+				_ = s.SendError(proto.CodeCancelled, "发送方已取消传输")
+				_ = s.Conn().SetWriteDeadline(time.Time{})
+			}
+			return nil, ErrCancelled
+		}
 		return nil, fmt.Errorf("manifest ack: %w", err)
 	}
 
@@ -137,13 +160,18 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 				BytesTotal: batchTotal,
 			})
 		}
+		inSendFile.Store(true)
 		h, n, c, err := sendFile(s, tid, uint32(i), len(entries), entries[i].Name, entries[i].Size, p, buf, cfg, off, completedBefore, sessionBase, batchTotal, slow, upg)
+		inSendFile.Store(false)
 		if err != nil {
 			if errors.Is(err, ErrPathUpgrade) {
 				if upg != nil {
 					upg.stop()
 				}
 				return nil, ErrPathUpgrade
+			}
+			if errors.Is(err, ErrCancelled) {
+				return nil, ErrCancelled
 			}
 			if !errors.Is(err, ErrSlowPath) {
 				_ = s.SendError(proto.CodeIOError, "send %s: %v", entries[i].Name, err)
@@ -176,15 +204,17 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 	}
 	fin := &proto.Fin{Status: proto.FinOK, TransferID: tid, Hashes: hashes}
 	if err := s.SendMsg(proto.TypeFin, fin); err != nil {
+		if cfg.Control != nil && cfg.Control.IsCancelled() {
+			return nil, ErrCancelled
+		}
 		return nil, err
 	}
-	v, err := s.Expect(proto.TypeFin, cfg.timeout()*3)
+	peerFin, err := waitFin(s, cfg.timeout()*3, cfg.Control)
 	if err != nil {
+		if errors.Is(err, ErrCancelled) || (cfg.Control != nil && cfg.Control.IsCancelled()) {
+			return nil, ErrCancelled
+		}
 		return nil, fmt.Errorf("final FIN: %w", err)
-	}
-	peerFin, ok := v.(*proto.Fin)
-	if !ok {
-		return nil, proto.NewError(proto.CodePayloadInvalid, "peer FIN did not decode")
 	}
 	if peerFin.Status != proto.FinOK {
 		return nil, fmt.Errorf("transfer: peer reported status %d", peerFin.Status)
@@ -259,19 +289,114 @@ func sendFile(
 		upg.attachCond(cond)
 		defer upg.attachCond(nil)
 	}
+	fileDone := make(chan struct{})
+	defer close(fileDone)
+	if cfg.Control != nil {
+		unregFile := cfg.Control.OnCancel(func() {
+			mu.Lock()
+			cond.Broadcast()
+			mu.Unlock()
+			go func() {
+				select {
+				case <-fileDone:
+				case <-time.After(500 * time.Millisecond):
+					_ = s.Conn().SetDeadline(time.Now())
+				}
+			}()
+		})
+		defer unregFile()
+	}
 
 	sentOff := startOffset
 	ackedOff := startOffset
 	var recvErr error
+	failSig := make(chan struct{})
+	var failOnce sync.Once
+	signalAckFail := func() {
+		failOnce.Do(func() { close(failSig) })
+	}
 
 	ackDone := make(chan error, 1)
 	go func() {
-		ackDone <- readFileAcks(s, tid, index, fileCount, fileName, fileSize, startOffset, completedBefore, sessionBase, batchTotal, cfg, slow, upg, &mu, cond, &sentOff, &ackedOff, &recvErr)
+		ackDone <- readFileAcks(s, tid, index, fileCount, fileName, fileSize, startOffset, completedBefore, sessionBase, batchTotal, cfg, slow, upg, &mu, cond, &sentOff, &ackedOff, &recvErr, signalAckFail)
 	}()
 
 	chunks := 0
 	var writeErr error
 	for {
+		if cfg.Control != nil && cfg.Control.IsCancelled() {
+			writeErr = ErrCancelled
+			break
+		}
+		if cfg.Control != nil && cfg.Control.IsPaused() {
+			mu.Lock()
+			curAck := ackedOff
+			rerr := recvErr
+			mu.Unlock()
+			if rerr != nil {
+				writeErr = rerr
+				break
+			}
+			if cfg.OnDetailProgress != nil {
+				cfg.OnDetailProgress(ProgressSnapshot{
+					Stage:      "paused",
+					FileIndex:  int(index) + 1,
+					FileCount:  fileCount,
+					FileName:   fileName,
+					BytesDone:  completedBefore + int64(curAck),
+					BytesTotal: batchTotal,
+				})
+			}
+			ka := keepaliveInterval(cfg.timeout())
+			resumed := false
+			for cfg.Control.IsPaused() && !cfg.Control.IsCancelled() {
+				if upg != nil && upg.isTriggered() {
+					writeErr = ErrPathUpgrade
+					break
+				}
+				stateCh := cfg.Control.StateCh()
+				timer := time.NewTimer(ka)
+				select {
+				case <-failSig:
+					timer.Stop()
+					mu.Lock()
+					rerr = recvErr
+					mu.Unlock()
+					writeErr = rerr
+				case <-stateCh:
+					timer.Stop()
+				case <-timer.C:
+					var tok [8]byte
+					if perr := s.SendMsg(proto.TypePing, &proto.Ping{Token: tok}); perr != nil {
+						writeErr = perr
+					}
+				}
+				if writeErr != nil {
+					break
+				}
+			}
+			if writeErr != nil {
+				break
+			}
+			if cfg.Control.IsCancelled() {
+				writeErr = ErrCancelled
+				break
+			}
+			resumed = true
+			if resumed && cfg.OnDetailProgress != nil {
+				mu.Lock()
+				curAck = ackedOff
+				mu.Unlock()
+				cfg.OnDetailProgress(ProgressSnapshot{
+					Stage:      "transferring",
+					FileIndex:  int(index) + 1,
+					FileCount:  fileCount,
+					FileName:   fileName,
+					BytesDone:  completedBefore + int64(curAck),
+					BytesTotal: batchTotal,
+				})
+			}
+		}
 		if upg != nil && upg.isTriggered() {
 			writeErr = ErrPathUpgrade
 			break
@@ -282,8 +407,13 @@ func sendFile(
 			sum := sha256.Sum256(chunk)
 
 			mu.Lock()
-			for (sentOff-ackedOff) >= windowBytes && recvErr == nil && (slow == nil || !slow.isTriggered()) && (upg == nil || !upg.isTriggered()) {
+			for (sentOff-ackedOff) >= windowBytes && recvErr == nil && (slow == nil || !slow.isTriggered()) && (upg == nil || !upg.isTriggered()) && (cfg.Control == nil || !cfg.Control.IsCancelled()) {
 				cond.Wait()
+			}
+			if cfg.Control != nil && cfg.Control.IsCancelled() {
+				mu.Unlock()
+				writeErr = ErrCancelled
+				break
 			}
 			if slow != nil && slow.isTriggered() {
 				mu.Unlock()
@@ -312,7 +442,11 @@ func sendFile(
 				Data:        chunk,
 			}
 			if err := s.SendMsg(proto.TypeData, msg); err != nil {
-				writeErr = err
+				if cfg.Control != nil && cfg.Control.IsCancelled() {
+					writeErr = ErrCancelled
+				} else {
+					writeErr = err
+				}
 				_ = s.Conn().SetReadDeadline(time.Now())
 				break
 			}
@@ -331,10 +465,22 @@ func sendFile(
 
 	if writeErr == nil {
 		mu.Lock()
-		for ackedOff < fileSize && recvErr == nil && (slow == nil || !slow.isTriggered()) && (upg == nil || !upg.isTriggered()) {
+		for ackedOff < fileSize && recvErr == nil && (slow == nil || !slow.isTriggered()) && (upg == nil || !upg.isTriggered()) && (cfg.Control == nil || !cfg.Control.IsCancelled()) {
 			cond.Wait()
 		}
+		if cfg.Control != nil && cfg.Control.IsCancelled() {
+			writeErr = ErrCancelled
+		}
 		mu.Unlock()
+	}
+
+	if errors.Is(writeErr, ErrCancelled) || (cfg.Control != nil && cfg.Control.IsCancelled()) {
+		_ = s.Conn().SetWriteDeadline(time.Now().Add(300 * time.Millisecond))
+		_ = s.SendError(proto.CodeCancelled, "发送方已取消传输")
+		_ = s.Conn().SetWriteDeadline(time.Time{})
+		_ = s.Conn().SetReadDeadline(time.Now())
+		<-ackDone
+		return zero, 0, 0, ErrCancelled
 	}
 
 	if upg != nil && upg.isTriggered() {
@@ -387,22 +533,46 @@ func readFileAcks(
 	sentOff *uint64,
 	ackedOff *uint64,
 	recvErr *error,
+	signalFail func(),
 ) error {
 	fail := func(err error) error {
 		mu.Lock()
 		*recvErr = err
 		cond.Broadcast()
 		mu.Unlock()
+		if signalFail != nil {
+			signalFail()
+		}
 		return err
 	}
 
 	for {
-		v, err := s.Expect(proto.TypeAck, cfg.timeout())
+		fr, err := s.Recv(cfg.timeout())
 		if err != nil {
+			if cfg.Control != nil && cfg.Control.IsCancelled() {
+				return fail(ErrCancelled)
+			}
 			return fail(err)
 		}
-		ack, ok := v.(*proto.Ack)
-		if !ok {
+		switch fr.Type {
+		case proto.TypePing:
+			if p, perr := proto.ParsePing(fr.Payload); perr == nil {
+				_ = s.SendMsg(proto.TypePong, p)
+			}
+			if slow != nil {
+				slow.notePeerPaused()
+			}
+			continue
+		case proto.TypePong:
+			continue
+		case proto.TypeError:
+			return fail(remoteErrorFrom(fr.Payload))
+		case proto.TypeAck:
+		default:
+			return fail(proto.NewError(proto.CodeUnexpectedMessage, fmt.Sprintf("want ACK, got %s", fr.Type)))
+		}
+		ack, err := proto.ParseAck(fr.Payload)
+		if err != nil {
 			return fail(proto.NewError(proto.CodePayloadInvalid, "ACK did not decode"))
 		}
 		if ack.TransferID != tid {
@@ -467,16 +637,18 @@ type slowWatchdog struct {
 	grace      time.Duration
 	win        time.Duration
 	minRem     int64
+	ctrl       *Controller
 	start      time.Time
 
-	mu        sync.Mutex
-	batchDone int64
-	sessDone  int64
-	triggered bool
-	stopped   bool
-	cond      *sync.Cond
-	stopCh    chan struct{}
-	doneCh    chan struct{}
+	mu              sync.Mutex
+	batchDone       int64
+	sessDone        int64
+	peerPausedUntil time.Time
+	triggered       bool
+	stopped         bool
+	cond            *sync.Cond
+	stopCh          chan struct{}
+	doneCh          chan struct{}
 }
 
 func startSlowWatchdog(s *session.Session, batchTotal int64, cfg Config) *slowWatchdog {
@@ -488,12 +660,22 @@ func startSlowWatchdog(s *session.Session, batchTotal int64, cfg Config) *slowWa
 		grace:      cfg.slowGrace(),
 		win:        cfg.slowWindow(),
 		minRem:     cfg.slowMinRemaining(),
+		ctrl:       cfg.Control,
 		start:      now,
 		stopCh:     make(chan struct{}),
 		doneCh:     make(chan struct{}),
 	}
 	go w.run()
 	return w
+}
+
+func (w *slowWatchdog) notePeerPaused() {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	w.peerPausedUntil = time.Now().Add(15 * time.Second)
+	w.mu.Unlock()
 }
 
 func (w *slowWatchdog) setConfirmed(batchDone, sessDone int64) {
@@ -552,8 +734,14 @@ func (w *slowWatchdog) run() {
 			w.mu.Lock()
 			batchDone := w.batchDone
 			sessDone := w.sessDone
+			peerPaused := now.Before(w.peerPausedUntil)
 			cond := w.cond
 			w.mu.Unlock()
+
+			if (w.ctrl != nil && w.ctrl.IsPaused()) || peerPaused {
+				samples = []speedSample{{t: now, bytes: sessDone}}
+				continue
+			}
 
 			samples = append(samples, speedSample{t: now, bytes: sessDone})
 			cutoff := now.Add(-(w.win + 2*time.Second))
@@ -702,35 +890,91 @@ func (u *upgradeMonitor) run() {
 
 // waitStart waits for the receiver's answer to MANIFEST: ACK(0,0) for a fresh
 // transfer, or RESUME(file, offset) when a .ftpart file is being continued.
-func waitStart(s *session.Session, tid [16]byte, timeout time.Duration) (int, uint64, error) {
-	f, err := s.Recv(timeout)
-	if err != nil {
-		return 0, 0, err
-	}
-	switch f.Type {
-	case proto.TypeAck:
-		ack, err := proto.ParseAck(f.Payload)
+func waitStart(s *session.Session, tid [16]byte, timeout time.Duration, ctrl *Controller) (int, uint64, error) {
+	for {
+		if ctrl != nil && ctrl.IsCancelled() {
+			return 0, 0, ErrCancelled
+		}
+		f, err := s.Recv(timeout)
 		if err != nil {
+			if ctrl != nil && ctrl.IsCancelled() {
+				return 0, 0, ErrCancelled
+			}
 			return 0, 0, err
 		}
-		if ack.TransferID != tid {
-			return 0, 0, proto.NewError(proto.CodeProtocolViolation, "ACK transfer_id mismatch")
+		switch f.Type {
+		case proto.TypePing:
+			if p, perr := proto.ParsePing(f.Payload); perr == nil {
+				_ = s.SendMsg(proto.TypePong, p)
+			}
+		case proto.TypePong:
+		case proto.TypeAck:
+			ack, err := proto.ParseAck(f.Payload)
+			if err != nil {
+				return 0, 0, err
+			}
+			if ack.TransferID != tid {
+				return 0, 0, proto.NewError(proto.CodeProtocolViolation, "ACK transfer_id mismatch")
+			}
+			return 0, 0, nil
+		case proto.TypeResume:
+			r, err := proto.ParseResume(f.Payload)
+			if err != nil {
+				return 0, 0, err
+			}
+			if r.TransferID != tid {
+				return 0, 0, proto.NewError(proto.CodeProtocolViolation, "RESUME transfer_id mismatch")
+			}
+			return int(r.FileIndex), r.Offset, nil
+		case proto.TypeError:
+			return 0, 0, remoteErrorFrom(f.Payload)
+		default:
+			return 0, 0, proto.NewError(proto.CodeUnexpectedMessage, fmt.Sprintf("want ACK or RESUME, got %s", f.Type))
 		}
-		return 0, 0, nil
-	case proto.TypeResume:
-		r, err := proto.ParseResume(f.Payload)
-		if err != nil {
-			return 0, 0, err
-		}
-		if r.TransferID != tid {
-			return 0, 0, proto.NewError(proto.CodeProtocolViolation, "RESUME transfer_id mismatch")
-		}
-		return int(r.FileIndex), r.Offset, nil
-	case proto.TypeError:
-		return 0, 0, remoteErrorFrom(f.Payload)
-	default:
-		return 0, 0, proto.NewError(proto.CodeUnexpectedMessage, fmt.Sprintf("want ACK or RESUME, got %s", f.Type))
 	}
+}
+
+func waitFin(s *session.Session, timeout time.Duration, ctrl *Controller) (*proto.Fin, error) {
+	for {
+		if ctrl != nil && ctrl.IsCancelled() {
+			return nil, ErrCancelled
+		}
+		f, err := s.Recv(timeout)
+		if err != nil {
+			if ctrl != nil && ctrl.IsCancelled() {
+				return nil, ErrCancelled
+			}
+			return nil, err
+		}
+		switch f.Type {
+		case proto.TypePing:
+			if p, perr := proto.ParsePing(f.Payload); perr == nil {
+				_ = s.SendMsg(proto.TypePong, p)
+			}
+		case proto.TypePong:
+		case proto.TypeError:
+			return nil, remoteErrorFrom(f.Payload)
+		case proto.TypeFin:
+			fin, err := proto.ParseFin(f.Payload)
+			if err != nil {
+				return nil, proto.NewError(proto.CodePayloadInvalid, "peer FIN did not decode")
+			}
+			return fin, nil
+		default:
+			return nil, proto.NewError(proto.CodeUnexpectedMessage, fmt.Sprintf("want FIN, got %s", f.Type))
+		}
+	}
+}
+
+func keepaliveInterval(timeout time.Duration) time.Duration {
+	ka := timeout / 3
+	if ka < 100*time.Millisecond {
+		ka = 100 * time.Millisecond
+	}
+	if ka > 10*time.Second {
+		ka = 10 * time.Second
+	}
+	return ka
 }
 
 // hashFile returns the SHA-256 of a whole file (used for files the receiver

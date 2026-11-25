@@ -28,9 +28,21 @@ type recvFile struct {
 // (M1 rehearsal of §6.3 path switching).
 func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 	start := time.Now()
+	if cfg.Control != nil && cfg.Control.IsCancelled() {
+		return nil, ErrCancelled
+	}
+	if cfg.Control != nil {
+		unreg := cfg.Control.OnCancel(func() {
+			_ = s.Conn().SetReadDeadline(time.Now())
+		})
+		defer unreg()
+	}
 
 	v, err := s.Expect(proto.TypeManifest, cfg.timeout())
 	if err != nil {
+		if cfg.Control != nil && cfg.Control.IsCancelled() {
+			return nil, ErrCancelled
+		}
 		return nil, fmt.Errorf("manifest: %w", err)
 	}
 	m, ok := v.(*proto.Manifest)
@@ -96,6 +108,14 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 			if files[i].f != nil {
 				_ = files[i].f.Close()
 				files[i].f = nil
+			}
+		}
+	}
+	removeParts := func() {
+		closeAll()
+		for i := range files {
+			if files[i].part != "" {
+				_ = os.Remove(files[i].part)
 			}
 		}
 	}
@@ -186,11 +206,163 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 	}
 	emitProgress("transferring", cur)
 
-	for {
-		frame, err := s.Recv(cfg.timeout())
-		if err != nil {
-			return nil, fmt.Errorf("wait for data: %w", err)
+	if cfg.Control != nil && cfg.Control.IsCancelled() {
+		_ = s.Conn().SetWriteDeadline(time.Now().Add(300 * time.Millisecond))
+		_ = s.SendError(proto.CodeCancelled, "接收方已取消传输")
+		_ = s.Conn().SetWriteDeadline(time.Time{})
+		removeParts()
+		return nil, ErrCancelled
+	}
+
+	type recvFrame struct {
+		frame proto.Frame
+		err   error
+	}
+	frameCh := make(chan recvFrame, 1)
+	go func() {
+		defer close(frameCh)
+		for {
+			fr, rerr := s.Recv(cfg.timeout())
+			frameCh <- recvFrame{frame: fr, err: rerr}
+			if rerr != nil || fr.Type == proto.TypeFin || fr.Type == proto.TypeError {
+				return
+			}
 		}
+	}()
+	readerDone := false
+	defer func() {
+		if !readerDone {
+			_ = s.Conn().SetReadDeadline(time.Now())
+			for range frameCh {
+			}
+		}
+	}()
+	drainForRemoteError := func() error {
+		if readerDone {
+			return nil
+		}
+		_ = s.Conn().SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		for next := range frameCh {
+			if next.err != nil {
+				break
+			}
+			if next.frame.Type == proto.TypeError {
+				readerDone = true
+				rerr := remoteErrorFrom(next.frame.Payload)
+				var rem *session.RemoteError
+				if errors.As(rerr, &rem) && rem.Code == proto.CodeCancelled {
+					removeParts()
+				}
+				return rerr
+			}
+		}
+		readerDone = true
+		return nil
+	}
+
+	paused := cfg.Control != nil && cfg.Control.IsPaused()
+	var kaTicker *time.Ticker
+	var kaC <-chan time.Time
+	defer func() {
+		if kaTicker != nil {
+			kaTicker.Stop()
+		}
+	}()
+	if paused {
+		kaTicker = time.NewTicker(keepaliveInterval(cfg.timeout()))
+		kaC = kaTicker.C
+		emitProgress("paused", cur)
+	}
+	pendingAck := false
+	var pendingIdx uint32
+	var pendingOff uint64
+
+	for {
+		var stateCh <-chan struct{}
+		if cfg.Control != nil {
+			stateCh = cfg.Control.StateCh()
+		}
+		if cfg.Control != nil && cfg.Control.IsCancelled() {
+			_ = s.Conn().SetWriteDeadline(time.Now().Add(300 * time.Millisecond))
+			_ = s.SendError(proto.CodeCancelled, "接收方已取消传输")
+			_ = s.Conn().SetWriteDeadline(time.Time{})
+			removeParts()
+			return nil, ErrCancelled
+		}
+
+		var rfMsg recvFrame
+		select {
+		case <-stateCh:
+			if cfg.Control.IsCancelled() {
+				_ = s.Conn().SetWriteDeadline(time.Now().Add(300 * time.Millisecond))
+				_ = s.SendError(proto.CodeCancelled, "接收方已取消传输")
+				_ = s.Conn().SetWriteDeadline(time.Time{})
+				removeParts()
+				return nil, ErrCancelled
+			}
+			nowPaused := cfg.Control.IsPaused()
+			if nowPaused != paused {
+				paused = nowPaused
+				if paused {
+					if kaTicker == nil {
+						kaTicker = time.NewTicker(keepaliveInterval(cfg.timeout()))
+					}
+					kaC = kaTicker.C
+					emitProgress("paused", cur)
+				} else {
+					if kaTicker != nil {
+						kaTicker.Stop()
+						kaTicker = nil
+					}
+					kaC = nil
+					if pendingAck {
+						if err := s.SendMsg(proto.TypeAck, &proto.Ack{
+							TransferID: m.TransferID,
+							FileIndex:  pendingIdx,
+							Offset:     pendingOff,
+						}); err != nil {
+							if cfg.Control != nil && cfg.Control.IsCancelled() {
+								removeParts()
+								return nil, ErrCancelled
+							}
+							if rerr := drainForRemoteError(); rerr != nil {
+								return nil, rerr
+							}
+							return nil, err
+						}
+						pendingAck = false
+					}
+					emitProgress("transferring", cur)
+				}
+			}
+			continue
+
+		case <-kaC:
+			var tok [8]byte
+			if perr := s.SendMsg(proto.TypePing, &proto.Ping{Token: tok}); perr != nil {
+				if cfg.Control != nil && cfg.Control.IsCancelled() {
+					removeParts()
+					return nil, ErrCancelled
+				}
+				if rerr := drainForRemoteError(); rerr != nil {
+					return nil, rerr
+				}
+				return nil, perr
+			}
+			continue
+
+		case rfMsg = <-frameCh:
+		}
+
+		if rfMsg.err != nil {
+			readerDone = true
+			if cfg.Control != nil && cfg.Control.IsCancelled() {
+				removeParts()
+				return nil, ErrCancelled
+			}
+			return nil, fmt.Errorf("wait for data: %w", rfMsg.err)
+		}
+		frame := rfMsg.frame
 
 		switch frame.Type {
 		case proto.TypePing:
@@ -198,8 +370,17 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 				_ = s.SendMsg(proto.TypePong, p)
 			}
 
+		case proto.TypePong:
+			// keepalive response
+
 		case proto.TypeError:
-			return nil, remoteErrorFrom(frame.Payload)
+			readerDone = true
+			rerr := remoteErrorFrom(frame.Payload)
+			var rem *session.RemoteError
+			if errors.As(rerr, &rem) && rem.Code == proto.CodeCancelled {
+				removeParts()
+			}
+			return nil, rerr
 
 		case proto.TypeData:
 			d, err := proto.ParseData(frame.Payload)
@@ -261,16 +442,31 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 				_ = s.SendError(proto.CodeOffsetInvalid, "offset %d, expected %d", d.Offset, rf.written)
 				return nil, proto.NewError(proto.CodeOffsetInvalid, fmt.Sprintf("offset %d, expected %d", d.Offset, rf.written))
 			}
-			if err := s.SendMsg(proto.TypeAck, &proto.Ack{
-				TransferID: m.TransferID,
-				FileIndex:  uint32(cur),
-				Offset:     rf.written,
-			}); err != nil {
-				return nil, err
+			if paused {
+				pendingAck = true
+				pendingIdx = uint32(cur)
+				pendingOff = rf.written
+				emitProgress("paused", cur)
+			} else {
+				if err := s.SendMsg(proto.TypeAck, &proto.Ack{
+					TransferID: m.TransferID,
+					FileIndex:  uint32(cur),
+					Offset:     rf.written,
+				}); err != nil {
+					if cfg.Control != nil && cfg.Control.IsCancelled() {
+						removeParts()
+						return nil, ErrCancelled
+					}
+					if rerr := drainForRemoteError(); rerr != nil {
+						return nil, rerr
+					}
+					return nil, err
+				}
+				emitProgress("transferring", cur)
 			}
-			emitProgress("transferring", cur)
 
 		case proto.TypeFin:
+			readerDone = true
 			fin, err := proto.ParseFin(frame.Payload)
 			if err != nil {
 				_ = s.SendError(proto.CodePayloadInvalid, "malformed FIN")

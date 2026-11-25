@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/pairing"
 	"github.com/cwlindean/filetransfer/core/signaling"
+	"github.com/cwlindean/filetransfer/core/transfer"
 )
 
 type lanPeerEntry struct {
@@ -624,6 +626,8 @@ func (a *app) receiveOneAuto(
 		}
 	}
 	txID := a.beginTransfer("recv", peerName, firstFile, len(req.Files), totalBytes)
+	ctrl := transfer.NewController()
+	a.attachTransferControl(txID, ctrl, true, true)
 	defer a.endTransfer(txID)
 
 	rctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
@@ -637,6 +641,7 @@ func (a *app) receiveOneAuto(
 		PairedPath:  a.pairedPath,
 		Name:        a.deviceName(),
 		STUNServers: a.stunServers,
+		Control:     ctrl,
 		OnStatus: func(st client.Status) {
 			ch := ""
 			switch st.Channel {
@@ -649,6 +654,12 @@ func (a *app) receiveOneAuto(
 		},
 	}, cl, req, peerPub, candCh, readyCh)
 	if err != nil {
+		if ctrl.IsCancelled() || errors.Is(err, transfer.ErrCancelled) {
+			a.event("desktop.auto_recv_cancelled", map[string]any{"peer": truncID(req.FromDevice)})
+			a.note(fmt.Sprintf("%s  ← %s · 已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerName)))
+			a.notifyMainPaint()
+			return
+		}
 		a.event("desktop.auto_recv_error", map[string]any{"peer": truncID(req.FromDevice), "error": err.Error()})
 		a.note(fmt.Sprintf("%s  ← %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerName)))
 		a.notifyMainPaint()

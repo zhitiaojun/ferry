@@ -86,7 +86,13 @@
   .tx-box{margin-top:12px;padding:12px 14px;border-radius:11px;border:1px solid var(--line);background:var(--card-2)}
   .tx-top{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:13px}
   .tx-name{font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .tx-acts{display:flex;align-items:center;gap:6px;flex:none}
   .tx-pct{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--accent);flex:none}
+  .tx-btn{font:inherit;font-size:11px;font-weight:600;padding:3px 9px;border:1px solid var(--line);border-radius:7px;
+          background:var(--card);color:var(--ink);cursor:pointer;white-space:nowrap}
+  .tx-btn:hover{background:var(--card-3)}
+  .tx-btn:disabled{opacity:.5;cursor:not-allowed}
+  .tx-btn.danger{border-color:color-mix(in srgb,var(--danger) 40%,var(--line));color:var(--danger)}
   .tx-bar{height:6px;background:var(--line-soft);border-radius:999px;overflow:hidden;margin-top:8px}
   .tx-bar>i{display:block;height:100%;width:0;background:var(--accent);transition:width .12s linear}
   .tx-meta{margin-top:7px;font-family:var(--mono);font-size:12px;color:var(--ink-2);word-break:break-word}
@@ -171,7 +177,14 @@
         <input type="file" id="drop-pick" multiple hidden>
       </div>
       <div class="tx-box" id="up-box" hidden>
-        <div class="tx-top"><span class="tx-name" id="up-name"></span><span class="tx-pct" id="up-pct"></span></div>
+        <div class="tx-top">
+          <span class="tx-name" id="up-name"></span>
+          <div class="tx-acts">
+            <span class="tx-pct" id="up-pct"></span>
+            <button type="button" class="tx-btn" id="up-pause">暂停</button>
+            <button type="button" class="tx-btn danger" id="up-cancel">取消</button>
+          </div>
+        </div>
         <div class="tx-bar"><i id="up-fill"></i></div>
         <div class="tx-meta" id="up-meta"></div>
       </div>
@@ -194,7 +207,13 @@
       </div>
       <p class="empty" id="empty-tip">等待加载文件列表…</p>
       <div class="tx-box" id="dl-box" hidden>
-        <div class="tx-top"><span class="tx-name" id="dl-name"></span><span class="tx-pct" id="dl-pct"></span></div>
+        <div class="tx-top">
+          <span class="tx-name" id="dl-name"></span>
+          <div class="tx-acts">
+            <span class="tx-pct" id="dl-pct"></span>
+            <button type="button" class="tx-btn danger" id="dl-cancel">取消</button>
+          </div>
+        </div>
         <div class="tx-bar"><i id="dl-fill"></i></div>
         <div class="tx-meta" id="dl-meta"></div>
       </div>
@@ -290,11 +309,59 @@
   }
 
   function clearPutJob() {
-    if (state.put && state.put.drainTimer) {
-      clearInterval(state.put.drainTimer);
-      state.put.drainTimer = null;
+    if (state.put) {
+      if (state.put.drainTimer) { clearInterval(state.put.drainTimer); state.put.drainTimer = null; }
+      if (state.put.pauseTimer) { clearInterval(state.put.pauseTimer); state.put.pauseTimer = null; }
     }
     state.put = null;
+    if ($('up-pause')) { $('up-pause').textContent = '暂停'; $('up-pause').disabled = false; }
+  }
+
+  function reconnectAfterCancel(msg) {
+    var info = state.info;
+    closeRelay();
+    setStatus(msg);
+    if (!info) return;
+    setBadge('', '重连中…');
+    dialRelay(info).then(function (ws) {
+      state.ws = ws;
+      $('reconnect').hidden = true;
+      wireRelay(ws);
+      setBadge('relay', '云端中继已连接');
+      setStatus(msg);
+      relaySend({ t: 'list' });
+    }).catch(function () {
+      setBadge('failed', '连接已断开');
+      $('reconnect').hidden = false;
+    });
+  }
+
+  function togglePutPause() {
+    var p = state.put;
+    if (!p || !p.buf || !state.ws) return;
+    p.paused = !p.paused;
+    $('up-pause').textContent = p.paused ? '继续' : '暂停';
+    var label = (p.totalFiles > 1 ? '(' + p.idx + '/' + p.totalFiles + ') ' : '') + p.name;
+    var actualSent = Math.max(0, Math.min(p.total, p.off - (state.ws ? state.ws.bufferedAmount : 0)));
+    if (p.paused) {
+      if (!p.pauseTimer) {
+        p.pauseTimer = setInterval(function () {
+          if (!state.put || state.put !== p || !p.paused || !state.ws) {
+            clearInterval(p.pauseTimer); p.pauseTimer = null;
+            return;
+          }
+          relaySend({ t: 'list' });
+        }, 15000);
+      }
+      showTx('up', '已暂停：' + label, actualSent, p.total, 0, '已暂停');
+      setStatus('已暂停上传：' + p.name);
+      return;
+    }
+    if (p.pauseTimer) { clearInterval(p.pauseTimer); p.pauseTimer = null; }
+    p.tracker = makeSpeedTracker();
+    showTx('up', '上传中：' + label, actualSent, p.total, 0);
+    setStatus('继续上传：' + p.name);
+    if (p.resumeFn) p.resumeFn();
   }
 
   function startTTL(sec) {
@@ -514,9 +581,11 @@
       doneCount++;
       var job = {
         file: f, idx: doneCount, totalFiles: total, total: f.size || 0,
-        buf: null, off: 0, name: f.name, tracker: makeSpeedTracker(), drainTimer: null, lastUi: 0
+        buf: null, off: 0, name: f.name, tracker: makeSpeedTracker(), drainTimer: null, pauseTimer: null, paused: false, resumeFn: null, lastUi: 0
       };
       state.put = job;
+      $('up-pause').textContent = '暂停';
+      $('up-pause').disabled = false;
       var label = (total > 1 ? '(' + doneCount + '/' + total + ') ' : '') + f.name;
       showTx('up', '准备上传：' + label, 0, job.total, 0);
       setStatus('准备上传：' + f.name);
@@ -547,25 +616,29 @@
       var now = performance.now();
       if (force || now - p.lastUi >= 100) {
         p.lastUi = now;
-        var bps = p.tracker.update(actualSent);
-        var note = (p.off >= p.total && actualSent >= p.total) ? '对方校验保存中…' : '';
-        showTx('up', '上传中：' + label, actualSent, p.total, bps, note);
-        var pct = p.total > 0 ? Math.round(actualSent * 100 / p.total) : 100;
-        var spd = fmtSpeed(bps);
-        setStatus('上传中：' + p.name + ' ' + pct + '%' + (spd ? ' · ' + spd : ''));
+        var bps = p.paused ? 0 : p.tracker.update(actualSent);
+        var note = p.paused ? '已暂停' : ((p.off >= p.total && actualSent >= p.total) ? '对方校验保存中…' : '');
+        showTx('up', (p.paused ? '已暂停：' : '上传中：') + label, actualSent, p.total, bps, note);
+        if (!p.paused) {
+          var pct = p.total > 0 ? Math.round(actualSent * 100 / p.total) : 100;
+          var spd = fmtSpeed(bps);
+          setStatus('上传中：' + p.name + ' ' + pct + '%' + (spd ? ' · ' + spd : ''));
+        }
       }
       return actualSent;
     };
     var step = function () {
-      if (!state.put || state.put !== p || !state.ws) return;
+      if (!state.put || state.put !== p || !state.ws || p.paused) return;
       var sent = 0;
-      while (p.off < p.total && state.ws.bufferedAmount < HIGH_WATER && sent < BURST) {
+      while (!p.paused && p.off < p.total && state.ws.bufferedAmount < HIGH_WATER && sent < BURST) {
         var end = Math.min(p.off + CH, p.total);
         state.ws.send(p.buf.slice(p.off, end));
         p.off = end; sent++;
       }
       renderPutProgress(p.off >= p.total);
+      if (p.paused) return;
       if (p.off < p.total) { setTimeout(step, 20); return; }
+      $('up-pause').disabled = true;
       relaySend({ t: 'put.end' });
       if (!p.drainTimer) {
         p.drainTimer = setInterval(function () {
@@ -581,8 +654,19 @@
         }, 100);
       }
     };
+    p.resumeFn = step;
     step();
   }
+
+  $('up-pause').addEventListener('click', togglePutPause);
+  $('up-cancel').addEventListener('click', function () {
+    if (!state.put) return;
+    reconnectAfterCancel('已取消上传');
+  });
+  $('dl-cancel').addEventListener('click', function () {
+    if (!state.get) return;
+    reconnectAfterCancel('已取消下载');
+  });
 
   $('go').addEventListener('click', connectByCode);
   $('code').addEventListener('keydown', function (e) { if (e.key === 'Enter') connectByCode(); });

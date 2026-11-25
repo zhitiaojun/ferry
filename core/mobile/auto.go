@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/cwlindean/filetransfer/core/logging"
 	"github.com/cwlindean/filetransfer/core/pairing"
 	"github.com/cwlindean/filetransfer/core/signaling"
+	"github.com/cwlindean/filetransfer/core/transfer"
 )
 
 type autoReceiver struct {
@@ -665,6 +667,8 @@ func receiveOneMobileAuto(
 		}
 	}
 	txSeq := beginActiveTransfer("recv", peerName, firstFile, len(req.Files), initTotal)
+	ctrl := transfer.NewController()
+	attachActiveTransferController(txSeq, ctrl, true, true)
 	defer endActiveTransfer(txSeq)
 
 	rctx, cancel := context.WithTimeout(rootCtx, 10*time.Minute)
@@ -679,6 +683,7 @@ func receiveOneMobileAuto(
 		STUNServers: servers,
 		LANHint:     currentHint(),
 		SkipLANEnum: true,
+		Control:     ctrl,
 		Log:         logger,
 		OnStatus: func(st client.Status) {
 			updateActiveTransfer(txSeq, st.Stage, st.Channel, "", st.FileName, st.FileIndex, st.FileCount, st.BytesDone, st.BytesTotal)
@@ -748,10 +753,12 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 		firstFile = files[0].Name
 	}
 	txSeq := beginActiveTransfer("send", targetLabel, firstFile, len(files), totalBytes)
+	ctrl := transfer.NewController()
+	attachActiveTransferController(txSeq, ctrl, true, true)
 	defer endActiveTransfer(txSeq)
 
 	if lanAddr := lanPeerAddr(toID); lanAddr != "" {
-		res, lerr := sendFilesLAN(ctx, lanAddr, name, key.ID(), key, paths, 3*time.Second, txSeq, logger)
+		res, lerr := sendFilesLAN(ctx, lanAddr, name, key.ID(), key, paths, 3*time.Second, txSeq, ctrl, logger)
 		if lerr == nil && res.OK {
 			if peerName := pairing.SanitizeName(res.Peer); peerName != "" {
 				identity.UpdatePeerName(pairedPath, toID, peerName)
@@ -762,6 +769,9 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 				"duration_ms": res.DurationMS,
 			})
 			return string(out), nil
+		}
+		if ctrl.IsCancelled() || errors.Is(lerr, transfer.ErrCancelled) {
+			return "", errors.New("已取消传输")
 		}
 		if logger != nil && lerr != nil {
 			logger.Event("send.lan_fallback", map[string]any{"peer": truncID(toID), "addr": lanAddr, "error": lerr.Error()})
@@ -790,6 +800,7 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 		STUNServers: splitSTUN(stunList),
 		LANHint:     hint,
 		SkipLANEnum: true,
+		Control:     ctrl,
 		Log:         logger,
 		OnStatus: func(st client.Status) {
 			updateActiveTransfer(txSeq, st.Stage, st.Channel, "", st.FileName, st.FileIndex, st.FileCount, st.BytesDone, st.BytesTotal)
@@ -805,6 +816,9 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 
 	res, err := client.SendAuto(ctx, opts, toID, paths)
 	if err != nil {
+		if ctrl.IsCancelled() || errors.Is(err, transfer.ErrCancelled) {
+			return "", errors.New("已取消传输")
+		}
 		return "", err
 	}
 	out, _ := json.Marshal(map[string]any{

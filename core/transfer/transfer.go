@@ -38,7 +38,7 @@ const (
 
 // ProgressSnapshot reports detailed batch transfer state and byte counts.
 type ProgressSnapshot struct {
-	Stage      string // "transferring" | "verifying"
+	Stage      string // "transferring" | "paused" | "verifying"
 	FileIndex  int    // 1-based current file index
 	FileCount  int    // total files in batch
 	FileName   string // current file base name
@@ -58,6 +58,7 @@ type Config struct {
 	SlowMinRemaining    int64
 	UpgradeCh           <-chan struct{}
 	UpgradeMinRemaining int64
+	Control             *Controller
 	Log                 *logging.Logger
 	// TransferID overrides the random id when the caller already committed to
 	// one (e.g. the signaling transfer id); zero means "generate".

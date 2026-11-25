@@ -16,6 +16,7 @@ import (
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/lanweb"
 	"github.com/cwlindean/filetransfer/core/tempshare"
+	"github.com/cwlindean/filetransfer/core/transfer"
 	"github.com/cwlindean/filetransfer/server"
 )
 
@@ -296,5 +297,64 @@ func assertProgressComplete(t *testing.T, label string, events []tempshare.Trans
 	}
 	if !events[len(events)-1].Done {
 		t.Fatalf("%s: expected final event Done=true, got %+v", label, events[len(events)-1])
+	}
+}
+
+func TestTempShareUploadDownloadControl(t *testing.T) {
+	s := server.New(nil)
+	hs := httptest.NewServer(s.Handler())
+	defer hs.Close()
+
+	key := testKey(t)
+	srcDir := t.TempDir()
+	srcFile := filepath.Join(srcDir, "ctrl.bin")
+	payload := bytes.Repeat([]byte("tempshare-control"), 8192)
+	if err := os.WriteFile(srcFile, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	hostRecv, err := tempshare.StartHost(tempshare.HostOptions{
+		BaseURL:    hs.URL,
+		Key:        key,
+		DeviceName: "HostPC",
+		Mode:       "recv",
+		RecvDir:    t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hostRecv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Cancel immediately returns ErrCancelled.
+	sess, err := tempshare.ResolveByURL(ctx, hostRecv.Status().ShareURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cCancel := transfer.NewController()
+	cCancel.Cancel()
+	if _, _, uerr := tempshare.UploadFilesWithControl(ctx, sess, []string{srcFile}, cCancel, nil); !strings.Contains(uerr.Error(), "cancelled") {
+		t.Fatalf("expected ErrCancelled, got %v", uerr)
+	}
+
+	// Pause then resume over relay upload.
+	sessRelay, err := tempshare.ResolveByURL(ctx, hostRecv.Status().ShareURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessRelay.LAN = nil
+	cPause := transfer.NewController()
+	cPause.Pause()
+	time.AfterFunc(120*time.Millisecond, cPause.Resume)
+	var sawPaused bool
+	via, up, err := tempshare.UploadFilesWithControl(ctx, sessRelay, []string{srcFile}, cPause, func(p tempshare.TransferProgress) {
+		if p.Stage == "paused" {
+			sawPaused = true
+		}
+	})
+	if err != nil || via != "relay" || len(up) != 1 || !sawPaused {
+		t.Fatalf("pause/resume upload via=%q up=%v err=%v sawPaused=%v", via, up, err, sawPaused)
 	}
 }

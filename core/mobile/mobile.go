@@ -323,6 +323,7 @@ func (r *receiver) handle(ctx context.Context, nc net.Conn) {
 	}
 
 	var txSeq uint64
+	ctrl := transfer.NewController()
 	defer func() {
 		if txSeq != 0 {
 			endActiveTransfer(txSeq)
@@ -330,13 +331,15 @@ func (r *receiver) handle(ctx context.Context, nc net.Conn) {
 	}()
 	if paired {
 		txSeq = beginActiveTransfer("recv", peerName, "", 0, 0)
+		attachActiveTransferController(txSeq, ctrl, true, true)
 		updateActiveTransfer(txSeq, "transferring", "lan", "", "", 0, 0, -1, 0)
 	}
 
 	r.logger.Event("session.ready", map[string]any{"peer": s.Peer.Name, "path": "lan", "paired": paired})
 	confirmRejected := false
 	cfg := transfer.Config{
-		Log: r.logger,
+		Control: ctrl,
+		Log:     r.logger,
 		OnDetailProgress: func(snap transfer.ProgressSnapshot) {
 			if txSeq != 0 {
 				updateActiveTransfer(txSeq, snap.Stage, "lan", "", snap.FileName, snap.FileIndex, snap.FileCount, snap.BytesDone, snap.BytesTotal)
@@ -359,6 +362,7 @@ func (r *receiver) handle(ctx context.Context, nc net.Conn) {
 				firstName = m.Files[0].Name
 			}
 			txSeq = beginActiveTransfer("recv", peerName, firstName, len(m.Files), total)
+			attachActiveTransferController(txSeq, ctrl, true, true)
 			updateActiveTransfer(txSeq, "transferring", "lan", "", firstName, 1, len(m.Files), 0, total)
 			return nil
 		}
@@ -502,14 +506,31 @@ func SendFilesWithKey(peerAddr, name, keyPath, pathsJSON string) (string, error)
 		}
 	}
 	txSeq := beginActiveTransfer("send", peerAddr, filepath.Base(paths[0]), len(paths), totalBytes)
+	ctrl := transfer.NewController()
+	attachActiveTransferController(txSeq, ctrl, true, true)
 	defer endActiveTransfer(txSeq)
 
-	res, err := sendFilesLAN(context.Background(), peerAddr, name, devID, key, paths, 10*time.Second, txSeq, nil)
+	res, err := sendFilesLAN(context.Background(), peerAddr, name, devID, key, paths, 10*time.Second, txSeq, ctrl, nil)
+	if errors.Is(err, transfer.ErrCancelled) || ctrl.IsCancelled() {
+		res.Error = "已取消传输"
+		return marshalSummary(res), errors.New("已取消传输")
+	}
 	return marshalSummary(res), err
 }
 
-func sendFilesLAN(ctx context.Context, peerAddr, name string, devID [32]byte, key *identity.Key, paths []string, dialTimeout time.Duration, txSeq uint64, logger *logging.Logger) (summary, error) {
+func sendFilesLAN(ctx context.Context, peerAddr, name string, devID [32]byte, key *identity.Key, paths []string, dialTimeout time.Duration, txSeq uint64, ctrl *transfer.Controller, logger *logging.Logger) (summary, error) {
 	res := summary{OK: false, Path: "lan"}
+	if ctrl != nil {
+		if ctrl.IsCancelled() {
+			res.Error = "已取消传输"
+			return res, transfer.ErrCancelled
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		unreg := ctrl.OnCancel(cancel)
+		defer unreg()
+	}
 	d := pathmgr.NewTCPDial(peerAddr)
 	dctx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
@@ -542,6 +563,7 @@ func sendFilesLAN(ctx context.Context, peerAddr, name string, devID [32]byte, ke
 	updateActiveTransfer(txSeq, "waiting", "lan", pairing.SanitizeName(s.Peer.Name), "", 0, 0, -1, 0)
 	out, err := transfer.Send(s, paths, transfer.Config{
 		StartTimeout: 65 * time.Second,
+		Control:      ctrl,
 		Log:          logger,
 		OnDetailProgress: func(snap transfer.ProgressSnapshot) {
 			updateActiveTransfer(txSeq, snap.Stage, "lan", "", snap.FileName, snap.FileIndex, snap.FileCount, snap.BytesDone, snap.BytesTotal)

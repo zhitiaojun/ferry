@@ -168,6 +168,9 @@ public class MainActivity extends Activity {
     private TextView tempJoinTxTitleTv;
     private ProgressBar tempJoinTxBar;
     private TextView tempJoinTxMetaTv;
+    private LinearLayout tempJoinActionRow;
+    private Button tempJoinPauseBtn;
+    private Button tempJoinCancelBtn;
     private Button tempJoinActionBtn;
     private boolean lanSearching;
     private String signalState = "offline";
@@ -204,6 +207,9 @@ public class MainActivity extends Activity {
     private TextView txSubTv;
     private ProgressBar txProgressBar;
     private TextView txMetricsTv;
+    private LinearLayout txActionRow;
+    private Button txPauseBtn;
+    private Button txCancelBtn;
     private boolean progressPollingActive;
     private boolean sendBusyFlag;
 
@@ -1063,6 +1069,20 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams tmLp = new LinearLayout.LayoutParams(MATCH, WRAP);
         tmLp.topMargin = dp(8);
         activeTransferCard.addView(txMetricsTv, tmLp);
+
+        txActionRow = new LinearLayout(this);
+        txActionRow.setOrientation(LinearLayout.HORIZONTAL);
+        txActionRow.setVisibility(View.GONE);
+        LinearLayout.LayoutParams tarLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        tarLp.topMargin = dp(10);
+        txPauseBtn = smallOutlineBtn("暂停", v -> toggleActiveTransferPause());
+        LinearLayout.LayoutParams tpLp = new LinearLayout.LayoutParams(0, dp(34), 1f);
+        tpLp.rightMargin = dp(8);
+        txActionRow.addView(txPauseBtn, tpLp);
+        txCancelBtn = smallOutlineBtn("取消传输", v -> cancelActiveTransfer());
+        txCancelBtn.setTextColor(cError);
+        txActionRow.addView(txCancelBtn, new LinearLayout.LayoutParams(0, dp(34), 1f));
+        activeTransferCard.addView(txActionRow, tarLp);
 
         LinearLayout.LayoutParams txLp = new LinearLayout.LayoutParams(MATCH, WRAP);
         txLp.bottomMargin = dp(16);
@@ -3198,6 +3218,19 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams jmLp = new LinearLayout.LayoutParams(MATCH, WRAP);
         jmLp.topMargin = dp(6);
         tempJoinTxBox.addView(tempJoinTxMetaTv, jmLp);
+        tempJoinActionRow = new LinearLayout(this);
+        tempJoinActionRow.setOrientation(LinearLayout.HORIZONTAL);
+        tempJoinActionRow.setVisibility(View.GONE);
+        LinearLayout.LayoutParams jarLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        jarLp.topMargin = dp(8);
+        tempJoinPauseBtn = smallOutlineBtn("暂停", v -> toggleActiveTransferPause());
+        LinearLayout.LayoutParams jprLp = new LinearLayout.LayoutParams(0, dp(32), 1f);
+        jprLp.rightMargin = dp(8);
+        tempJoinActionRow.addView(tempJoinPauseBtn, jprLp);
+        tempJoinCancelBtn = smallOutlineBtn("取消", v -> cancelActiveTransfer());
+        tempJoinCancelBtn.setTextColor(cError);
+        tempJoinActionRow.addView(tempJoinCancelBtn, new LinearLayout.LayoutParams(0, dp(32), 1f));
+        tempJoinTxBox.addView(tempJoinActionRow, jarLp);
         LinearLayout.LayoutParams jtxLp = new LinearLayout.LayoutParams(MATCH, WRAP);
         jtxLp.topMargin = dp(12);
         sheet.addView(tempJoinTxBox, jtxLp);
@@ -3207,6 +3240,9 @@ public class MainActivity extends Activity {
             tempJoinTxTitleTv = null;
             tempJoinTxBar = null;
             tempJoinTxMetaTv = null;
+            tempJoinActionRow = null;
+            tempJoinPauseBtn = null;
+            tempJoinCancelBtn = null;
             tempJoinActionBtn = null;
         });
 
@@ -3287,7 +3323,12 @@ public class MainActivity extends Activity {
                                         }
                                         dlBtn.setEnabled(true);
                                         dlBtn.setText("全部下载到手机");
-                                        toast("下载失败：" + e.getMessage());
+                                        String em = e.getMessage();
+                                        if (em != null && em.contains("已取消")) {
+                                            toast("已取消下载");
+                                        } else {
+                                            toast("下载失败：" + em);
+                                        }
                                     });
                                 }
                             }).start();
@@ -3383,7 +3424,12 @@ public class MainActivity extends Activity {
                         tempJoinActionBtn.setEnabled(true);
                         tempJoinActionBtn.setText("选择文件发送给对方");
                     }
-                    toast("发送失败：" + e.getMessage());
+                    String em = e.getMessage();
+                    if (em != null && em.contains("已取消")) {
+                        toast("已取消发送");
+                    } else {
+                        toast("发送失败：" + em);
+                    }
                 });
             } finally {
                 for (File f : copied) {
@@ -4618,6 +4664,9 @@ public class MainActivity extends Activity {
             long total = o.optLong("bytes_total", 0);
             long speedBps = o.optLong("speed_bps", 0);
             long startedAt = o.optLong("started_at", 0);
+            boolean paused = o.optBoolean("paused", false) || "paused".equals(stage);
+            boolean canPause = o.optBoolean("can_pause", false);
+            boolean canCancel = o.optBoolean("can_cancel", false);
 
             String head = "recv".equals(dir) ? "正在接收" : "正在发送";
             if (!peer.isEmpty()) {
@@ -4641,7 +4690,7 @@ public class MainActivity extends Activity {
             }
             txSubTv.setText(sb.toString());
 
-            boolean determinate = total > 0 && ("transferring".equals(stage) || "verifying".equals(stage) || done > 0);
+            boolean determinate = total > 0 && ("transferring".equals(stage) || "verifying".equals(stage) || "paused".equals(stage) || done > 0);
             int progressPromille = 0;
             if (determinate) {
                 progressPromille = (int) Math.max(0, Math.min(1000, (done * 1000L) / total));
@@ -4650,10 +4699,13 @@ public class MainActivity extends Activity {
             } else {
                 txProgressBar.setIndeterminate(true);
             }
+            int barTint = paused ? cWarn : cPrimary;
+            txProgressBar.setProgressTintList(ColorStateList.valueOf(barTint));
+            txProgressBar.setIndeterminateTintList(ColorStateList.valueOf(barTint));
 
             long nowMs = System.currentTimeMillis();
             long elapsedMs = startedAt > 0 && nowMs > startedAt ? nowMs - startedAt : 0L;
-            if (speedBps <= 0L && done > 0L && elapsedMs >= 500L && !"verifying".equals(stage)) {
+            if (speedBps <= 0L && done > 0L && elapsedMs >= 500L && !"verifying".equals(stage) && !paused) {
                 speedBps = (done * 1000L) / elapsedMs;
             }
             StringBuilder mb = new StringBuilder();
@@ -4665,13 +4717,15 @@ public class MainActivity extends Activity {
             } else {
                 mb.append("正在建立传输通道…");
             }
-            if (speedBps > 0L && !"verifying".equals(stage)) {
+            if (paused) {
+                mb.append(" · 已暂停");
+            } else if (speedBps > 0L && !"verifying".equals(stage)) {
                 mb.append(" · ").append(fmtSpeed(speedBps));
             }
             if (elapsedMs >= 1000L) {
                 mb.append(" · 已用 ").append(formatDurationSec(elapsedMs / 1000L));
             }
-            if (total > 0 && done > 0 && done < total && !"verifying".equals(stage)) {
+            if (total > 0 && done > 0 && done < total && !"verifying".equals(stage) && !paused) {
                 long remSec = -1L;
                 if (speedBps > 0L) {
                     remSec = (total - done) / speedBps;
@@ -4684,18 +4738,62 @@ public class MainActivity extends Activity {
             }
             String metricsText = mb.toString();
             txMetricsTv.setText(metricsText);
+
+            boolean showPause = canPause && !"verifying".equals(stage);
+            if (txActionRow != null) {
+                txActionRow.setVisibility((showPause || canCancel) ? View.VISIBLE : View.GONE);
+                if (txPauseBtn != null) {
+                    txPauseBtn.setVisibility(showPause ? View.VISIBLE : View.GONE);
+                    txPauseBtn.setText(paused ? "继续" : "暂停");
+                }
+                if (txCancelBtn != null) {
+                    txCancelBtn.setVisibility(canCancel ? View.VISIBLE : View.GONE);
+                }
+            }
             activeTransferCard.setVisibility(View.VISIBLE);
 
-            String dialogTitle = ("recv".equals(dir) ? "接收中" : "发送中")
+            String dialogTitle = (paused ? "已暂停" : ("recv".equals(dir) ? "接收中" : "发送中"))
                     + (channel.isEmpty() ? "" : "（" + pathLabel(channel) + "）")
                     + (fName.isEmpty() ? "" : " · " + fName);
             updateTempDialogProgress(tempTxBox, tempTxTitleTv, tempTxBar, tempTxMetaTv,
                     dialogTitle, determinate, progressPromille, metricsText);
             updateTempDialogProgress(tempJoinTxBox, tempJoinTxTitleTv, tempJoinTxBar, tempJoinTxMetaTv,
                     dialogTitle, determinate, progressPromille, metricsText);
+            if (tempJoinActionRow != null) {
+                tempJoinActionRow.setVisibility((showPause || canCancel) ? View.VISIBLE : View.GONE);
+                if (tempJoinPauseBtn != null) {
+                    tempJoinPauseBtn.setVisibility(showPause ? View.VISIBLE : View.GONE);
+                    tempJoinPauseBtn.setText(paused ? "继续" : "暂停");
+                }
+                if (tempJoinCancelBtn != null) {
+                    tempJoinCancelBtn.setVisibility(canCancel ? View.VISIBLE : View.GONE);
+                }
+            }
         } catch (Exception e) {
             Log.w(TAG, "applyActiveTransferJson", e);
         }
+    }
+
+    private void toggleActiveTransferPause() {
+        ioPool.execute(() -> {
+            try {
+                Mobile.togglePauseActiveTransfer();
+                pollActiveTransferOnce();
+            } catch (Exception e) {
+                Log.w(TAG, "togglePauseActiveTransfer", e);
+            }
+        });
+    }
+
+    private void cancelActiveTransfer() {
+        ioPool.execute(() -> {
+            try {
+                Mobile.cancelActiveTransfer();
+                pollActiveTransferOnce();
+            } catch (Exception e) {
+                Log.w(TAG, "cancelActiveTransfer", e);
+            }
+        });
     }
 
     private static void updateTempDialogProgress(LinearLayout box, TextView titleTv, ProgressBar bar, TextView metaTv,
@@ -4730,6 +4828,9 @@ public class MainActivity extends Activity {
         if ("verifying".equals(stage)) {
             return "校验写入中";
         }
+        if ("paused".equals(stage)) {
+            return "已暂停";
+        }
         return "处理中";
     }
 
@@ -4754,7 +4855,12 @@ public class MainActivity extends Activity {
             try {
                 JSONObject o = new JSONObject(raw);
                 if (!o.optBoolean("ok", false)) {
-                    showSendBanner("fail", "发送失败：" + o.optString("error", raw), true);
+                    String errMsg = o.optString("error", raw);
+                    if (errMsg.contains("已取消")) {
+                        showSendBanner("", "已取消发送", false);
+                    } else {
+                        showSendBanner("fail", "发送失败：" + errMsg, true);
+                    }
                     return;
                 }
                 String path = o.optString("path", "");
@@ -4782,7 +4888,11 @@ public class MainActivity extends Activity {
             } else {
                 stopKeepAlive();
             }
-            showSendBanner("fail", "发送失败：" + err, true);
+            if (err != null && err.contains("已取消")) {
+                showSendBanner("", "已取消发送", false);
+            } else {
+                showSendBanner("fail", "发送失败：" + err, true);
+            }
         });
     }
 

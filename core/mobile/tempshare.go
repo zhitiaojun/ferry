@@ -12,6 +12,7 @@ import (
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/lanweb"
 	"github.com/cwlindean/filetransfer/core/tempshare"
+	"github.com/cwlindean/filetransfer/core/transfer"
 )
 
 var (
@@ -179,9 +180,11 @@ func TempShareDownloadAll(shareURL, outDir string) (string, error) {
 		peerLabel = "临时快传"
 	}
 	txSeq := beginActiveTransfer("recv", peerLabel, "", 0, 0)
+	ctrl := transfer.NewController()
+	attachActiveTransferController(txSeq, ctrl, true, true)
 	defer endActiveTransfer(txSeq)
 
-	via, saved, err := tempshare.DownloadAllWithProgress(ctx, sess, outDir, func(p tempshare.TransferProgress) {
+	via, saved, err := tempshare.DownloadAllWithControl(ctx, sess, outDir, ctrl, func(p tempshare.TransferProgress) {
 		if !p.Done {
 			updateActiveTransfer(txSeq, p.Stage, p.Channel, peerLabel, p.FileName, p.FileIndex, p.FileCount, p.BytesDone, p.BytesTotal)
 		}
@@ -227,10 +230,12 @@ func TempShareUploadFiles(shareURL, filePathsJSON string) (string, error) {
 		peerLabel = "临时快传"
 	}
 	txSeq := beginActiveTransfer("send", peerLabel, firstFile, len(paths), totalBytes)
+	ctrl := transfer.NewController()
+	attachActiveTransferController(txSeq, ctrl, true, true)
 	defer endActiveTransfer(txSeq)
 
 	start := time.Now()
-	via, uploaded, err := tempshare.UploadFilesWithProgress(ctx, sess, paths, func(p tempshare.TransferProgress) {
+	via, uploaded, err := tempshare.UploadFilesWithControl(ctx, sess, paths, ctrl, func(p tempshare.TransferProgress) {
 		if !p.Done {
 			updateActiveTransfer(txSeq, p.Stage, p.Channel, peerLabel, p.FileName, p.FileIndex, p.FileCount, p.BytesDone, p.BytesTotal)
 		}

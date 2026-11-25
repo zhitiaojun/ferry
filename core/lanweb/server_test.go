@@ -362,7 +362,7 @@ func TestOnProgressUploadAndDownload(t *testing.T) {
 		t.Fatalf("missing send progress phases: transfer=%v done=%v events=%+v", sawSendTransfer, sawSendDone, events)
 	}
 
-	if !strings.Contains(pageHTML, "fmtSpeed") || !strings.Contains(pageHTML, `id="tx-box"`) {
-		t.Fatal("pageHTML missing speed/progress UI")
+	if !strings.Contains(pageHTML, "fmtSpeed") || !strings.Contains(pageHTML, `id="tx-box"`) || !strings.Contains(pageHTML, `id="tx-cancel"`) {
+		t.Fatal("pageHTML missing speed/progress/cancel UI")
 	}
 }

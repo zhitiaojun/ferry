@@ -771,3 +771,217 @@ func TestConfirmAcceptCompletesTransfer(t *testing.T) {
 		t.Fatalf("bytes = %d, want 8192", recvRes.Bytes)
 	}
 }
+
+func TestSendPauseResumeAndCancel(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "pause-send.bin")
+	writePattern(t, src, 2<<20)
+
+	// 1. Pause longer than Timeout (600ms), then resume and complete cleanly.
+	outOK := filepath.Join(dir, "out-ok")
+	ctrl := NewController()
+	a, b := net.Pipe()
+	type resErr struct {
+		res *Result
+		err error
+	}
+	recvCh := make(chan resErr, 1)
+	go func() {
+		defer b.Close()
+		sb, err := session.Accept(b, testParams("recv"))
+		if err != nil {
+			recvCh <- resErr{nil, err}
+			return
+		}
+		defer sb.Close()
+		res, rerr := Receive(sb, outOK, Config{Timeout: 600 * time.Millisecond})
+		recvCh <- resErr{res, rerr}
+	}()
+
+	sa, err := session.Dial(a, testParams("send"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pausedOnce := false
+	_, err = Send(sa, []string{src}, Config{
+		ChunkSize:      64 << 10,
+		WindowBytes:    128 << 10,
+		Timeout:        600 * time.Millisecond,
+		MinBytesPerSec: 1 << 20, // must not false-trigger during pause
+		SlowGrace:      50 * time.Millisecond,
+		SlowWindow:     150 * time.Millisecond,
+		Control:        ctrl,
+		OnDetailProgress: func(s ProgressSnapshot) {
+			if !pausedOnce && s.BytesDone >= 256<<10 {
+				pausedOnce = true
+				ctrl.Pause()
+				time.AfterFunc(950*time.Millisecond, ctrl.Resume)
+			}
+		},
+	})
+	_ = sa.Close()
+	if err != nil {
+		t.Fatalf("Send after pause/resume failed: %v", err)
+	}
+	rr := <-recvCh
+	if rr.err != nil {
+		t.Fatalf("Receive after pause/resume failed: %v", rr.err)
+	}
+	if fileHash(t, src) != fileHash(t, filepath.Join(outOK, "pause-send.bin")) {
+		t.Fatal("hash mismatch after send pause/resume")
+	}
+
+	// 2. Sender cancel returns ErrCancelled and cleans receiver .ftpart.
+	outCancel := filepath.Join(dir, "out-cancel")
+	ctrl2 := NewController()
+	c1, c2 := net.Pipe()
+	recvErr2 := make(chan error, 1)
+	go func() {
+		defer c2.Close()
+		sb, err := session.Accept(c2, testParams("recv"))
+		if err != nil {
+			recvErr2 <- err
+			return
+		}
+		defer sb.Close()
+		_, rerr := Receive(sb, outCancel, Config{Timeout: 2 * time.Second})
+		recvErr2 <- rerr
+	}()
+	sa2, err := session.Dial(c1, testParams("send"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelledOnce := false
+	_, sendErr2 := Send(sa2, []string{src}, Config{
+		ChunkSize:   64 << 10,
+		WindowBytes: 128 << 10,
+		Timeout:     2 * time.Second,
+		Control:     ctrl2,
+		OnDetailProgress: func(s ProgressSnapshot) {
+			if !cancelledOnce && s.BytesDone >= 128<<10 {
+				cancelledOnce = true
+				ctrl2.Cancel()
+			}
+		},
+	})
+	_ = sa2.Close()
+	if !errors.Is(sendErr2, ErrCancelled) {
+		t.Fatalf("expected ErrCancelled, got %v", sendErr2)
+	}
+	if rerr2 := <-recvErr2; rerr2 == nil {
+		t.Fatal("expected Receive error on sender cancel")
+	}
+	if _, statErr := os.Stat(filepath.Join(outCancel, "pause-send.bin.ftpart")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected .ftpart removed on cancel, stat=%v", statErr)
+	}
+}
+
+func TestReceivePauseResumeAndCancel(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "pause-recv.bin")
+	writePattern(t, src, 2<<20)
+
+	// 1. Receiver pauses across > Timeout, then resumes and completes cleanly.
+	outOK := filepath.Join(dir, "out-ok")
+	recvCtrl := NewController()
+	a, b := net.Pipe()
+	type resErr struct {
+		res *Result
+		err error
+	}
+	recvCh := make(chan resErr, 1)
+	go func() {
+		defer b.Close()
+		sb, err := session.Accept(b, testParams("recv"))
+		if err != nil {
+			recvCh <- resErr{nil, err}
+			return
+		}
+		defer sb.Close()
+		pausedOnce := false
+		res, rerr := Receive(sb, outOK, Config{
+			Timeout: 600 * time.Millisecond,
+			Control: recvCtrl,
+			OnDetailProgress: func(s ProgressSnapshot) {
+				if !pausedOnce && s.BytesDone >= 256<<10 {
+					pausedOnce = true
+					recvCtrl.Pause()
+					time.AfterFunc(950*time.Millisecond, recvCtrl.Resume)
+				}
+			},
+		})
+		recvCh <- resErr{res, rerr}
+	}()
+
+	sa, err := session.Dial(a, testParams("send"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, sendErr := Send(sa, []string{src}, Config{
+		ChunkSize:      64 << 10,
+		WindowBytes:    128 << 10,
+		Timeout:        600 * time.Millisecond,
+		MinBytesPerSec: 1 << 20, // must tolerate receiver pause via keepalive ping
+		SlowGrace:      50 * time.Millisecond,
+		SlowWindow:     150 * time.Millisecond,
+	})
+	_ = sa.Close()
+	if sendErr != nil {
+		t.Fatalf("Send failed during receiver pause/resume: %v", sendErr)
+	}
+	rr := <-recvCh
+	if rr.err != nil {
+		t.Fatalf("Receive failed after pause/resume: %v", rr.err)
+	}
+	if fileHash(t, src) != fileHash(t, filepath.Join(outOK, "pause-recv.bin")) {
+		t.Fatal("hash mismatch after receiver pause/resume")
+	}
+
+	// 2. Receiver cancel returns ErrCancelled, notifies sender, and cleans .ftpart.
+	outCancel := filepath.Join(dir, "out-cancel")
+	recvCtrl2 := NewController()
+	c1, c2 := net.Pipe()
+	recvCh2 := make(chan error, 1)
+	go func() {
+		defer c2.Close()
+		sb, err := session.Accept(c2, testParams("recv"))
+		if err != nil {
+			recvCh2 <- err
+			return
+		}
+		defer sb.Close()
+		cancelledOnce := false
+		_, rerr := Receive(sb, outCancel, Config{
+			Timeout: 2 * time.Second,
+			Control: recvCtrl2,
+			OnDetailProgress: func(s ProgressSnapshot) {
+				if !cancelledOnce && s.BytesDone >= 128<<10 {
+					cancelledOnce = true
+					recvCtrl2.Cancel()
+				}
+			},
+		})
+		recvCh2 <- rerr
+	}()
+
+	sa2, err := session.Dial(c1, testParams("send"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, sendErr2 := Send(sa2, []string{src}, Config{
+		ChunkSize:   64 << 10,
+		WindowBytes: 128 << 10,
+		Timeout:     2 * time.Second,
+	})
+	_ = sa2.Close()
+	if rerr2 := <-recvCh2; !errors.Is(rerr2, ErrCancelled) {
+		t.Fatalf("expected receiver ErrCancelled, got %v", rerr2)
+	}
+	var rem *session.RemoteError
+	if !errors.As(sendErr2, &rem) || rem.Code != proto.CodeCancelled {
+		t.Fatalf("expected sender RemoteError(CodeCancelled), got %v", sendErr2)
+	}
+	if _, statErr := os.Stat(filepath.Join(outCancel, "pause-recv.bin.ftpart")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected .ftpart removed on receiver cancel, stat=%v", statErr)
+	}
+}

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cwlindean/filetransfer/core/transfer"
 )
 
 func TestFmtDur(t *testing.T) {
@@ -131,5 +133,42 @@ func TestFormatSpeedAndMetrics(t *testing.T) {
 	cur := a.currentTransfer()
 	if cur == nil || cur.speedBPS <= 0 {
 		t.Fatalf("expected positive speedBPS, got %+v", cur)
+	}
+}
+
+func TestAppTransferPauseAndCancelControl(t *testing.T) {
+	a := newApp(defaultReceiveDir(), 18800)
+	id := a.beginTransfer("send", "Redmi K70", "big.bin", 1, 10*1024*1024)
+	ctrl := transfer.NewController()
+	a.attachTransferControl(id, ctrl, true, true)
+	a.updateTransfer(id, "transferring", "LAN", "", "big.bin", 1, 1, 4*1024*1024, 10*1024*1024)
+
+	if !a.togglePauseTransfer() {
+		t.Fatal("togglePauseTransfer() = false, want true")
+	}
+	if !ctrl.IsPaused() {
+		t.Fatal("controller should be paused")
+	}
+	cur := a.currentTransfer()
+	if cur == nil || !cur.paused || cur.stage != "paused" || cur.speedBPS != 0 {
+		t.Fatalf("expected paused state with zero speed, got %+v", cur)
+	}
+	pausedMetrics := formatTransferMetricsState(cur.startedAt, cur.bytesDone, cur.bytesTotal, cur.speedBPS, true)
+	if !strings.Contains(pausedMetrics, "已暂停") || strings.Contains(pausedMetrics, "剩余约") {
+		t.Fatalf("unexpected paused metrics: %q", pausedMetrics)
+	}
+
+	if !a.togglePauseTransfer() {
+		t.Fatal("second togglePauseTransfer() = false, want true")
+	}
+	if ctrl.IsPaused() {
+		t.Fatal("controller should be resumed")
+	}
+
+	if !a.cancelTransfer() {
+		t.Fatal("cancelTransfer() = false, want true")
+	}
+	if !ctrl.IsCancelled() {
+		t.Fatal("controller should be cancelled")
 	}
 }

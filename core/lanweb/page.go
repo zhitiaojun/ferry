@@ -61,7 +61,11 @@ const pageHTML = `<!doctype html>
   .tx-box{margin-top:14px;padding:12px 14px;border-radius:11px;border:1px solid var(--line);background:var(--paper-2)}
   .tx-top{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:13px}
   .tx-name{font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .tx-acts{display:flex;align-items:center;gap:6px;flex:none}
   .tx-pct{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--accent);flex:none}
+  .tx-btn{font:inherit;font-size:11px;font-weight:600;padding:3px 9px;border:1px solid var(--line);border-radius:7px;
+          background:var(--card);color:var(--danger);cursor:pointer;white-space:nowrap}
+  .tx-btn:hover{background:var(--paper-3)}
   .tx-meta{margin-top:7px;font-family:var(--mono);font-size:12px;color:var(--ink-2);word-break:break-word}
   #msg{margin-top:10px;font-size:13px;color:var(--ink-2);white-space:pre-wrap}
   #msg:empty{display:none}
@@ -111,7 +115,7 @@ const pageHTML = `<!doctype html>
       <input id="pick" type="file" multiple style="display:none">
     </div>
     <div class="tx-box" id="tx-box" hidden>
-      <div class="tx-top"><span class="tx-name" id="tx-name"></span><span class="tx-pct" id="tx-pct"></span></div>
+      <div class="tx-top"><span class="tx-name" id="tx-name"></span><div class="tx-acts"><span class="tx-pct" id="tx-pct"></span><button type="button" class="tx-btn" id="tx-cancel">取消</button></div></div>
       <div id="bar"><i></i></div>
       <div class="tx-meta" id="tx-meta"></div>
     </div>
@@ -160,6 +164,8 @@ const pageHTML = `<!doctype html>
     tr.appendChild(td1);tr.appendChild(td2);tr.appendChild(td3);tr.appendChild(td4);rows.appendChild(tr);
   }
   var busy = false;
+  var curXhr = null;
+  var upCancelled = false;
   function load(){
     fetch(base+"/api/list",{cache:"no-store"}).then(function(r){return r.json()}).then(function(j){
       if(j.name){ document.getElementById("peer").textContent = "已连接设备：" + j.name + "（局域网直连）"; }
@@ -191,10 +197,18 @@ const pageHTML = `<!doctype html>
     var totalFiles = list.length;
     var idx = 0;
     busy = true;
+    upCancelled = false;
     msg.textContent = "";
     function next(){
+      if(upCancelled){
+        busy = false; curXhr = null; txBox.hidden = true;
+        msg.textContent = "已取消上传";
+        load();
+        return;
+      }
       if(idx >= list.length){
         busy = false;
+        curXhr = null;
         txBox.hidden = true;
         msg.textContent = totalFiles > 1 ? ("全部上传完成（共 " + totalFiles + " 个文件）") : msg.textContent;
         load();
@@ -209,6 +223,7 @@ const pageHTML = `<!doctype html>
       fd.append("file", f, f.name);
       showTx(label, 0, fsize, 0);
       var xhr = new XMLHttpRequest();
+      curXhr = xhr;
       xhr.open("POST", base+"/upload");
       xhr.setRequestHeader("X-File-Size", String(fsize));
       xhr.upload.onprogress = function(e){
@@ -223,6 +238,7 @@ const pageHTML = `<!doctype html>
         showTx(label, loaded, total, bps, note);
       };
       xhr.onload = function(){
+        if(curXhr === xhr) curXhr = null;
         if(xhr.status !== 200){
           busy = false; txBox.hidden = true;
           msg.textContent = "上传失败：" + xhr.status + " " + (xhr.responseText || "");
@@ -233,12 +249,17 @@ const pageHTML = `<!doctype html>
         msg.textContent = "上传完成：" + f.name + (avgSpd ? "（平均 " + avgSpd + "）" : "");
         next();
       };
-      xhr.onerror = function(){ busy = false; txBox.hidden = true; msg.textContent = "上传失败：网络错误"; };
-      xhr.onabort = function(){ busy = false; txBox.hidden = true; };
+      xhr.onerror = function(){ curXhr = null; busy = false; txBox.hidden = true; msg.textContent = "上传失败：网络错误"; };
+      xhr.onabort = function(){ curXhr = null; busy = false; txBox.hidden = true; msg.textContent = "已取消上传"; load(); };
       xhr.send(fd);
     }
     next();
   }
+  document.getElementById("tx-cancel").onclick = function(){
+    if(!busy) return;
+    upCancelled = true;
+    if(curXhr) curXhr.abort();
+  };
   var drop=document.getElementById("drop");
   var pick=document.getElementById("pick");
   drop.onclick=function(){ pick.click(); };

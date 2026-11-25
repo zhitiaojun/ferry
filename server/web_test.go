@@ -322,7 +322,7 @@ func TestWebTransferPageIncludesProgressAndSpeed(t *testing.T) {
 		t.Fatalf("/transfer status = %d", resp.StatusCode)
 	}
 	html := string(body)
-	for _, needle := range []string{`id="up-box"`, `id="dl-box"`, `fmtSpeed`, `makeSpeedTracker`} {
+	for _, needle := range []string{`id="up-box"`, `id="dl-box"`, `id="up-pause"`, `id="up-cancel"`, `id="dl-cancel"`, `fmtSpeed`, `makeSpeedTracker`} {
 		if !strings.Contains(html, needle) {
 			t.Fatalf("/transfer HTML missing %s", needle)
 		}

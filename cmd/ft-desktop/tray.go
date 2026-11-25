@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -372,13 +373,16 @@ func (t *tray) handle(nc net.Conn) {
 			t.app.endTransfer(txID)
 		}
 	}()
+	ctrl := transfer.NewController()
 	if paired {
 		txID = t.app.beginTransfer("recv", peerName, "等待发送清单…", 0, 0)
+		t.app.attachTransferControl(txID, ctrl, true, true)
 	}
 
 	confirmRejected := false
 	outDir := t.app.receiveDir()
 	cfg := transfer.Config{
+		Control: ctrl,
 		OnDetailProgress: func(s transfer.ProgressSnapshot) {
 			if txID != 0 {
 				t.app.updateTransfer(txID, s.Stage, "LAN", "", s.FileName, s.FileIndex, s.FileCount, s.BytesDone, s.BytesTotal)
@@ -411,6 +415,7 @@ func (t *tray) handle(nc net.Conn) {
 				firstName = m.Files[0].Name
 			}
 			txID = t.app.beginTransfer("recv", peerName, firstName, len(m.Files), total)
+			t.app.attachTransferControl(txID, ctrl, true, true)
 			return nil
 		}
 	}
@@ -418,6 +423,14 @@ func (t *tray) handle(nc net.Conn) {
 	if err != nil {
 		if confirmRejected {
 			t.app.event("desktop.lan_unpaired_rejected", map[string]any{"peer": peer, "name": peerName, "reason": err.Error()})
+			return
+		}
+		if ctrl.IsCancelled() || errors.Is(err, transfer.ErrCancelled) {
+			t.app.event("desktop.transfer_cancelled", map[string]any{"peer": peer})
+			t.app.note(fmt.Sprintf("%s  ← %s · 已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerName)))
+			if h := existingMainWindow(); h != 0 {
+				procPostMessageW.Call(uintptr(h), wmAppPaint, 0, 0)
+			}
 			return
 		}
 		t.app.event("desktop.transfer_error", map[string]any{"peer": peer, "error": err.Error()})

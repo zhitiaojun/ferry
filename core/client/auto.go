@@ -78,6 +78,7 @@ type ReceiveOptions struct {
 	DisableHotUpgrade  bool
 	DisablePunch       bool
 	NoTLS              bool
+	Control            *transfer.Controller
 	Log                *logging.Logger
 	OnStatus           func(Status)
 }
@@ -112,6 +113,16 @@ func gatherCandidates(ctx context.Context, stun []string, hint *discovery.Hint, 
 func SendAuto(ctx context.Context, o Options, toID string, files []string) (Result, error) {
 	if len(files) == 0 {
 		return Result{}, fmt.Errorf("no files to send")
+	}
+	if o.Control != nil {
+		if o.Control.IsCancelled() {
+			return Result{}, transfer.ErrCancelled
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		unreg := o.Control.OnCancel(cancel)
+		defer unreg()
 	}
 	infos, total, err := describeFiles(files)
 	if err != nil {
@@ -454,6 +465,7 @@ func SendAuto(ctx context.Context, o Options, toID string, files []string) (Resu
 	tcfg := transfer.Config{
 		ChunkSize:  uint32(o.Chunk),
 		Timeout:    o.Timeout,
+		Control:    o.Control,
 		Log:        o.Log,
 		TransferID: hex16(transferID),
 		UpgradeCh:  upgradeSig,
@@ -480,7 +492,7 @@ func SendAuto(ctx context.Context, o Options, toID string, files []string) (Resu
 	}
 
 	res, err := transfer.Send(sess, files, tcfg)
-	if errors.Is(err, transfer.ErrPathUpgrade) {
+	if errors.Is(err, transfer.ErrPathUpgrade) && !(o.Control != nil && o.Control.IsCancelled()) {
 		up := <-upPairCh
 		_ = sess.Close()
 		sess = up.sess
@@ -503,7 +515,7 @@ func SendAuto(ctx context.Context, o Options, toID string, files []string) (Resu
 		}
 		res, err = transfer.Send(sess, files, tcfg)
 	}
-	if errors.Is(err, transfer.ErrSlowPath) {
+	if errors.Is(err, transfer.ErrSlowPath) && !(o.Control != nil && o.Control.IsCancelled()) {
 		if o.Log != nil {
 			o.Log.Event("path.fallback_slow_punch", map[string]any{"peer": truncHex(toID), "transfer_id": transferID})
 		}
@@ -566,6 +578,16 @@ func ReceiveAuto(
 	}
 	if cl == nil {
 		return Result{}, fmt.Errorf("nil signaling client")
+	}
+	if o.Control != nil {
+		if o.Control.IsCancelled() {
+			return Result{}, transfer.ErrCancelled
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		unreg := o.Control.OnCancel(cancel)
+		defer unreg()
 	}
 	var total int64
 	firstName := ""
@@ -829,6 +851,7 @@ func ReceiveAuto(
 	tcfg := transfer.Config{
 		ChunkSize:  uint32(o.Chunk),
 		Timeout:    o.Timeout,
+		Control:    o.Control,
 		Log:        o.Log,
 		TransferID: hex16(req.TransferID),
 		OnDetailProgress: func(snap transfer.ProgressSnapshot) {
@@ -845,7 +868,7 @@ func ReceiveAuto(
 	}
 
 	res, err := transfer.Receive(sess, o.OutDir, tcfg)
-	if err != nil && winner == "relay" && upPairCh != nil {
+	if err != nil && !isTransferCancelled(err) && !(o.Control != nil && o.Control.IsCancelled()) && winner == "relay" && upPairCh != nil {
 		var remote *session.RemoteError
 		wantsSwitch := errors.As(err, &remote) && remote.Code == proto.CodePathSwitch
 		var up recvUpgradePair
@@ -893,7 +916,7 @@ func ReceiveAuto(
 			res, err = transfer.Receive(sess, o.OutDir, tcfg)
 		}
 	}
-	if err != nil && winner == "punch" {
+	if err != nil && !isTransferCancelled(err) && !(o.Control != nil && o.Control.IsCancelled()) && winner == "punch" {
 		_ = sess.Close()
 		emitStatus(Status{
 			Stage:      "connecting",

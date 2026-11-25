@@ -90,6 +90,8 @@ const (
 	hoverFltSend
 	hoverFltRecv
 	hoverOpenDir
+	hoverTxPause
+	hoverTxCancel
 	hoverLedgerRow
 	hoverDevScanLanBtn
 	hoverDevAddBtn
@@ -293,9 +295,11 @@ type mainWin struct {
 	fltAllR     rectT
 	fltSendR    rectT
 	fltRecvR    rectT
-	openDirR    rectT
-	activeTxR   rectT
-	ledgerRowsR []rectT
+	openDirR     rectT
+	activeTxR    rectT
+	txPauseBtnR  rectT
+	txCancelBtnR rectT
+	ledgerRowsR  []rectT
 
 	devScanLanBtnR    rectT
 	devAddBtnR        rectT
@@ -1135,9 +1139,29 @@ func (w *mainWin) layout(cw, ch int32) {
 		w.openDirR = rectT{paneR - p(104), tabY, paneR, tabY + p(28)}
 
 		ry := w.fltAllR.bottom + p(8)
-		if w.app != nil && w.app.currentTransfer() != nil {
-			w.activeTxR = rectT{paneL, ry, paneR, ry + p(92)}
-			ry = w.activeTxR.bottom + p(10)
+		w.activeTxR, w.txPauseBtnR, w.txCancelBtnR = rectT{}, rectT{}, rectT{}
+		if w.app != nil {
+			if tx := w.app.currentTransfer(); tx != nil {
+				showPause := tx.canPause && tx.stage != "verifying"
+				h := p(92)
+				if showPause || tx.canCancel {
+					h = p(122)
+				}
+				w.activeTxR = rectT{paneL, ry, paneR, ry + h}
+				btnY := w.activeTxR.bottom - p(32)
+				btnB := w.activeTxR.bottom - p(10)
+				curR := paneR - p(14)
+				if tx.canCancel {
+					cwBtn := p(66)
+					w.txCancelBtnR = rectT{curR - cwBtn, btnY, curR, btnB}
+					curR = w.txCancelBtnR.left - p(8)
+				}
+				if showPause {
+					pwBtn := p(66)
+					w.txPauseBtnR = rectT{curR - pwBtn, btnY, curR, btnB}
+				}
+				ry = w.activeTxR.bottom + p(10)
+			}
 		}
 		rowH := p(54)
 		for range w.filteredLedger() {
@@ -1711,7 +1735,11 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 
 func (w *mainWin) drawActiveTransferCard(cv *glassCanvas, r rectT, tx *activeTransfer) {
 	p := w.px
-	cv.drawAlphaRoundRect(r, float64(p(12)), w.pal.paper, w.surfaceAlpha(215), w.pal.accent, w.surfaceAlpha(160), 1.0)
+	accentCol := w.pal.accent
+	if tx.paused || tx.stage == "paused" {
+		accentCol = w.pal.amber
+	}
+	cv.drawAlphaRoundRect(r, float64(p(12)), w.pal.paper, w.surfaceAlpha(215), accentCol, w.surfaceAlpha(160), 1.0)
 
 	inL := r.left + p(14)
 	inR := r.right - p(14)
@@ -1751,7 +1779,7 @@ func (w *mainWin) drawActiveTransferCard(cv *glassCanvas, r rectT, tx *activeTra
 	if pctTxt != "" {
 		cv.drawAlphaText(w.fontBold, pctTxt,
 			rectT{badgeR.left - p(6) - pctW, r.top + p(10), badgeR.left - p(6), r.top + p(34)},
-			dtRight|dtSingleLine|dtVCenter, w.pal.accent)
+			dtRight|dtSingleLine|dtVCenter, accentCol)
 	} else {
 		pctW = 0
 	}
@@ -1763,7 +1791,7 @@ func (w *mainWin) drawActiveTransferCard(cv *glassCanvas, r rectT, tx *activeTra
 	barR := rectT{inL, r.top + p(42), inR, r.top + p(48)}
 	cv.drawAlphaRoundRect(barR, float64(p(3)), w.pal.paper3, w.surfaceAlpha(235), 0, 0, 0)
 	fillW := int32(float64(barR.right-barR.left) * pctRatio)
-	if tx.bytesTotal == 0 && (tx.stage == "connecting" || tx.stage == "waiting" || tx.stage == "transferring") {
+	if tx.bytesTotal == 0 && (tx.stage == "connecting" || tx.stage == "waiting" || tx.stage == "transferring" || tx.stage == "paused") {
 		fillW = (barR.right - barR.left) * 28 / 100
 	}
 	if fillW > 0 {
@@ -1773,7 +1801,7 @@ func (w *mainWin) drawActiveTransferCard(cv *glassCanvas, r rectT, tx *activeTra
 		if barR.left+fillW > barR.right {
 			fillW = barR.right - barR.left
 		}
-		cv.drawAlphaRoundRect(rectT{barR.left, barR.top, barR.left + fillW, barR.bottom}, float64(p(3)), w.pal.accent, 255, 0, 0, 0)
+		cv.drawAlphaRoundRect(rectT{barR.left, barR.top, barR.left + fillW, barR.bottom}, float64(p(3)), accentCol, 255, 0, 0, 0)
 	}
 
 	// Bottom file + bytes + elapsed/ETA metadata
@@ -1784,16 +1812,39 @@ func (w *mainWin) drawActiveTransferCard(cv *glassCanvas, r rectT, tx *activeTra
 	if fileInfo == "" {
 		fileInfo = "准备文件信息…"
 	}
-	rightInfo := formatTransferMetrics(tx.startedAt, tx.bytesDone, tx.bytesTotal, tx.speedBPS)
+	rightInfo := formatTransferMetricsState(tx.startedAt, tx.bytesDone, tx.bytesTotal, tx.speedBPS, tx.paused || tx.stage == "paused")
 	rw := textWidth(cv.memDC, w.fontSm, rightInfo) + p(8)
 	maxRW := (inR - inL) * 62 / 100
 	if rw > maxRW {
 		rw = maxRW
 	}
-	cv.drawAlphaText(w.fontSm, fileInfo, rectT{inL, r.top + p(58), inR - rw - p(8), r.bottom - p(10)},
+	metaTop := r.top + p(56)
+	metaBot := r.top + p(80)
+	cv.drawAlphaText(w.fontSm, fileInfo, rectT{inL, metaTop, inR - rw - p(8), metaBot},
 		dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
-	cv.drawAlphaText(w.fontSm, rightInfo, rectT{inR - rw, r.top + p(58), inR, r.bottom - p(10)},
+	cv.drawAlphaText(w.fontSm, rightInfo, rectT{inR - rw, metaTop, inR, metaBot},
 		dtRight|dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
+
+	if w.txPauseBtnR.right > w.txPauseBtnR.left {
+		pLabel := "暂停"
+		if tx.paused || tx.stage == "paused" {
+			pLabel = "继续"
+		}
+		pBg := w.pal.paper2
+		if w.hover == hoverTxPause {
+			pBg = w.pal.accentSoft
+		}
+		cv.drawAlphaRoundRect(w.txPauseBtnR, float64(p(6)), pBg, w.surfaceAlpha(235), w.pal.line, w.surfaceAlpha(200), 1.0)
+		cv.drawAlphaText(w.fontSm, pLabel, w.txPauseBtnR, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
+	}
+	if w.txCancelBtnR.right > w.txCancelBtnR.left {
+		cBg := w.pal.paper2
+		if w.hover == hoverTxCancel {
+			cBg = w.pal.paper3
+		}
+		cv.drawAlphaRoundRect(w.txCancelBtnR, float64(p(6)), cBg, w.surfaceAlpha(235), w.pal.danger, w.surfaceAlpha(180), 1.0)
+		cv.drawAlphaText(w.fontSm, "取消", w.txCancelBtnR, dtCenter|dtSingleLine|dtVCenter, w.pal.danger)
+	}
 }
 
 func stageDisplayLabel(stage string) string {
@@ -1806,6 +1857,8 @@ func stageDisplayLabel(stage string) string {
 		return "协商直连路径"
 	case "transferring":
 		return "传输中"
+	case "paused":
+		return "已暂停"
 	case "verifying":
 		return "校验写入中"
 	default:
@@ -1852,6 +1905,10 @@ func formatSpeed(bps int64) string {
 }
 
 func formatTransferMetrics(startedAt time.Time, done, total, speedBPS int64) string {
+	return formatTransferMetricsState(startedAt, done, total, speedBPS, false)
+}
+
+func formatTransferMetricsState(startedAt time.Time, done, total, speedBPS int64, paused bool) string {
 	var parts []string
 	if total > 0 {
 		parts = append(parts, humanBytes(done)+" / "+humanBytes(total))
@@ -1861,11 +1918,13 @@ func formatTransferMetrics(startedAt time.Time, done, total, speedBPS int64) str
 	var elapsed time.Duration
 	if !startedAt.IsZero() {
 		elapsed = time.Since(startedAt)
-		if speedBPS <= 0 && done > 0 && elapsed >= 500*time.Millisecond {
+		if !paused && speedBPS <= 0 && done > 0 && elapsed >= 500*time.Millisecond {
 			speedBPS = int64(float64(done) / elapsed.Seconds())
 		}
 	}
-	if speedBPS > 0 {
+	if paused {
+		parts = append(parts, "已暂停")
+	} else if speedBPS > 0 {
 		parts = append(parts, formatSpeed(speedBPS))
 	}
 	if !startedAt.IsZero() {
@@ -1873,18 +1932,20 @@ func formatTransferMetrics(startedAt time.Time, done, total, speedBPS int64) str
 			elapsed = time.Second
 		}
 		parts = append(parts, fmt.Sprintf("已用 %ds", int(elapsed.Seconds())))
-		if speedBPS > 0 && total > 0 && done > 0 && done < total {
-			remSec := int(float64(total-done)/float64(speedBPS) + 0.5)
-			if remSec < 1 {
-				remSec = 1
+		if !paused {
+			if speedBPS > 0 && total > 0 && done > 0 && done < total {
+				remSec := int(float64(total-done)/float64(speedBPS) + 0.5)
+				if remSec < 1 {
+					remSec = 1
+				}
+				if remSec >= 60 {
+					parts = append(parts, fmt.Sprintf("剩余约 %dm%ds", remSec/60, remSec%60))
+				} else {
+					parts = append(parts, fmt.Sprintf("剩余约 %ds", remSec))
+				}
+			} else if eta := formatETA(elapsed, done, total); eta != "" {
+				parts = append(parts, eta)
 			}
-			if remSec >= 60 {
-				parts = append(parts, fmt.Sprintf("剩余约 %dm%ds", remSec/60, remSec%60))
-			} else {
-				parts = append(parts, fmt.Sprintf("剩余约 %ds", remSec))
-			}
-		} else if eta := formatETA(elapsed, done, total); eta != "" {
-			parts = append(parts, eta)
 		}
 	}
 	return strings.Join(parts, " · ")
@@ -2464,6 +2525,10 @@ func (w *mainWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
 		kind = hoverFltRecv
 	case w.page == pageHome && ptIn(w.openDirR, x, y):
 		kind = hoverOpenDir
+	case w.page == pageHome && ptIn(w.txPauseBtnR, x, y):
+		kind = hoverTxPause
+	case w.page == pageHome && ptIn(w.txCancelBtnR, x, y):
+		kind = hoverTxCancel
 	case w.page == pageDevices && ptIn(w.devScanLanBtnR, x, y):
 		kind = hoverDevScanLanBtn
 	case w.page == pageDevices && ptIn(w.devAddBtnR, x, y):
@@ -2655,6 +2720,14 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 		case ptIn(w.openDirR, x, y):
 			if w.app != nil {
 				shellOpen(w.app.receiveDir())
+			}
+		case ptIn(w.txPauseBtnR, x, y):
+			if w.app != nil && w.app.togglePauseTransfer() {
+				procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+			}
+		case ptIn(w.txCancelBtnR, x, y):
+			if w.app != nil && w.app.cancelTransfer() {
+				procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 			}
 		default:
 			for _, rr := range w.ledgerRowsR {

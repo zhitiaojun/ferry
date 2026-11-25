@@ -25,6 +25,7 @@ import (
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/ipc"
 	"github.com/cwlindean/filetransfer/core/signaling"
+	"github.com/cwlindean/filetransfer/core/transfer"
 )
 
 var version = "1.0.0"
@@ -251,7 +252,7 @@ type activeTransfer struct {
 	id         uint64
 	dir        string // "send" | "recv"
 	peer       string
-	stage      string // "connecting" | "waiting" | "transferring" | "verifying"
+	stage      string // "connecting" | "waiting" | "transferring" | "paused" | "verifying"
 	channel    string // "" | "LAN" | "打洞" | "中继"
 	fileName   string
 	fileIndex  int
@@ -261,6 +262,10 @@ type activeTransfer struct {
 	speedBPS   int64
 	startedAt  time.Time
 	samples    []txSpeedSample
+	paused     bool
+	canPause   bool
+	canCancel  bool
+	ctrl       *transfer.Controller
 }
 
 type txSpeedSample struct {
@@ -349,8 +354,18 @@ func (a *app) updateTransfer(id uint64, stage, channel, peer, fileName string, f
 	}
 	changedMajor := false
 	if stage != "" && stage != a.tx.stage {
+		if a.tx.paused && stage == "transferring" {
+			a.tx.samples = []txSpeedSample{{t: now, bytes: a.tx.bytesDone}}
+		}
 		a.tx.stage = stage
+		a.tx.paused = stage == "paused"
 		changedMajor = true
+	}
+	if a.tx.ctrl != nil && a.tx.ctrl.IsPaused() {
+		a.tx.paused = true
+		if a.tx.stage == "transferring" {
+			a.tx.stage = "paused"
+		}
 	}
 	if channel != "" && channel != a.tx.channel {
 		a.tx.channel = channel
@@ -384,7 +399,7 @@ func (a *app) updateTransfer(id uint64, stage, channel, peer, fileName string, f
 	if total > 0 {
 		a.tx.bytesTotal = total
 	}
-	if a.tx.stage == "verifying" {
+	if a.tx.stage == "verifying" || a.tx.paused {
 		a.tx.speedBPS = 0
 	} else {
 		var spd int64
@@ -444,6 +459,98 @@ func (a *app) currentTransfer() *activeTransfer {
 	}
 	cp := *a.tx
 	return &cp
+}
+
+func (a *app) attachTransferControl(id uint64, ctrl *transfer.Controller, canPause, canCancel bool) {
+	if a == nil || id == 0 || ctrl == nil {
+		return
+	}
+	pausedNow := ctrl.IsPaused()
+	a.mu.Lock()
+	matched := a.tx != nil && a.tx.id == id
+	if matched {
+		a.tx.ctrl = ctrl
+		a.tx.canPause = canPause
+		a.tx.canCancel = canCancel
+		if pausedNow {
+			a.tx.paused = true
+			a.tx.speedBPS = 0
+			if a.tx.stage == "transferring" {
+				a.tx.stage = "paused"
+			}
+		}
+	}
+	a.mu.Unlock()
+	if !matched {
+		return
+	}
+	ctrl.SetOnState(func(paused bool) {
+		a.mu.Lock()
+		changed := a.tx != nil && a.tx.id == id
+		if changed {
+			a.tx.paused = paused
+			if paused {
+				a.tx.speedBPS = 0
+				if a.tx.stage == "transferring" || a.tx.stage == "connecting" || a.tx.stage == "waiting" {
+					a.tx.stage = "paused"
+				}
+			} else {
+				if a.tx.stage == "paused" {
+					a.tx.stage = "transferring"
+				}
+				a.tx.samples = []txSpeedSample{{t: time.Now(), bytes: a.tx.bytesDone}}
+			}
+			a.lastPaint = time.Now()
+		}
+		a.mu.Unlock()
+		if changed {
+			if h := existingMainWindow(); h != 0 {
+				procPostMessageW.Call(uintptr(h), wmAppPaint, 0, 0)
+			}
+		}
+	})
+	if h := existingMainWindow(); h != 0 {
+		procPostMessageW.Call(uintptr(h), wmAppPaint, 0, 0)
+	}
+}
+
+func (a *app) togglePauseTransfer() bool {
+	if a == nil {
+		return false
+	}
+	a.mu.Lock()
+	var ctrl *transfer.Controller
+	allowed := a.tx != nil && a.tx.ctrl != nil && a.tx.canPause && a.tx.stage != "verifying"
+	if allowed {
+		ctrl = a.tx.ctrl
+	}
+	a.mu.Unlock()
+	if !allowed {
+		return false
+	}
+	ctrl.TogglePause()
+	return true
+}
+
+func (a *app) cancelTransfer() bool {
+	if a == nil {
+		return false
+	}
+	a.mu.Lock()
+	var ctrl *transfer.Controller
+	allowed := a.tx != nil && a.tx.ctrl != nil && a.tx.canCancel
+	if allowed {
+		ctrl = a.tx.ctrl
+	}
+	a.mu.Unlock()
+	if !allowed {
+		return false
+	}
+	ctrl.Cancel()
+	if h := existingMainWindow(); h != 0 {
+		procPostMessageW.Call(uintptr(h), wmAppPaint, 0, 0)
+	}
+	return true
 }
 
 // deviceID returns the short id of this device, or "" when the key is not

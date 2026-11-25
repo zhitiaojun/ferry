@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"unsafe"
 
 	"github.com/cwlindean/filetransfer/core/client"
+	"github.com/cwlindean/filetransfer/core/transfer"
 )
 
 // sendFiles is the drop window's action: choose the receiver (one paired device
@@ -135,6 +137,8 @@ func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error)
 		}
 	}
 	txID := a.beginTransfer("send", peerLabel(peer), filepath.Base(files[0]), len(files), totalBytes)
+	ctrl := transfer.NewController()
+	a.attachTransferControl(txID, ctrl, true, true)
 	defer a.endTransfer(txID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -146,6 +150,7 @@ func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error)
 		Name:        a.deviceName(),
 		STUNServers: a.stunServers,
 		CandRoute:   a.registerCandRoute,
+		Control:     ctrl,
 		OnStatus: func(st client.Status) {
 			ch := ""
 			switch st.Channel {
@@ -164,12 +169,12 @@ func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error)
 	var err error
 	if lanAddr := a.peerLANAddr(peer.ID); lanAddr != "" {
 		res, err = client.SendLAN(ctx, opts, lanAddr, files)
-		if err != nil {
+		if err != nil && !ctrl.IsCancelled() && !errors.Is(err, transfer.ErrCancelled) {
 			a.event("desktop.lan_fallback", map[string]any{"to": truncID(peer.ID), "addr": lanAddr, "error": err.Error()})
 			a.updateTransfer(txID, "connecting", "", "", filepath.Base(files[0]), 1, len(files), 0, totalBytes)
 		}
 	}
-	if res.Channel == "" {
+	if res.Channel == "" && !ctrl.IsCancelled() && !errors.Is(err, transfer.ErrCancelled) {
 		if sigCl := a.activeSignalClient(); sigCl != nil {
 			opts.SignalClient = sigCl
 		} else {
@@ -179,6 +184,11 @@ func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error)
 		res, err = client.SendAuto(ctx, opts, peer.ID, files)
 	}
 	if err != nil {
+		if ctrl.IsCancelled() || errors.Is(err, transfer.ErrCancelled) {
+			a.event("desktop.send_cancelled", map[string]any{"to": truncID(peer.ID)})
+			a.note(fmt.Sprintf("%s  → %s · %s · 已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeFiles(files)))
+			return client.Result{}, fmt.Errorf("已取消传输")
+		}
 		a.event("desktop.send_error", map[string]any{"to": truncID(peer.ID), "error": err.Error()})
 		a.note(fmt.Sprintf("%s  → %s · %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeFiles(files)))
 		return client.Result{}, err
@@ -224,6 +234,8 @@ func sendToLANTarget(a *app, files []string, targetName, addr string) (client.Re
 		label = addr
 	}
 	txID := a.beginTransfer("send", label, filepath.Base(files[0]), len(files), totalBytes)
+	ctrl := transfer.NewController()
+	a.attachTransferControl(txID, ctrl, true, true)
 	defer a.endTransfer(txID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -231,12 +243,18 @@ func sendToLANTarget(a *app, files []string, targetName, addr string) (client.Re
 	opts := client.Options{
 		KeyPath: a.keyPath,
 		Name:    a.deviceName(),
+		Control: ctrl,
 		OnStatus: func(st client.Status) {
 			a.updateTransfer(txID, st.Stage, "LAN", "", st.FileName, st.FileIndex, st.FileCount, st.BytesDone, st.BytesTotal)
 		},
 	}
 	res, err := client.SendLAN(ctx, opts, addr, files)
 	if err != nil {
+		if ctrl.IsCancelled() || errors.Is(err, transfer.ErrCancelled) {
+			a.event("desktop.lan_send_cancelled", map[string]any{"addr": addr})
+			a.note(fmt.Sprintf("%s  → %s · %s · 已取消", time.Now().Format("15:04"), sanitizeLedgerText(label), summarizeFiles(files)))
+			return client.Result{}, fmt.Errorf("已取消传输")
+		}
 		a.event("desktop.lan_send_error", map[string]any{"addr": addr, "error": err.Error()})
 		a.note(fmt.Sprintf("%s  → %s · %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(label), summarizeFiles(files)))
 		return client.Result{}, err

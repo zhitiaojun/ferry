@@ -13,6 +13,7 @@ import (
 
 	"github.com/cwlindean/filetransfer/core/logging"
 	"github.com/cwlindean/filetransfer/core/proto"
+	"github.com/cwlindean/filetransfer/core/transfer"
 )
 
 // EventListener receives push notifications from the Go transfer core so Android
@@ -282,8 +283,11 @@ type ActiveTransfer struct {
 	Active     bool   `json:"active"`
 	Direction  string `json:"direction,omitempty"` // "send" | "recv"
 	Peer       string `json:"peer,omitempty"`
-	Stage      string `json:"stage,omitempty"`   // "connecting" | "racing" | "transferring" | "verifying"
+	Stage      string `json:"stage,omitempty"`   // "connecting" | "racing" | "transferring" | "paused" | "verifying"
 	Channel    string `json:"channel,omitempty"` // "" | "lan" | "punch" | "relay"
+	Paused     bool   `json:"paused,omitempty"`
+	CanPause   bool   `json:"can_pause,omitempty"`
+	CanCancel  bool   `json:"can_cancel,omitempty"`
 	FileIndex  int    `json:"file_index,omitempty"`
 	FileCount  int    `json:"file_count,omitempty"`
 	FileName   string `json:"file_name,omitempty"`
@@ -302,6 +306,7 @@ var (
 	activeTxMu    sync.Mutex
 	activeTxSeq   uint64
 	activeTx      ActiveTransfer
+	activeTxCtrl  *transfer.Controller
 	txSamples     []txSpeedSample
 	lastProgressT time.Time
 )
@@ -310,6 +315,7 @@ func beginActiveTransfer(dir, peer, fileName string, fileCount int, total int64)
 	now := time.Now()
 	activeTxMu.Lock()
 	activeTxSeq++
+	activeTxCtrl = nil
 	activeTx = ActiveTransfer{
 		Active:     true,
 		Direction:  dir,
@@ -330,6 +336,70 @@ func beginActiveTransfer(dir, peer, fileName string, fileCount int, total int64)
 	return seq
 }
 
+func attachActiveTransferController(seq uint64, ctrl *transfer.Controller, canPause, canCancel bool) {
+	if ctrl == nil {
+		return
+	}
+	ctrl.SetOnState(func(paused bool) {
+		now := time.Now()
+		activeTxMu.Lock()
+		if !activeTx.Active || activeTxSeq != seq {
+			activeTxMu.Unlock()
+			return
+		}
+		activeTx.Paused = paused
+		if paused {
+			activeTx.Stage = "paused"
+			activeTx.SpeedBPS = 0
+		} else {
+			if activeTx.Stage == "paused" {
+				activeTx.Stage = "transferring"
+			}
+			txSamples = []txSpeedSample{{t: now, bytes: activeTx.BytesDone}}
+		}
+		lastProgressT = now
+		snap := activeTx
+		activeTxMu.Unlock()
+		notifyProgress(snap)
+	})
+	activeTxMu.Lock()
+	if !activeTx.Active || activeTxSeq != seq {
+		activeTxMu.Unlock()
+		return
+	}
+	activeTxCtrl = ctrl
+	activeTx.CanPause = canPause
+	activeTx.CanCancel = canCancel
+	snap := activeTx
+	activeTxMu.Unlock()
+	notifyProgress(snap)
+}
+
+// TogglePauseActiveTransfer toggles pause/resume on the currently active transfer.
+func TogglePauseActiveTransfer() bool {
+	activeTxMu.Lock()
+	if !activeTx.Active || activeTxCtrl == nil || !activeTx.CanPause {
+		activeTxMu.Unlock()
+		return false
+	}
+	ctrl := activeTxCtrl
+	activeTxMu.Unlock()
+	return ctrl.TogglePause()
+}
+
+// CancelActiveTransfer cancels the currently active transfer.
+func CancelActiveTransfer() bool {
+	activeTxMu.Lock()
+	if !activeTx.Active || activeTxCtrl == nil || !activeTx.CanCancel {
+		activeTxMu.Unlock()
+		return false
+	}
+	ctrl := activeTxCtrl
+	activeTxMu.Unlock()
+	ctrl.Cancel()
+	return true
+}
+
 func updateActiveTransfer(seq uint64, stage, channel, peer, fileName string, idx, cnt int, done, total int64) {
 	now := time.Now()
 	activeTxMu.Lock()
@@ -340,6 +410,7 @@ func updateActiveTransfer(seq uint64, stage, channel, peer, fileName string, idx
 	major := false
 	if stage != "" && stage != activeTx.Stage {
 		activeTx.Stage = stage
+		activeTx.Paused = stage == "paused"
 		major = true
 	}
 	if channel != "" && channel != activeTx.Channel {
@@ -374,7 +445,7 @@ func updateActiveTransfer(seq uint64, stage, channel, peer, fileName string, idx
 	if total > 0 {
 		activeTx.BytesTotal = total
 	}
-	if activeTx.Stage == "verifying" {
+	if activeTx.Stage == "verifying" || activeTx.Stage == "paused" || activeTx.Paused {
 		activeTx.SpeedBPS = 0
 	} else {
 		var spd int64
@@ -411,6 +482,7 @@ func endActiveTransfer(seq uint64) {
 	cleared := false
 	if activeTxSeq == seq {
 		activeTx = ActiveTransfer{}
+		activeTxCtrl = nil
 		txSamples = nil
 		cleared = true
 	}
