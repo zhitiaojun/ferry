@@ -240,8 +240,14 @@ func recordReceivedFrom(outDir, via, peer string, files []string, totalBytes int
 	added := make([]ReceivedEvent, 0, len(files))
 	recvEvtMu.Lock()
 	for _, f := range files {
-		name := filepath.Base(f)
-		full := filepath.Join(outDir, name)
+		rel := strings.TrimSpace(strings.ReplaceAll(f, "\\", "/"))
+		if err := proto.ValidateFileName(rel); err != nil {
+			rel = filepath.Base(f)
+			if err := proto.ValidateFileName(rel); err != nil {
+				continue
+			}
+		}
+		full := filepath.Join(outDir, filepath.FromSlash(rel))
 		sz := int64(0)
 		if info, err := os.Stat(full); err == nil {
 			sz = info.Size()
@@ -249,7 +255,7 @@ func recordReceivedFrom(outDir, via, peer string, files []string, totalBytes int
 			sz = totalBytes
 		}
 		ev := ReceivedEvent{
-			File:     name,
+			File:     rel,
 			FullPath: full,
 			Via:      via,
 			Peer:     peer,

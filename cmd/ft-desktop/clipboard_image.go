@@ -428,7 +428,7 @@ func (a *app) maybeCopySingleImageToClipboard(outDir string, names []string) boo
 	if len(names) != 1 {
 		return false
 	}
-	return a.maybeCopySingleImagePathsToClipboard([]string{filepath.Join(outDir, names[0])})
+	return a.maybeCopySingleImagePathsToClipboard([]string{filepath.Join(outDir, filepath.FromSlash(names[0]))})
 }
 
 func (a *app) maybeCopySingleImagePathsToClipboard(paths []string) bool {

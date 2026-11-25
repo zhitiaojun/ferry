@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,49 +92,44 @@ func sendViaRelay(a *app, files []string) (client.Result, client.Peer, error) {
 	return res, peers[0], err
 }
 
-// expandSendPaths flattens any dropped/selected directories into their regular
-// file paths because client.SendFiles transfers flat file entries.
-func expandSendPaths(paths []string) []string {
-	var out []string
-	for _, p := range paths {
-		st, err := os.Stat(p)
-		if err != nil {
-			continue
-		}
-		if !st.IsDir() {
-			out = append(out, p)
-			continue
-		}
-		_ = filepath.WalkDir(p, func(sub string, d fs.DirEntry, werr error) error {
-			if werr == nil && !d.IsDir() {
-				out = append(out, sub)
-			}
-			return nil
-		})
+func describeDesktopPaths(paths []string) ([]transfer.SendItem, int64, string, error) {
+	items, err := transfer.ExpandSendItems(paths)
+	if err != nil {
+		return nil, 0, "", err
 	}
-	return out
+	var totalBytes int64
+	for _, it := range items {
+		if st, serr := os.Stat(it.DiskPath); serr == nil {
+			totalBytes += st.Size()
+		}
+	}
+	return items, totalBytes, items[0].RelPath, nil
+}
+
+func summarizeItems(items []transfer.SendItem) string {
+	if len(items) == 1 {
+		return sanitizeLedgerText(filepath.Base(filepath.FromSlash(items[0].RelPath)))
+	}
+	return fmt.Sprintf("%d 个文件", len(items))
 }
 
 func summarizeFiles(files []string) string {
 	if len(files) == 1 {
-		return sanitizeLedgerText(filepath.Base(files[0]))
+		if st, err := os.Stat(files[0]); err == nil && st.IsDir() {
+			return fmt.Sprintf("文件夹「%s」", sanitizeLedgerText(filepath.Base(filepath.Clean(files[0]))))
+		}
+		return sanitizeLedgerText(filepath.Base(filepath.FromSlash(files[0])))
 	}
 	return fmt.Sprintf("%d 个文件", len(files))
 }
 
-// sendToPeer pushes files to one paired device and logs the outcome.
+// sendToPeer pushes files/folders to one paired device and logs the outcome.
 func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error) {
-	files = expandSendPaths(files)
-	if len(files) == 0 {
+	items, totalBytes, firstRel, err := describeDesktopPaths(files)
+	if err != nil || len(items) == 0 {
 		return client.Result{}, fmt.Errorf("所选文件夹内没有可发送的文件")
 	}
-	var totalBytes int64
-	for _, fp := range files {
-		if st, serr := os.Stat(fp); serr == nil {
-			totalBytes += st.Size()
-		}
-	}
-	txID := a.beginTransfer("send", peerLabel(peer), filepath.Base(files[0]), len(files), totalBytes)
+	txID := a.beginTransfer("send", peerLabel(peer), firstRel, len(items), totalBytes)
 	ctrl := transfer.NewController()
 	a.attachTransferControl(txID, ctrl, true, true)
 	defer a.endTransfer(txID)
@@ -143,11 +137,11 @@ func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	opts := client.Options{
-		SignalURL:   a.signalURL,
+		SignalURL:   a.currentSignalURL(),
 		KeyPath:     a.keyPath,
 		PairedPath:  a.pairedPath,
 		Name:        a.deviceName(),
-		STUNServers: a.stunServers,
+		STUNServers: a.currentSTUNServers(),
 		CandRoute:   a.registerCandRoute,
 		Control:     ctrl,
 		OnStatus: func(st client.Status) {
@@ -165,12 +159,11 @@ func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error)
 	}
 
 	var res client.Result
-	var err error
 	if lanAddr := a.peerLANAddr(peer.ID); lanAddr != "" {
 		res, err = client.SendLAN(ctx, opts, lanAddr, files)
 		if err != nil && !ctrl.IsCancelled() && !transfer.IsCancelled(err) {
 			a.event("desktop.lan_fallback", map[string]any{"to": truncID(peer.ID), "addr": lanAddr, "error": err.Error()})
-			a.updateTransfer(txID, "connecting", "", "", filepath.Base(files[0]), 1, len(files), 0, totalBytes)
+			a.updateTransfer(txID, "connecting", "", "", firstRel, 1, len(items), 0, totalBytes)
 		}
 	}
 	if res.Channel == "" && !ctrl.IsCancelled() && !transfer.IsCancelled(err) {
@@ -185,18 +178,18 @@ func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error)
 	if err != nil {
 		if ctrl.IsCancelled() {
 			a.event("desktop.send_cancelled", map[string]any{"to": truncID(peer.ID)})
-			a.note(fmt.Sprintf("%s  → %s · %s · 已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeFiles(files)))
+			a.note(fmt.Sprintf("%s  → %s · %s · 已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeItems(items)))
 			a.notifyMainPaint()
 			return client.Result{}, fmt.Errorf("已取消传输")
 		}
 		if transfer.IsCancelled(err) {
 			a.event("desktop.send_peer_cancelled", map[string]any{"to": truncID(peer.ID)})
-			a.note(fmt.Sprintf("%s  → %s · %s · 对方已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeFiles(files)))
+			a.note(fmt.Sprintf("%s  → %s · %s · 对方已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeItems(items)))
 			a.notifyMainPaint()
 			return client.Result{}, fmt.Errorf("对方已取消传输")
 		}
 		a.event("desktop.send_error", map[string]any{"to": truncID(peer.ID), "error": err.Error()})
-		a.note(fmt.Sprintf("%s  → %s · %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeFiles(files)))
+		a.note(fmt.Sprintf("%s  → %s · %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeItems(items)))
 		a.notifyMainPaint()
 		return client.Result{}, err
 	}
@@ -219,29 +212,23 @@ func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error)
 		"duration_ms": res.Duration.Milliseconds(), "transfer_id": res.TransferID,
 	})
 	a.note(fmt.Sprintf("%s  → %s · %s · %s · %s · %s",
-		time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeFiles(files), humanBytes(res.Bytes), fmtDur(res.Duration), chLabel))
+		time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeItems(items), humanBytes(res.Bytes), fmtDur(res.Duration), chLabel))
 	a.notifyMainPaint()
 	return res, nil
 }
 
-// sendToLANTarget pushes files directly over TCP to an unpaired LAN peer
+// sendToLANTarget pushes files/folders directly over TCP to an unpaired LAN peer
 // (temporary transfer; receiver must have its main UI open and confirm).
 func sendToLANTarget(a *app, files []string, targetName, addr string) (client.Result, error) {
-	files = expandSendPaths(files)
-	if len(files) == 0 {
+	items, totalBytes, firstRel, err := describeDesktopPaths(files)
+	if err != nil || len(items) == 0 {
 		return client.Result{}, fmt.Errorf("所选文件夹内没有可发送的文件")
-	}
-	var totalBytes int64
-	for _, fp := range files {
-		if st, serr := os.Stat(fp); serr == nil {
-			totalBytes += st.Size()
-		}
 	}
 	label := strings.TrimSpace(targetName)
 	if label == "" {
 		label = addr
 	}
-	txID := a.beginTransfer("send", label, filepath.Base(files[0]), len(files), totalBytes)
+	txID := a.beginTransfer("send", label, firstRel, len(items), totalBytes)
 	ctrl := transfer.NewController()
 	a.attachTransferControl(txID, ctrl, true, true)
 	defer a.endTransfer(txID)
@@ -260,18 +247,18 @@ func sendToLANTarget(a *app, files []string, targetName, addr string) (client.Re
 	if err != nil {
 		if ctrl.IsCancelled() {
 			a.event("desktop.lan_send_cancelled", map[string]any{"addr": addr})
-			a.note(fmt.Sprintf("%s  → %s · %s · 已取消", time.Now().Format("15:04"), sanitizeLedgerText(label), summarizeFiles(files)))
+			a.note(fmt.Sprintf("%s  → %s · %s · 已取消", time.Now().Format("15:04"), sanitizeLedgerText(label), summarizeItems(items)))
 			a.notifyMainPaint()
 			return client.Result{}, fmt.Errorf("已取消传输")
 		}
 		if transfer.IsCancelled(err) {
 			a.event("desktop.lan_send_peer_cancelled", map[string]any{"addr": addr})
-			a.note(fmt.Sprintf("%s  → %s · %s · 对方已取消", time.Now().Format("15:04"), sanitizeLedgerText(label), summarizeFiles(files)))
+			a.note(fmt.Sprintf("%s  → %s · %s · 对方已取消", time.Now().Format("15:04"), sanitizeLedgerText(label), summarizeItems(items)))
 			a.notifyMainPaint()
 			return client.Result{}, fmt.Errorf("对方已取消传输")
 		}
 		a.event("desktop.lan_send_error", map[string]any{"addr": addr, "error": err.Error()})
-		a.note(fmt.Sprintf("%s  → %s · %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(label), summarizeFiles(files)))
+		a.note(fmt.Sprintf("%s  → %s · %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(label), summarizeItems(items)))
 		a.notifyMainPaint()
 		return client.Result{}, err
 	}
@@ -283,7 +270,7 @@ func sendToLANTarget(a *app, files []string, targetName, addr string) (client.Re
 		"duration_ms": res.Duration.Milliseconds(), "transfer_id": res.TransferID,
 	})
 	a.note(fmt.Sprintf("%s  → %s · %s · %s · %s · LAN",
-		time.Now().Format("15:04"), sanitizeLedgerText(label), summarizeFiles(files), humanBytes(res.Bytes), fmtDur(res.Duration)))
+		time.Now().Format("15:04"), sanitizeLedgerText(label), summarizeItems(items), humanBytes(res.Bytes), fmtDur(res.Duration)))
 	a.notifyMainPaint()
 	return res, nil
 }

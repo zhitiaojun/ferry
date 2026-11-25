@@ -254,17 +254,11 @@ func (d *desktopIPC) OpenUI(context.Context) error {
 
 func (d *desktopIPC) sendDirectLAN(ctx context.Context, addr string, files []string) ipc.SendResponse {
 	a := d.app
-	files = expandSendPaths(files)
-	if len(files) == 0 {
+	items, totalBytes, firstRel, derr := describeDesktopPaths(files)
+	if derr != nil || len(items) == 0 {
 		return ipc.SendResponse{OK: false, Error: "没有可发送的文件"}
 	}
-	var totalBytes int64
-	for _, fp := range files {
-		if st, serr := os.Stat(fp); serr == nil {
-			totalBytes += st.Size()
-		}
-	}
-	txID := a.beginTransfer("send", addr, filepath.Base(files[0]), len(files), totalBytes)
+	txID := a.beginTransfer("send", addr, firstRel, len(items), totalBytes)
 	ctrl := transfer.NewController()
 	a.attachTransferControl(txID, ctrl, true, true)
 	defer a.endTransfer(txID)
@@ -280,16 +274,16 @@ func (d *desktopIPC) sendDirectLAN(ctx context.Context, addr string, files []str
 	}, addr, files)
 	if err != nil {
 		if ctrl.IsCancelled() {
-			a.note(fmt.Sprintf("%s  → %s · %s · 已取消", time.Now().Format("15:04"), sanitizeLedgerText(addr), summarizeFiles(files)))
+			a.note(fmt.Sprintf("%s  → %s · %s · 已取消", time.Now().Format("15:04"), sanitizeLedgerText(addr), summarizeItems(items)))
 			a.notifyMainPaint()
 			return ipc.SendResponse{OK: false, Error: "已取消传输"}
 		}
 		if transfer.IsCancelled(err) {
-			a.note(fmt.Sprintf("%s  → %s · %s · 对方已取消", time.Now().Format("15:04"), sanitizeLedgerText(addr), summarizeFiles(files)))
+			a.note(fmt.Sprintf("%s  → %s · %s · 对方已取消", time.Now().Format("15:04"), sanitizeLedgerText(addr), summarizeItems(items)))
 			a.notifyMainPaint()
 			return ipc.SendResponse{OK: false, Error: "对方已取消传输"}
 		}
-		a.note(fmt.Sprintf("%s  → %s · %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(addr), summarizeFiles(files)))
+		a.note(fmt.Sprintf("%s  → %s · %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(addr), summarizeItems(items)))
 		a.notifyMainPaint()
 		return ipc.SendResponse{OK: false, Error: err.Error()}
 	}
@@ -300,7 +294,7 @@ func (d *desktopIPC) sendDirectLAN(ctx context.Context, addr string, files []str
 		a.updateTransfer(txID, "", "", peerLabel, "", 0, 0, -1, 0)
 	}
 	a.note(fmt.Sprintf("%s  → %s · %s · %s · %s · LAN",
-		time.Now().Format("15:04"), sanitizeLedgerText(peerLabel), summarizeFiles(files), humanBytes(res.Bytes), fmtDur(res.Duration)))
+		time.Now().Format("15:04"), sanitizeLedgerText(peerLabel), summarizeItems(items), humanBytes(res.Bytes), fmtDur(res.Duration)))
 	a.notifyMainPaint()
 	return ipc.SendResponse{
 		OK: true, Path: "lan", Peer: peerLabel, TransferID: res.TransferID,
@@ -324,27 +318,21 @@ func (d *desktopIPC) sendToSelectedPeer(ctx context.Context, peer client.Peer, f
 		}
 		return d.sendDirectLAN(ctx, lanAddr, files)
 	case "punch", "relay":
-		files = expandSendPaths(files)
-		if len(files) == 0 {
+		items, totalBytes, firstRel, derr := describeDesktopPaths(files)
+		if derr != nil || len(items) == 0 {
 			return ipc.SendResponse{OK: false, Error: "所选文件夹内没有可发送的文件"}
 		}
-		var totalBytes int64
-		for _, fp := range files {
-			if st, serr := os.Stat(fp); serr == nil {
-				totalBytes += st.Size()
-			}
-		}
-		txID := a.beginTransfer("send", peerLabel(peer), filepath.Base(files[0]), len(files), totalBytes)
+		txID := a.beginTransfer("send", peerLabel(peer), firstRel, len(items), totalBytes)
 		ctrl := transfer.NewController()
 		a.attachTransferControl(txID, ctrl, true, true)
 		defer a.endTransfer(txID)
 
 		opts := client.Options{
-			SignalURL:    a.signalURL,
+			SignalURL:    a.currentSignalURL(),
 			KeyPath:      a.keyPath,
 			PairedPath:   a.pairedPath,
 			Name:         a.deviceName(),
-			STUNServers:  a.stunServers,
+			STUNServers:  a.currentSTUNServers(),
 			CandRoute:    a.registerCandRoute,
 			DisablePunch: mode == "relay",
 			Control:      ctrl,
@@ -376,16 +364,16 @@ func (d *desktopIPC) sendToSelectedPeer(ctx context.Context, peer client.Peer, f
 		}
 		if err != nil {
 			if ctrl.IsCancelled() {
-				a.note(fmt.Sprintf("%s  → %s · %s · 已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeFiles(files)))
+				a.note(fmt.Sprintf("%s  → %s · %s · 已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeItems(items)))
 				a.notifyMainPaint()
 				return ipc.SendResponse{OK: false, Error: "已取消传输"}
 			}
 			if transfer.IsCancelled(err) {
-				a.note(fmt.Sprintf("%s  → %s · %s · 对方已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeFiles(files)))
+				a.note(fmt.Sprintf("%s  → %s · %s · 对方已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeItems(items)))
 				a.notifyMainPaint()
 				return ipc.SendResponse{OK: false, Error: "对方已取消传输"}
 			}
-			a.note(fmt.Sprintf("%s  → %s · %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeFiles(files)))
+			a.note(fmt.Sprintf("%s  → %s · %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeItems(items)))
 			a.notifyMainPaint()
 			return ipc.SendResponse{OK: false, Error: err.Error()}
 		}

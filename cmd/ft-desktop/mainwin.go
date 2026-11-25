@@ -64,6 +64,7 @@ const (
 	pageHome     = 0
 	pageDevices  = 1
 	pageSettings = 2
+	pageAbout    = 3
 
 	fltAll  = 0
 	fltSend = 1
@@ -76,6 +77,7 @@ const (
 	hoverNavHome
 	hoverNavDevices
 	hoverNavSettings
+	hoverNavAbout
 	hoverTileFiles
 	hoverTileFolder
 	hoverQueueClear
@@ -105,8 +107,11 @@ const (
 	hoverSetChangeDir
 	hoverSetOpenDir
 	hoverSetAuto
+	hoverSetResetSrv
+	hoverSetChangeSrv
 	hoverSetRename
 	hoverSetCopyID
+	hoverAboutRepo
 )
 
 var (
@@ -277,6 +282,7 @@ type mainWin struct {
 	navHomeR    rectT
 	navDevicesR rectT
 	navSetR     rectT
+	navAboutR   rectT
 
 	sendColR      rectT
 	sendCardR     rectT
@@ -314,8 +320,11 @@ type mainWin struct {
 	setChangeDirR rectT
 	setOpenDirR   rectT
 	setAutoBtnR   rectT
+	setResetSrvR  rectT
+	setChangeSrvR rectT
 	setRenameBtnR rectT
 	setCopyIDRowR rectT
+	aboutRepoR    rectT
 
 	fontH1   syscall.Handle
 	fontH2   syscall.Handle
@@ -1079,6 +1088,7 @@ func (w *mainWin) layout(cw, ch int32) {
 	w.navHomeR = rectT{navX, topH + p(12), navX + navW, topH + p(12) + navH}
 	w.navDevicesR = rectT{navX, w.navHomeR.bottom + p(6), navX + navW, w.navHomeR.bottom + p(6) + navH}
 	w.navSetR = rectT{navX, w.navDevicesR.bottom + p(6), navX + navW, w.navDevicesR.bottom + p(6) + navH}
+	w.navAboutR = rectT{navX, w.navSetR.bottom + p(6), navX + navW, w.navSetR.bottom + p(6) + navH}
 
 	w.syncLANTargets()
 
@@ -1247,11 +1257,26 @@ func (w *mainWin) layout(cw, ch int32) {
 		}
 		y += rowH
 		w.setAutoBtnR = rectT{paneR - p(88), y + p(13), paneR - p(16), y + rowH - p(13)}
+		y += rowH
+		srvTop := y + p(13)
+		srvBot := y + rowH - p(13)
+		w.setChangeSrvR = rectT{paneR - p(56), srvTop, paneR - p(16), srvBot}
+		if w.app != nil && w.app.isCustomServerConfig() {
+			w.setResetSrvR = rectT{w.setChangeSrvR.left - btnGap - p(68), srvTop, w.setChangeSrvR.left - btnGap, srvBot}
+		} else {
+			w.setResetSrvR = rectT{}
+		}
 		infoTop := y + rowH + p(50)
 		infoRowH := p(42)
 		w.setRenameBtnR = rectT{paneR - p(70), infoTop + p(8), paneR - p(16), infoTop + infoRowH - p(8)}
 		infoY := infoTop + infoRowH
 		w.setCopyIDRowR = rectT{paneL, infoY, paneR, infoY + infoRowH}
+	case pageAbout:
+		pad := p(28)
+		paneL := rw + pad
+		paneR := cw - pad
+		cardTop := topH + p(96)
+		w.aboutRepoR = rectT{paneL + p(24), cardTop + p(150), paneR - p(24), cardTop + p(182)}
 	}
 }
 
@@ -1322,6 +1347,8 @@ func (w *mainWin) drawScene(cv *glassCanvas, cr rectT) {
 		w.drawDevices(cv, cr)
 	case pageSettings:
 		w.drawSettings(cv, cr)
+	case pageAbout:
+		w.drawAbout(cv, cr)
 	}
 }
 
@@ -1426,6 +1453,7 @@ func (w *mainWin) drawRail(cv *glassCanvas) {
 		{w.navHomeR, pageHome, hoverNavHome, "传输", 0},
 		{w.navDevicesR, pageDevices, hoverNavDevices, "设备", 1},
 		{w.navSetR, pageSettings, hoverNavSettings, "设置", 2},
+		{w.navAboutR, pageAbout, hoverNavAbout, "关于", 3},
 	}
 	for _, it := range items {
 		active := w.page == it.page
@@ -1478,6 +1506,12 @@ func (w *mainWin) drawNavIcon(cv *glassCanvas, r rectT, kind int, color uint32) 
 		case 2: // Settings circle + center dot
 			procEllipse.Call(dc, uintptr(rw*18/100), uintptr(rh*18/100), uintptr(rw*82/100), uintptr(rh*82/100))
 			procEllipse.Call(dc, uintptr(rw*40/100), uintptr(rh*40/100), uintptr(rw*60/100), uintptr(rh*60/100))
+		case 3: // About info circle + i
+			procEllipse.Call(dc, uintptr(rw*16/100), uintptr(rh*16/100), uintptr(rw*84/100), uintptr(rh*84/100))
+			move(rw*50/100, rh*33/100)
+			line(rw*50/100, rh*37/100)
+			move(rw*50/100, rh*48/100)
+			line(rw*50/100, rh*72/100)
 		}
 	})
 }
@@ -2276,7 +2310,7 @@ func (w *mainWin) drawSettings(cv *glassCanvas, cr rectT) {
 
 	rowH := p(58)
 	top := topH + p(86)
-	g1 := rectT{paneL, top, paneR, top + rowH*3}
+	g1 := rectT{paneL, top, paneR, top + rowH*4}
 	cv.drawAlphaRoundRect(g1, float64(p(12)), w.pal.paper, w.surfaceAlpha(195), w.pal.line, w.surfaceAlpha(200), 1.0)
 
 	recvTxt := "已暂停"
@@ -2288,9 +2322,11 @@ func (w *mainWin) drawSettings(cv *glassCanvas, cr rectT) {
 		autoTxt = "已开启"
 	}
 	dirText := defaultReceiveDir()
+	srvText := "默认 · ferry.cwlindean.cn"
 	portText := "18800"
 	if w.app != nil {
 		dirText = w.app.receiveDir()
+		srvText = w.app.serverHostSummary()
 		portText = fmt.Sprintf("%d", w.app.port)
 	}
 
@@ -2316,6 +2352,11 @@ func (w *mainWin) drawSettings(cv *glassCanvas, cr rectT) {
 		g1Action{"更改", w.setChangeDirR, hoverSetChangeDir},
 		g1Action{"打开", w.setOpenDirR, hoverSetOpenDir},
 	)
+	srvActions := make([]g1Action, 0, 2)
+	if w.setResetSrvR.right > w.setResetSrvR.left {
+		srvActions = append(srvActions, g1Action{"恢复默认", w.setResetSrvR, hoverSetResetSrv})
+	}
+	srvActions = append(srvActions, g1Action{"修改", w.setChangeSrvR, hoverSetChangeSrv})
 
 	g1Rows := []struct {
 		title, sub string
@@ -2324,6 +2365,7 @@ func (w *mainWin) drawSettings(cv *glassCanvas, cr rectT) {
 		{"后台接收文件", "关闭后其他设备暂时无法向此电脑发送", []g1Action{{recvTxt, w.setRecvBtnR, hoverSetRecv}}},
 		{"接收文件保存位置", dirText, dirActions},
 		{"开机自动启动", "登录后自动缩至右下角托盘接收", []g1Action{{autoTxt, w.setAutoBtnR, hoverSetAuto}}},
+		{"服务器地址", srvText, srvActions},
 	}
 	for i, r := range g1Rows {
 		ry := top + int32(i)*rowH
@@ -2396,6 +2438,57 @@ func (w *mainWin) drawSettings(cv *glassCanvas, cr rectT) {
 			rectT{paneL, g2.bottom + p(12), paneR, cr.bottom - p(12)},
 			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
 	}
+}
+
+const ferryRepoURL = "https://github.com/zhitiaojun/filetransfer"
+
+func (w *mainWin) drawAbout(cv *glassCanvas, cr rectT) {
+	p := w.px
+	topH := w.titleBarR.bottom
+	pad := p(28)
+	paneL := w.railR.right + pad
+	paneR := cr.right - pad
+
+	cv.drawAlphaText(w.fontH1, "关于", rectT{paneL, topH + p(20), paneR, topH + p(52)}, dtSingleLine|dtVCenter, w.pal.ink)
+
+	cardTop := topH + p(96)
+	card := rectT{paneL, cardTop, paneR, cardTop + p(214)}
+	cv.drawAlphaRoundRect(card, float64(p(14)), w.pal.paper, w.surfaceAlpha(198), w.pal.line, w.surfaceAlpha(200), 1.0)
+
+	emSz := p(52)
+	emX := (paneL + paneR - emSz) / 2
+	emY := cardTop + p(26)
+	emR := rectT{emX, emY, emX + emSz, emY + emSz}
+	cv.drawAlphaRoundRect(emR, float64(p(14)), w.pal.accent, 255, 0, 0, 0)
+	cv.drawAlphaGraphic(emR, col(255, 255, 255), func(dc uintptr, rw, rh int32) {
+		penW := int32(math.Max(2, float64(p(2))))
+		pen, _, _ := procCreatePen.Call(psSolid, uintptr(penW), uintptr(col(255, 255, 255)))
+		oldPen, _, _ := procSelectObject.Call(dc, pen)
+		defer func() {
+			procSelectObject.Call(dc, oldPen)
+			procDeleteObject.Call(pen)
+		}()
+		procMoveToEx.Call(dc, uintptr(rw*22/100), uintptr(rh*50/100), 0)
+		procLineTo.Call(dc, uintptr(rw*78/100), uintptr(rh*38/100))
+		procLineTo.Call(dc, uintptr(rw*66/100), uintptr(rh*64/100))
+		procLineTo.Call(dc, uintptr(rw*30/100), uintptr(rh*64/100))
+		procLineTo.Call(dc, uintptr(rw*22/100), uintptr(rh*50/100))
+		procMoveToEx.Call(dc, uintptr(rw*24/100), uintptr(rh*76/100), 0)
+		procLineTo.Call(dc, uintptr(rw*76/100), uintptr(rh*76/100))
+	})
+
+	cv.drawAlphaText(w.fontH2, "轻渡 Ferry", rectT{paneL + p(20), emR.bottom + p(14), paneR - p(20), emR.bottom + p(40)},
+		dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
+
+	verTxt := "版本 v" + strings.TrimPrefix(version, "v")
+	cv.drawAlphaText(w.fontMono, verTxt, rectT{paneL + p(20), emR.bottom + p(42), paneR - p(20), emR.bottom + p(64)},
+		dtCenter|dtSingleLine|dtVCenter, w.pal.ink2)
+
+	repoColor := w.pal.accent
+	if w.hover == hoverAboutRepo {
+		repoColor = shade(w.pal.accent, w.dark, 0.14)
+	}
+	cv.drawAlphaText(w.fontSm, ferryRepoURL, w.aboutRepoR, dtCenter|dtSingleLine|dtVCenter|dtEndEllipsis, repoColor)
 }
 
 // ---------------------------------------------------------------------------
@@ -2552,6 +2645,8 @@ func (w *mainWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
 		kind = hoverNavDevices
 	case ptIn(w.navSetR, x, y):
 		kind = hoverNavSettings
+	case ptIn(w.navAboutR, x, y):
+		kind = hoverNavAbout
 	case w.page == pageHome && ptIn(w.tileFilesR, x, y):
 		kind = hoverTileFiles
 	case w.page == pageHome && ptIn(w.tileFolderR, x, y):
@@ -2602,10 +2697,16 @@ func (w *mainWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
 		kind = hoverSetOpenDir
 	case w.page == pageSettings && ptIn(w.setAutoBtnR, x, y):
 		kind = hoverSetAuto
+	case w.page == pageSettings && w.setResetSrvR.right > w.setResetSrvR.left && ptIn(w.setResetSrvR, x, y):
+		kind = hoverSetResetSrv
+	case w.page == pageSettings && ptIn(w.setChangeSrvR, x, y):
+		kind = hoverSetChangeSrv
 	case w.page == pageSettings && ptIn(w.setRenameBtnR, x, y):
 		kind = hoverSetRename
 	case w.page == pageSettings && ptIn(w.setCopyIDRowR, x, y):
 		kind = hoverSetCopyID
+	case w.page == pageAbout && ptIn(w.aboutRepoR, x, y):
+		kind = hoverAboutRepo
 	default:
 		if w.page == pageHome {
 			for i, rr := range w.ledgerRowsR {
@@ -2710,6 +2811,11 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 		w.refreshLocalMeta()
 		procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 		return
+	case ptIn(w.navAboutR, x, y):
+		w.page = pageAbout
+		w.status = ""
+		procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+		return
 	}
 
 	switch w.page {
@@ -2723,11 +2829,11 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 			}
 		case ptIn(w.tileFolderR, x, y):
 			if dir := browseFolderDialog(hwnd, "选择要发送的文件夹"); dir != "" {
-				files := expandSendPaths([]string{dir})
-				if len(files) == 0 {
+				items, _, _, err := describeDesktopPaths([]string{dir})
+				if err != nil || len(items) == 0 {
 					w.status = "所选文件夹内没有文件"
 				} else {
-					w.queued = files
+					w.queued = []string{dir}
 					w.status = ""
 				}
 				procInvalidateRect.Call(uintptr(hwnd), 0, 1)
@@ -2881,6 +2987,24 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 				w.status = map[bool]string{true: "已设置开机静默自启", false: "已取消开机自启"}[on]
 			}
 			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+		case w.setResetSrvR.right > w.setResetSrvR.left && ptIn(w.setResetSrvR, x, y):
+			if w.app != nil {
+				if err := w.app.resetServerConfig(); err != nil {
+					w.status = "恢复默认服务器失败：" + err.Error()
+				} else {
+					w.status = "已恢复默认服务器配置并重连"
+				}
+				procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+			}
+		case ptIn(w.setChangeSrvR, x, y):
+			openServerConfigDialog(hwnd, w.app, func() {
+				mainMu.Lock()
+				if mw := mainWins[hwnd]; mw != nil {
+					mw.status = "服务器配置已保存并重连"
+				}
+				mainMu.Unlock()
+				procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+			})
 		case ptIn(w.setRenameBtnR, x, y):
 			w.openRenameDialog(hwnd)
 		case ptIn(w.setCopyIDRowR, x, y):
@@ -2888,6 +3012,11 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 				w.status = "已复制本机设备 ID"
 				procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 			}
+		}
+
+	case pageAbout:
+		if ptIn(w.aboutRepoR, x, y) {
+			shellOpen(ferryRepoURL)
 		}
 	}
 }
@@ -3090,7 +3219,12 @@ func (w *mainWin) onDrop(hwnd syscall.Handle, hdrop syscall.Handle) {
 	}
 	target, ok := w.activeTarget()
 	if !ok {
-		w.queued = expandSendPaths(files)
+		items, _, _, err := describeDesktopPaths(files)
+		if err != nil || len(items) == 0 {
+			w.status = "所选路径内没有可发送的文件"
+		} else {
+			w.queued = files
+		}
 		openPairWindow(hwnd, w.app)
 		return
 	}

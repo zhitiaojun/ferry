@@ -1231,3 +1231,113 @@ func TestIsCancelledAndGracefulCancelDelivery(t *testing.T) {
 		t.Fatalf("expected sender to receive CodeCancelled (IsCancelled=true), got %v", sendErr)
 	}
 }
+
+func TestFolderRelativePathsAndCancelCleanup(t *testing.T) {
+	srcRoot := t.TempDir()
+	sendDir := filepath.Join(srcRoot, "album")
+	if err := os.MkdirAll(filepath.Join(sendDir, "nested", "deep"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(sendDir, "empty_sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f1 := filepath.Join(sendDir, "cover.bin")
+	f2 := filepath.Join(sendDir, "nested", "deep", "shot.bin")
+	writePattern(t, f1, 64<<10)
+	writePattern(t, f2, 192<<10)
+
+	outDir := filepath.Join(t.TempDir(), "recv")
+	a, b := net.Pipe()
+	type recvOut struct {
+		res *Result
+		err error
+	}
+	recvCh := make(chan recvOut, 1)
+	go func() {
+		defer b.Close()
+		sb, err := session.Accept(b, testParams("recv"))
+		if err != nil {
+			recvCh <- recvOut{err: err}
+			return
+		}
+		defer sb.Close()
+		r, err := Receive(sb, outDir, Config{Timeout: 5 * time.Second})
+		recvCh <- recvOut{res: r, err: err}
+	}()
+
+	sa, err := session.Dial(a, testParams("send"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sres, err := Send(sa, []string{sendDir}, Config{ChunkSize: 32 << 10, Timeout: 5 * time.Second})
+	_ = sa.Close()
+	if err != nil {
+		t.Fatalf("Send folder failed: %v", err)
+	}
+	rr := <-recvCh
+	if rr.err != nil {
+		t.Fatalf("Receive folder failed: %v", rr.err)
+	}
+	if len(sres.Files) != 2 || len(rr.res.Files) != 2 {
+		t.Fatalf("unexpected file counts send=%v recv=%v", sres.Files, rr.res.Files)
+	}
+	got1 := filepath.Join(outDir, "album", "cover.bin")
+	got2 := filepath.Join(outDir, "album", "nested", "deep", "shot.bin")
+	if fileHash(t, f1) != fileHash(t, got1) || fileHash(t, f2) != fileHash(t, got2) {
+		t.Fatal("received folder file hash mismatch")
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "album", "empty_sub")); !os.IsNotExist(err) {
+		t.Fatalf("expected empty subdirectory to be skipped, stat=%v", err)
+	}
+
+	// Cancel mid-folder transfer must remove .ftpart and empty created directories.
+	bigFolder := filepath.Join(srcRoot, "bigset")
+	if err := os.MkdirAll(filepath.Join(bigFolder, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bigFile := filepath.Join(bigFolder, "sub", "large.bin")
+	writePattern(t, bigFile, 2<<20)
+
+	outCancel := filepath.Join(t.TempDir(), "cancel-recv")
+	c1, c2 := net.Pipe()
+	recvErr2 := make(chan error, 1)
+	go func() {
+		defer c2.Close()
+		sb, err := session.Accept(c2, testParams("recv"))
+		if err != nil {
+			recvErr2 <- err
+			return
+		}
+		defer sb.Close()
+		_, rerr := Receive(sb, outCancel, Config{Timeout: 2 * time.Second})
+		recvErr2 <- rerr
+	}()
+	sa2, err := session.Dial(c1, testParams("send"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctrl := NewController()
+	cancelledOnce := false
+	_, sendErr2 := Send(sa2, []string{bigFolder}, Config{
+		ChunkSize:   64 << 10,
+		WindowBytes: 128 << 10,
+		Timeout:     2 * time.Second,
+		Control:     ctrl,
+		OnDetailProgress: func(s ProgressSnapshot) {
+			if !cancelledOnce && s.BytesDone >= 128<<10 {
+				cancelledOnce = true
+				ctrl.Cancel()
+			}
+		},
+	})
+	_ = sa2.Close()
+	if !errors.Is(sendErr2, ErrCancelled) {
+		t.Fatalf("expected ErrCancelled, got %v", sendErr2)
+	}
+	if rerr2 := <-recvErr2; rerr2 == nil {
+		t.Fatal("expected Receive error on cancel")
+	}
+	if _, err := os.Stat(filepath.Join(outCancel, "bigset")); !os.IsNotExist(err) {
+		t.Fatalf("expected cancelled folder leftovers pruned, stat=%v", err)
+	}
+}

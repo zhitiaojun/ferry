@@ -112,6 +112,9 @@ type Host struct {
 	activeTxID    uint64
 	activeTx      *HostActiveTransfer
 	txSamples     []txSpeedSample
+
+	whMu sync.Mutex
+	wh   *webHost
 }
 
 // SignCreate produces the Ed25519 signature required by POST /api/temp/create.
@@ -448,7 +451,62 @@ func (h *Host) relayOnce(ctx context.Context) error {
 		}
 	}()
 
-	return ServeWebHostWithProgress(ctx, c, h.srv, h.log, h.reportProgress)
+	wh := newWebHost(c, h.srv, h.log, h.reportProgress)
+	h.whMu.Lock()
+	h.wh = wh
+	h.whMu.Unlock()
+	defer func() {
+		h.whMu.Lock()
+		if h.wh == wh {
+			h.wh = nil
+		}
+		h.whMu.Unlock()
+	}()
+	return wh.run(ctx)
+}
+
+func (h *Host) currentWebHost() *webHost {
+	if h == nil {
+		return nil
+	}
+	h.whMu.Lock()
+	wh := h.wh
+	h.whMu.Unlock()
+	return wh
+}
+
+// ActivePaused reports whether the active TempShare transfer is paused.
+func (h *Host) ActivePaused() bool {
+	if h == nil {
+		return false
+	}
+	if wh := h.currentWebHost(); wh != nil && wh.hasActive() {
+		return wh.isActivePaused()
+	}
+	return h.srv.ActivePaused()
+}
+
+// TogglePauseActive pauses or resumes the currently active TempShare transfer.
+func (h *Host) TogglePauseActive() bool {
+	if h == nil {
+		return false
+	}
+	if wh := h.currentWebHost(); wh != nil && wh.togglePauseActive() {
+		return true
+	}
+	return h.srv.TogglePauseActive()
+}
+
+// CancelActive cancels the currently active TempShare transfer without closing
+// the TempShare hosting session.
+func (h *Host) CancelActive() bool {
+	if h == nil {
+		return false
+	}
+	if wh := h.currentWebHost(); wh != nil && wh.cancelActive() {
+		return true
+	}
+	return h.srv.CancelActive()
 }
 
 func collectLANURLs(srv *lanweb.Server, port int, hintIP string) []string {

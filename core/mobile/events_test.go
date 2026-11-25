@@ -18,21 +18,31 @@ func TestPollReceivedDrain(t *testing.T) {
 	if err := os.WriteFile(p1, make([]byte, 123), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	recordReceived(dir, "relay", []string{"a.bin", "missing.txt"}, 999)
+	nested := filepath.Join(dir, "album", "sub", "b.jpg")
+	if err := os.MkdirAll(filepath.Dir(nested), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(nested, make([]byte, 456), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	recordReceived(dir, "relay", []string{"a.bin", "album/sub/b.jpg", "missing.txt"}, 999)
 
 	raw := PollReceived()
 	var evts []ReceivedEvent
 	if err := json.Unmarshal([]byte(raw), &evts); err != nil {
 		t.Fatalf("unmarshal: %v (%s)", err, raw)
 	}
-	if len(evts) != 2 {
-		t.Fatalf("want 2 events, got %d: %s", len(evts), raw)
+	if len(evts) != 3 {
+		t.Fatalf("want 3 events, got %d: %s", len(evts), raw)
 	}
 	if evts[0].File != "a.bin" || evts[0].FullPath != p1 || evts[0].Via != "relay" || evts[0].Bytes != 123 {
 		t.Fatalf("unexpected first event: %+v", evts[0])
 	}
-	if evts[1].File != "missing.txt" || evts[1].Bytes != 0 {
-		t.Fatalf("unexpected second event: %+v", evts[1])
+	if evts[1].File != "album/sub/b.jpg" || evts[1].FullPath != nested || evts[1].Via != "relay" || evts[1].Bytes != 456 {
+		t.Fatalf("unexpected nested event: %+v", evts[1])
+	}
+	if evts[2].File != "missing.txt" || evts[2].Bytes != 0 {
+		t.Fatalf("unexpected third event: %+v", evts[2])
 	}
 
 	if again := PollReceived(); again != "[]" {

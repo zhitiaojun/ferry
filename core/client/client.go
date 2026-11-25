@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -300,17 +299,18 @@ func sessionParams(key *identity.Key, name string) session.Params {
 }
 
 func describeFiles(paths []string) ([]signaling.FileInfo, int64, error) {
-	var out []signaling.FileInfo
+	items, err := transfer.ExpandSendItems(paths)
+	if err != nil {
+		return nil, 0, err
+	}
+	out := make([]signaling.FileInfo, 0, len(items))
 	var total int64
-	for _, p := range paths {
-		st, err := os.Stat(p)
+	for _, it := range items {
+		st, err := os.Stat(it.DiskPath)
 		if err != nil {
 			return nil, 0, err
 		}
-		if st.IsDir() {
-			return nil, 0, fmt.Errorf("%s is a directory", p)
-		}
-		out = append(out, signaling.FileInfo{Name: filepath.Base(p), Size: st.Size()})
+		out = append(out, signaling.FileInfo{Name: it.RelPath, Size: st.Size()})
 		total += st.Size()
 	}
 	return out, total, nil

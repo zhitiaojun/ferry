@@ -6,17 +6,24 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/cwlindean/filetransfer/core/client"
 	"github.com/cwlindean/filetransfer/core/pairing"
 )
 
 type desktopSettings struct {
-	DeviceName string `json:"device_name,omitempty"`
-	ReceiveDir string `json:"receive_dir,omitempty"`
+	DeviceName  string `json:"device_name,omitempty"`
+	ReceiveDir  string `json:"receive_dir,omitempty"`
+	SignalURL   string `json:"signal_url,omitempty"`
+	WebBaseURL  string `json:"web_base_url,omitempty"`
+	STUNServers string `json:"stun_servers,omitempty"`
 }
 
 func defaultSettingsPath() string {
@@ -59,6 +66,9 @@ func loadDesktopSettings(path string) desktopSettings {
 	if s.ReceiveDir != "" {
 		s.ReceiveDir = filepath.Clean(s.ReceiveDir)
 	}
+	s.SignalURL = strings.TrimSpace(s.SignalURL)
+	s.WebBaseURL = strings.TrimRight(strings.TrimSpace(s.WebBaseURL), "/")
+	s.STUNServers = strings.TrimSpace(s.STUNServers)
 	return s
 }
 
@@ -203,6 +213,160 @@ func (a *app) setDeviceName(raw string) (string, error) {
 		}
 	}
 	return effective, nil
+}
+
+func validateServerConfig(sigRaw, webRaw, stunRaw string) (sig, web, stun string, err error) {
+	sig = strings.TrimSpace(sigRaw)
+	if sig == "" {
+		sig = client.DefaultSignalURL
+	} else {
+		u, uerr := url.Parse(sig)
+		if uerr != nil || (u.Scheme != "ws" && u.Scheme != "wss") || u.Host == "" {
+			return "", "", "", errors.New("信令地址格式无效（需以 wss:// 或 ws:// 开头）")
+		}
+	}
+
+	web = strings.TrimRight(strings.TrimSpace(webRaw), "/")
+	if web == "" {
+		web = client.DefaultWebBaseURL
+	} else {
+		u, uerr := url.Parse(web)
+		if uerr != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return "", "", "", errors.New("临时快传网址格式无效（需以 https:// 或 http:// 开头）")
+		}
+	}
+
+	stunRaw = strings.TrimSpace(stunRaw)
+	if stunRaw == "" {
+		stun = client.DefaultSTUN
+	} else {
+		parts := splitSTUNList(stunRaw)
+		if len(parts) == 0 {
+			return "", "", "", errors.New("STUN 地址不能为空")
+		}
+		for _, p := range parts {
+			host, portStr, serr := net.SplitHostPort(p)
+			if serr != nil || strings.TrimSpace(host) == "" {
+				return "", "", "", fmt.Errorf("STUN 地址 %q 无效（需为 host:port）", p)
+			}
+			port, perr := strconv.Atoi(portStr)
+			if perr != nil || port < 1 || port > 65535 {
+				return "", "", "", fmt.Errorf("STUN 端口无效：%s", p)
+			}
+		}
+		stun = strings.Join(parts, ",")
+	}
+	return sig, web, stun, nil
+}
+
+func (a *app) currentSignalURL() string {
+	if a == nil {
+		return client.DefaultSignalURL
+	}
+	a.mu.Lock()
+	v := a.signalURL
+	a.mu.Unlock()
+	if strings.TrimSpace(v) == "" {
+		return client.DefaultSignalURL
+	}
+	return v
+}
+
+func (a *app) currentWebBase() string {
+	if a == nil {
+		return client.DefaultWebBaseURL
+	}
+	a.mu.Lock()
+	v := a.webBase
+	a.mu.Unlock()
+	if strings.TrimSpace(v) == "" {
+		return client.DefaultWebBaseURL
+	}
+	return strings.TrimRight(v, "/")
+}
+
+func (a *app) currentSTUNServers() []string {
+	if a == nil {
+		return client.DefaultSTUNList()
+	}
+	a.mu.Lock()
+	out := append([]string(nil), a.stunServers...)
+	a.mu.Unlock()
+	if len(out) == 0 {
+		return client.DefaultSTUNList()
+	}
+	return out
+}
+
+func (a *app) serverConfig() (sig, web, stun string) {
+	sig = a.currentSignalURL()
+	web = a.currentWebBase()
+	stun = strings.Join(a.currentSTUNServers(), ",")
+	return sig, web, stun
+}
+
+func (a *app) isCustomServerConfig() bool {
+	sig, web, stun := a.serverConfig()
+	return sig != client.DefaultSignalURL || web != client.DefaultWebBaseURL || stun != client.DefaultSTUN
+}
+
+func (a *app) serverHostSummary() string {
+	sig, _, _ := a.serverConfig()
+	host := sig
+	if u, err := url.Parse(sig); err == nil && u.Host != "" {
+		host = u.Host
+	}
+	if a.isCustomServerConfig() {
+		return "自定义 · " + host
+	}
+	return "默认 · " + host
+}
+
+func (a *app) setServerConfig(sigRaw, webRaw, stunRaw string) error {
+	sig, web, stun, err := validateServerConfig(sigRaw, webRaw, stunRaw)
+	if err != nil {
+		return err
+	}
+	if a == nil {
+		return nil
+	}
+	a.mu.Lock()
+	changed := a.signalURL != sig || a.webBase != web || strings.Join(a.stunServers, ",") != stun
+	a.signalURL = sig
+	a.webBase = web
+	a.stunServers = splitSTUNList(stun)
+	sp := a.settingsPath
+	a.mu.Unlock()
+
+	if sp != "" {
+		s := loadDesktopSettings(sp)
+		if sig == client.DefaultSignalURL {
+			s.SignalURL = ""
+		} else {
+			s.SignalURL = sig
+		}
+		if web == client.DefaultWebBaseURL {
+			s.WebBaseURL = ""
+		} else {
+			s.WebBaseURL = web
+		}
+		if stun == client.DefaultSTUN {
+			s.STUNServers = ""
+		} else {
+			s.STUNServers = stun
+		}
+		if err := saveDesktopSettings(sp, s); err != nil {
+			return err
+		}
+	}
+	if changed {
+		a.restartSignaling()
+	}
+	return nil
+}
+
+func (a *app) resetServerConfig() error {
+	return a.setServerConfig("", "", "")
 }
 
 // writeTempTextFile stores UTF-8 text inside a temporary directory under a

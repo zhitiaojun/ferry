@@ -1,4 +1,4 @@
-package cn.cwlindean.ft;
+package cn.cwlindean.ferry;
 
 import android.Manifest;
 import android.animation.ValueAnimator;
@@ -122,14 +122,13 @@ import mobile.Mobile;
  */
 public class MainActivity extends Activity {
     private static final String TAG = "ft";
-    private static final String SIGNAL_URL = "wss://ferry.cwlindean.cn/signal";
-    private static final String WEB_BASE_URL = "https://ferry.cwlindean.cn";
     private static final int PICK_FILES = 42;
     private static final int PICK_PAIR_FILE = 43;
     private static final int REQ_CAMERA = 44;
     private static final int PICK_DOWNLOAD_DIR = 45;
     private static final int PICK_TEMP_SEND = 46;
     private static final int PICK_TEMP_UPLOAD = 47;
+    private static final int PICK_FOLDER = 48;
     private static final int PAIR_TTL_SEC = 600;
     private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
     private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
@@ -176,7 +175,7 @@ public class MainActivity extends Activity {
     private String signalState = "offline";
     private final Set<String> cloudOnlineSet = new HashSet<>();
     private final Set<String> lanOnlineSet = new HashSet<>();
-    private int activePage; // 0 = 传输, 1 = 设备, 2 = 设置
+    private int activePage; // 0 = 传输, 1 = 设备, 2 = 设置, 3 = 关于
     private String lanPort = "";
     private String selectedTarget = "";
     private String activeFilter = "all"; // "all" | "recv" | "send"
@@ -191,14 +190,15 @@ public class MainActivity extends Activity {
     private TextView topTitleView;
     private View topActionsWrap;
     private LinearLayout bottomNavWrap;
-    private final LinearLayout[] navTabs = new LinearLayout[3];
-    private final ImageView[] navIcons = new ImageView[3];
-    private final TextView[] navLabels = new TextView[3];
+    private final LinearLayout[] navTabs = new LinearLayout[4];
+    private final ImageView[] navIcons = new ImageView[4];
+    private final TextView[] navLabels = new TextView[4];
 
     // Pages
     private ScrollView pageHome;
     private ScrollView pageDevices;
     private ScrollView pageSettings;
+    private ScrollView pageAbout;
 
     // Live transfer card & progress polling state
     private LinearLayout activeTransferCard;
@@ -235,6 +235,7 @@ public class MainActivity extends Activity {
     private ValueAnimator dotAnimator;
     private TextView shareBannerView;
     private LinearLayout sendPickTile;
+    private LinearLayout sendFolderTile;
     private LinearLayout sendTextTile;
     private LinearLayout sendClipTile;
     private LinearLayout sendResultCard;
@@ -253,6 +254,8 @@ public class MainActivity extends Activity {
     private Button setRecvBtn;
     private TextView setDownloadDirSub;
     private Button setDownloadResetBtn;
+    private TextView setServerSub;
+    private Button setServerResetBtn;
     private Button setWebBtn;
     private TextView setWebUrlView;
     private TextView setNameVal;
@@ -770,9 +773,12 @@ public class MainActivity extends Activity {
         pageDevices.setVisibility(View.GONE);
         pageSettings = buildSettingsPage();
         pageSettings.setVisibility(View.GONE);
+        pageAbout = buildAboutPage();
+        pageAbout.setVisibility(View.GONE);
         contentHost.addView(pageHome, new FrameLayout.LayoutParams(MATCH, MATCH));
         contentHost.addView(pageDevices, new FrameLayout.LayoutParams(MATCH, MATCH));
         contentHost.addView(pageSettings, new FrameLayout.LayoutParams(MATCH, MATCH));
+        contentHost.addView(pageAbout, new FrameLayout.LayoutParams(MATCH, MATCH));
 
         scaffold.addView(contentHost, new LinearLayout.LayoutParams(MATCH, 0, 1f));
         scaffold.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
@@ -831,9 +837,9 @@ public class MainActivity extends Activity {
         nav.setBackgroundColor(cCard);
         nav.setPadding(dp(12), dp(4), dp(12), dp(4));
 
-        int[] icons = {IconDrawable.TRANSFER, IconDrawable.DEVICES, IconDrawable.SETTINGS};
-        String[] titles = {"传输", "设备", "设置"};
-        for (int i = 0; i < 3; i++) {
+        int[] icons = {IconDrawable.TRANSFER, IconDrawable.DEVICES, IconDrawable.SETTINGS, IconDrawable.INFO};
+        String[] titles = {"传输", "设备", "设置", "关于"};
+        for (int i = 0; i < 4; i++) {
             final int idx = i;
             LinearLayout tab = new LinearLayout(this);
             tab.setOrientation(LinearLayout.VERTICAL);
@@ -854,7 +860,7 @@ public class MainActivity extends Activity {
             navIcons[i] = iv;
             navLabels[i] = tv;
             LinearLayout.LayoutParams tabLp = new LinearLayout.LayoutParams(0, MATCH, 1f);
-            if (i < 2) {
+            if (i < 3) {
                 tabLp.rightMargin = dp(6);
             }
             nav.addView(tab, tabLp);
@@ -877,13 +883,16 @@ public class MainActivity extends Activity {
         pageHome.setVisibility(page == 0 ? View.VISIBLE : View.GONE);
         pageDevices.setVisibility(page == 1 ? View.VISIBLE : View.GONE);
         pageSettings.setVisibility(page == 2 ? View.VISIBLE : View.GONE);
+        if (pageAbout != null) {
+            pageAbout.setVisibility(page == 3 ? View.VISIBLE : View.GONE);
+        }
         backBtn.setVisibility(View.GONE);
         brandMarkView.setVisibility(View.VISIBLE);
-        topActionsWrap.setVisibility(page == 2 ? View.GONE : View.VISIBLE);
-        topTitleView.setText(page == 0 ? "轻渡" : (page == 1 ? "设备" : "设置"));
+        topActionsWrap.setVisibility(page >= 2 ? View.GONE : View.VISIBLE);
+        topTitleView.setText(page == 0 ? "轻渡" : (page == 1 ? "设备" : (page == 2 ? "设置" : "关于")));
 
-        int[] icons = {IconDrawable.TRANSFER, IconDrawable.DEVICES, IconDrawable.SETTINGS};
-        for (int i = 0; i < 3; i++) {
+        int[] icons = {IconDrawable.TRANSFER, IconDrawable.DEVICES, IconDrawable.SETTINGS, IconDrawable.INFO};
+        for (int i = 0; i < 4; i++) {
             boolean sel = (i == page);
             if (navIcons[i] != null) {
                 navIcons[i].setImageDrawable(new IconDrawable(icons[i], sel ? cPrimary : cOnSurfaceVariant));
@@ -947,7 +956,7 @@ public class MainActivity extends Activity {
         homeSigText.setEllipsize(TextUtils.TruncateAt.END);
         homeSignalBar.addView(homeSigText, new LinearLayout.LayoutParams(0, WRAP, 1f));
 
-        homeSigHost = label("ferry.cwlindean.cn", 11, cOnSurfaceVariant, false);
+        homeSigHost = label(TransferService.getServerHostLabel(this), 11, cOnSurfaceVariant, false);
         homeSigHost.setTypeface(Typeface.MONOSPACE);
         LinearLayout.LayoutParams hsHostLp = new LinearLayout.LayoutParams(WRAP, WRAP);
         hsHostLp.leftMargin = dp(8);
@@ -1007,10 +1016,19 @@ public class MainActivity extends Activity {
         sbLp.topMargin = dp(10);
         sendCard.addView(shareBannerView, sbLp);
 
-        sendPickTile = actionRowTile("发文件", IconDrawable.UPLOAD, true, v -> pickFiles());
+        LinearLayout pickRow = new LinearLayout(this);
+        pickRow.setOrientation(LinearLayout.HORIZONTAL);
         LinearLayout.LayoutParams t1Lp = new LinearLayout.LayoutParams(MATCH, WRAP);
         t1Lp.topMargin = dp(12);
-        sendCard.addView(sendPickTile, t1Lp);
+
+        sendPickTile = actionRowTile("发文件", IconDrawable.UPLOAD, true, v -> pickFiles());
+        LinearLayout.LayoutParams pfLp = new LinearLayout.LayoutParams(0, WRAP, 1f);
+        pfLp.rightMargin = dp(10);
+        pickRow.addView(sendPickTile, pfLp);
+
+        sendFolderTile = actionRowTile("发文件夹", IconDrawable.FOLDER, false, v -> pickFolder());
+        pickRow.addView(sendFolderTile, new LinearLayout.LayoutParams(0, WRAP, 1f));
+        sendCard.addView(pickRow, t1Lp);
 
         LinearLayout tileGrid = new LinearLayout(this);
         tileGrid.setOrientation(LinearLayout.HORIZONTAL);
@@ -1609,6 +1627,10 @@ public class MainActivity extends Activity {
 
         grp1.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
 
+        grp1.addView(settingServerRow(), new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        grp1.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
+
         setWebBtn = smallOutlineBtn("打开", v -> openTempShareSheet());
         grp1.addView(settingActionRow("临时快传（网页 / 扫码）", "生成 HTTPS 二维码或 6 位码，免装软件即可收发", setWebBtn, v -> openTempShareSheet()),
                 new LinearLayout.LayoutParams(MATCH, WRAP));
@@ -1674,8 +1696,196 @@ public class MainActivity extends Activity {
         root.addView(importLegacyBtn, new LinearLayout.LayoutParams(MATCH, WRAP));
 
         refreshDownloadDirUi();
+        refreshServerUi();
         sv.addView(root, new FrameLayout.LayoutParams(MATCH, WRAP));
         return sv;
+    }
+
+    private ScrollView buildAboutPage() {
+        ScrollView sv = new ScrollView(this);
+        sv.setFillViewport(true);
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setGravity(Gravity.CENTER_HORIZONTAL);
+        root.setPadding(dp(20), dp(28), dp(20), dp(32));
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setGravity(Gravity.CENTER_HORIZONTAL);
+        card.setBackground(roundBox(cCard, cBorder, 16));
+        card.setPadding(dp(24), dp(32), dp(24), dp(28));
+
+        ImageView mark = new ImageView(this);
+        mark.setImageDrawable(new FerryMarkDrawable());
+        LinearLayout.LayoutParams mkLp = new LinearLayout.LayoutParams(dp(56), dp(56));
+        mkLp.bottomMargin = dp(16);
+        card.addView(mark, mkLp);
+
+        TextView title = label("轻渡 Ferry", 20, cOnSurface, true);
+        card.addView(title, new LinearLayout.LayoutParams(WRAP, WRAP));
+
+        String rawVer = Mobile.getVersion();
+        String verText = (rawVer != null && !rawVer.trim().isEmpty())
+                ? (rawVer.trim().startsWith("v") ? ("版本 " + rawVer.trim()) : ("版本 v" + rawVer.trim()))
+                : "版本 v1.0.0";
+        TextView verView = label(verText, 13, cOnSurfaceVariant, false);
+        LinearLayout.LayoutParams vLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        vLp.topMargin = dp(6);
+        vLp.bottomMargin = dp(20);
+        card.addView(verView, vLp);
+
+        final String repoUrl = "https://github.com/zhitiaojun/filetransfer";
+        TextView link = label(repoUrl, 13, cPrimary, true);
+        link.setPadding(dp(14), dp(8), dp(14), dp(8));
+        link.setBackground(ripple(roundBox(cPrimaryContainer, 0, 10), 10));
+        link.setOnClickListener(v -> {
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(repoUrl)));
+            } catch (Exception e) {
+                copyText("项目地址", repoUrl, "已复制项目地址");
+            }
+        });
+        card.addView(link, new LinearLayout.LayoutParams(WRAP, WRAP));
+
+        root.addView(card, new LinearLayout.LayoutParams(MATCH, WRAP));
+        sv.addView(root, new FrameLayout.LayoutParams(MATCH, WRAP));
+        return sv;
+    }
+
+    private LinearLayout settingServerRow() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(16), dp(14), dp(16), dp(14));
+
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.addView(label("服务器地址", 13, cOnSurface, true), new LinearLayout.LayoutParams(MATCH, WRAP));
+        setServerSub = label("默认：" + TransferService.getServerHostLabel(this), 12, cOnSurfaceVariant, false);
+        setServerSub.setSingleLine(true);
+        setServerSub.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        sLp.topMargin = dp(2);
+        col.addView(setServerSub, sLp);
+        row.addView(col, new LinearLayout.LayoutParams(0, WRAP, 1f));
+
+        LinearLayout btns = new LinearLayout(this);
+        btns.setOrientation(LinearLayout.HORIZONTAL);
+        btns.setGravity(Gravity.CENTER_VERTICAL);
+
+        setServerResetBtn = smallOutlineBtn("恢复默认", v -> resetServerConfig());
+        setServerResetBtn.setVisibility(View.GONE);
+        LinearLayout.LayoutParams rstLp = new LinearLayout.LayoutParams(WRAP, dp(30));
+        rstLp.rightMargin = dp(6);
+        btns.addView(setServerResetBtn, rstLp);
+
+        Button changeBtn = smallOutlineBtn("修改", v -> showServerConfigDialog());
+        btns.addView(changeBtn, new LinearLayout.LayoutParams(WRAP, dp(30)));
+
+        LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        bLp.leftMargin = dp(10);
+        row.addView(btns, bLp);
+        return row;
+    }
+
+    private void refreshServerUi() {
+        boolean custom = TransferService.isCustomServer(this);
+        String host = TransferService.getServerHostLabel(this);
+        if (setServerSub != null) {
+            String stun = TransferService.getStunServers(this);
+            String labelTxt = custom ? ("自定义：" + host) : ("默认：" + host);
+            if (!stun.isEmpty()) {
+                labelTxt += " · STUN 已配置";
+            }
+            setServerSub.setText(labelTxt);
+        }
+        if (setServerResetBtn != null) {
+            setServerResetBtn.setVisibility(custom ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    private void resetServerConfig() {
+        TransferService.saveServerConfig(this, "", "", "");
+        applyServerConfigChanged("已恢复默认服务器地址");
+    }
+
+    private void showServerConfigDialog() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(12), dp(20), dp(4));
+
+        box.addView(label("信令服务 WebSocket 地址（wss://...）", 12, cOnSurfaceVariant, false),
+                new LinearLayout.LayoutParams(MATCH, WRAP));
+        final EditText sigIn = modalInput(TransferService.DEFAULT_SIGNAL_URL);
+        sigIn.setText(TransferService.getSignalUrl(this));
+        LinearLayout.LayoutParams i1 = new LinearLayout.LayoutParams(MATCH, dp(44));
+        i1.topMargin = dp(4);
+        i1.bottomMargin = dp(12);
+        box.addView(sigIn, i1);
+
+        box.addView(label("临时快传公网根地址（https://...）", 12, cOnSurfaceVariant, false),
+                new LinearLayout.LayoutParams(MATCH, WRAP));
+        final EditText webIn = modalInput(TransferService.DEFAULT_WEB_BASE_URL);
+        webIn.setText(TransferService.getWebBaseUrl(this));
+        LinearLayout.LayoutParams i2 = new LinearLayout.LayoutParams(MATCH, dp(44));
+        i2.topMargin = dp(4);
+        i2.bottomMargin = dp(12);
+        box.addView(webIn, i2);
+
+        box.addView(label("STUN 服务器（可选，多个用英文逗号分隔）", 12, cOnSurfaceVariant, false),
+                new LinearLayout.LayoutParams(MATCH, WRAP));
+        final EditText stunIn = modalInput("留空使用内置默认 STUN");
+        stunIn.setText(TransferService.getStunServers(this));
+        LinearLayout.LayoutParams i3 = new LinearLayout.LayoutParams(MATCH, dp(44));
+        i3.topMargin = dp(4);
+        box.addView(stunIn, i3);
+
+        AlertDialog dlg = new AlertDialog.Builder(this)
+                .setTitle("服务器地址设置")
+                .setView(box)
+                .setNegativeButton("取消", null)
+                .setNeutralButton("恢复默认", (d, w) -> resetServerConfig())
+                .setPositiveButton("保存", null)
+                .create();
+        dlg.setOnShowListener(d -> {
+            Button pos = dlg.getButton(AlertDialog.BUTTON_POSITIVE);
+            pos.setOnClickListener(v -> {
+                String err = TransferService.saveServerConfig(
+                        MainActivity.this,
+                        sigIn.getText().toString(),
+                        webIn.getText().toString(),
+                        stunIn.getText().toString());
+                if (!err.isEmpty()) {
+                    toast(err);
+                    return;
+                }
+                dlg.dismiss();
+                applyServerConfigChanged("服务器地址已保存");
+            });
+        });
+        dlg.show();
+    }
+
+    private void applyServerConfigChanged(final String msg) {
+        refreshServerUi();
+        refreshReceiveUi();
+        if (recvRunning) {
+            new Thread(() -> {
+                try {
+                    Mobile.stopReceiver();
+                    Mobile.stopAutoReceive();
+                } catch (Exception e) {
+                    Log.w(TAG, "restart recv on server change", e);
+                }
+                ui.post(() -> {
+                    startAllReceive();
+                    toast(msg + "，正在重连");
+                });
+            }).start();
+        } else {
+            toast(msg);
+        }
     }
 
     private LinearLayout settingDownloadDirRow() {
@@ -1773,6 +1983,7 @@ public class MainActivity extends Activity {
             setPortVal.setText(recvRunning && !lanPort.isEmpty() ? lanPort : (recvRunning ? "启动中" : "未开启"));
         }
         refreshDownloadDirUi();
+        refreshServerUi();
     }
 
     private void showRenameDialog() {
@@ -2264,7 +2475,8 @@ public class MainActivity extends Activity {
         final String myName = deviceName;
         new Thread(() -> {
             try {
-                Mobile.waitPairCodeNamed(SIGNAL_URL, keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(),
+                Mobile.waitPairCodeNamed(TransferService.getSignalUrl(MainActivity.this),
+                        keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(),
                         code, myName, PAIR_TTL_SEC * 1000L);
                 ui.post(() -> {
                     if (seq != pairShowSeq || pairDialog == null || !pairDialog.isShowing()) {
@@ -2326,7 +2538,8 @@ public class MainActivity extends Activity {
             enterStatusView.setText("正在验证二维码链接并配对…");
             new Thread(() -> {
                 try {
-                    Mobile.pairWithURINamed(SIGNAL_URL, keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(), peer, myName);
+                    Mobile.pairWithURINamed(TransferService.getSignalUrl(MainActivity.this),
+                            keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(), peer, myName);
                     ui.post(() -> {
                         if (pairDialog != null && pairDialog.isShowing()) {
                             toast("配对成功");
@@ -2362,7 +2575,8 @@ public class MainActivity extends Activity {
         enterStatusView.setText("正在协商信任密钥…");
         new Thread(() -> {
             try {
-                Mobile.pairWithCodeNamed(SIGNAL_URL, keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(), code, peer, myName);
+                Mobile.pairWithCodeNamed(TransferService.getSignalUrl(MainActivity.this),
+                        keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(), code, peer, myName);
                 ui.post(() -> {
                     if (pairDialog != null && pairDialog.isShowing()) {
                         toast("配对成功");
@@ -2710,7 +2924,8 @@ public class MainActivity extends Activity {
         final String myName = deviceName;
         new Thread(() -> {
             try {
-                Mobile.pairWithURINamed(SIGNAL_URL, keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(), payload, myName);
+                Mobile.pairWithURINamed(TransferService.getSignalUrl(MainActivity.this),
+                        keyFile().getAbsolutePath(), pairedFile().getAbsolutePath(), payload, myName);
                 ui.post(() -> {
                     if (pairDialog != null && pairDialog.isShowing()) {
                         toast("配对成功");
@@ -3138,7 +3353,7 @@ public class MainActivity extends Activity {
             cleanupTempStageDir();
             tempSendStageDir = stageDir;
             String raw = Mobile.startTempShare(
-                    WEB_BASE_URL,
+                    TransferService.getWebBaseUrl(MainActivity.this),
                     keyFile().getAbsolutePath(),
                     deviceName,
                     mode,
@@ -3581,14 +3796,14 @@ public class MainActivity extends Activity {
                     barBorder = cPrimary;
                     barFg = cOnPrimaryContainer;
                     dotClr = cPrimary;
-                    hostText = "ferry.cwlindean.cn";
+                    hostText = TransferService.getServerHostLabel(this);
                 } else if ("connecting".equals(signalState)) {
                     barText = "信令服务器：重连中…";
                     barBg = cWarnContainer;
                     barBorder = cWarn;
                     barFg = cWarn;
                     dotClr = cWarn;
-                    hostText = "ferry.cwlindean.cn";
+                    hostText = TransferService.getServerHostLabel(this);
                 } else {
                     barText = "信令服务器：未连接（仅局域网）";
                     barBg = cCard;
@@ -4508,6 +4723,22 @@ public class MainActivity extends Activity {
         startActivityForResult(i, PICK_FILES);
     }
 
+    private void pickFolder() {
+        final String target = selectedTarget;
+        if (!isAutoTarget(target) && !isLanTarget(target)) {
+            toast("请先选择或配对接收设备");
+            return;
+        }
+        saveLastPeer(target);
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try {
+            startActivityForResult(i, PICK_FOLDER);
+        } catch (Exception e) {
+            toast("无法打开文件夹选择器：" + e.getMessage());
+        }
+    }
+
     private void showSendTextDialog(String initialText) {
         final String target = selectedTarget;
         if (!isAutoTarget(target) && !isLanTarget(target)) {
@@ -4624,17 +4855,187 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    private void sendFolderTree(final Uri treeUri, final String name, final String target, final String targetName) {
+        final boolean auto = isAutoTarget(target);
+        setSendBusy(true, "正在扫描文件夹…");
+        new Thread(() -> {
+            File batchDir = new File(new File(getCacheDir(), "outgoing"), String.valueOf(System.nanoTime()));
+            try {
+                String rootDocId = DocumentsContract.getTreeDocumentId(treeUri);
+                String rootName = sanitizeFolderSeg(resolveTreeRootName(treeUri, rootDocId), "folder");
+                File rootDir = new File(batchDir, rootName);
+                int stagedCount = stageTreeRecursive(treeUri, rootDocId, rootDir);
+                if (stagedCount <= 0) {
+                    deleteRecursive(batchDir);
+                    onSendFailed("所选文件夹为空");
+                    return;
+                }
+                sendPreparedFiles(java.util.Collections.singletonList(rootDir), batchDir, name, target, targetName, auto);
+            } catch (Exception e) {
+                Log.e(TAG, "sendFolderTree", e);
+                deleteRecursive(batchDir);
+                onSendFailed(e.getMessage());
+            }
+        }).start();
+    }
+
+    private int stageTreeRecursive(Uri treeUri, String parentDocId, File destDir) throws Exception {
+        Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId);
+        String[] cols = new String[]{
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE
+        };
+        int count = 0;
+        android.content.ContentResolver cr = getContentResolver();
+        try (Cursor c = cr.query(childrenUri, cols, null, null, null)) {
+            if (c == null) {
+                return 0;
+            }
+            while (c.moveToNext()) {
+                String docId = c.getString(0);
+                String rawName = c.getString(1);
+                String mime = c.getString(2);
+                if (docId == null || docId.isEmpty()) {
+                    continue;
+                }
+                String safeName = sanitizeFolderSeg(rawName, "item");
+                if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
+                    count += stageTreeRecursive(treeUri, docId, new File(destDir, safeName));
+                } else {
+                    if (!destDir.exists() && !destDir.mkdirs()) {
+                        throw new Exception("无法创建临时目录");
+                    }
+                    File outFile = uniqueStagedFile(destDir, safeName);
+                    Uri docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
+                    try (InputStream in = cr.openInputStream(docUri);
+                         OutputStream out = new FileOutputStream(outFile)) {
+                        if (in == null) {
+                            throw new Exception("无法读取 " + safeName);
+                        }
+                        copyStream(in, out);
+                    }
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    private String resolveTreeRootName(Uri treeUri, String rootDocId) {
+        try {
+            Uri docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, rootDocId);
+            try (Cursor c = getContentResolver().query(docUri,
+                    new String[]{DocumentsContract.Document.COLUMN_DISPLAY_NAME}, null, null, null)) {
+                if (c != null && c.moveToFirst()) {
+                    String n = c.getString(0);
+                    if (n != null && !n.trim().isEmpty()) {
+                        return n.trim();
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        if (rootDocId != null) {
+            int colon = rootDocId.lastIndexOf(':');
+            String tail = colon >= 0 ? rootDocId.substring(colon + 1) : rootDocId;
+            int slash = Math.max(tail.lastIndexOf('/'), tail.lastIndexOf('\\'));
+            if (slash >= 0 && slash + 1 < tail.length()) {
+                tail = tail.substring(slash + 1);
+            }
+            if (!tail.trim().isEmpty()) {
+                return tail.trim();
+            }
+        }
+        return "folder";
+    }
+
+    private static String sanitizeFolderSeg(String raw, String fallback) {
+        if (raw == null) {
+            return fallback;
+        }
+        String s = raw.replace('/', '_').replace('\\', '_').replace(':', '_').trim();
+        if (s.isEmpty() || ".".equals(s) || "..".equals(s)) {
+            return fallback;
+        }
+        return s;
+    }
+
+    private static File uniqueStagedFile(File dir, String name) {
+        File f = new File(dir, name);
+        if (!f.exists()) {
+            return f;
+        }
+        int dot = name.lastIndexOf('.');
+        String base = dot > 0 ? name.substring(0, dot) : name;
+        String ext = dot > 0 ? name.substring(dot) : "";
+        for (int i = 1; i < 1000; i++) {
+            File cand = new File(dir, base + " (" + i + ")" + ext);
+            if (!cand.exists()) {
+                return cand;
+            }
+        }
+        return new File(dir, System.nanoTime() + "_" + name);
+    }
+
+    private static int countRegularFiles(File f) {
+        if (f == null || !f.exists()) {
+            return 0;
+        }
+        if (f.isFile()) {
+            return 1;
+        }
+        if (!f.isDirectory()) {
+            return 0;
+        }
+        int n = 0;
+        File[] children = f.listFiles();
+        if (children != null) {
+            for (File c : children) {
+                n += countRegularFiles(c);
+            }
+        }
+        return n;
+    }
+
+    private static long sumRegularBytes(File f) {
+        if (f == null || !f.exists()) {
+            return 0L;
+        }
+        if (f.isFile()) {
+            return f.length();
+        }
+        if (!f.isDirectory()) {
+            return 0L;
+        }
+        long sum = 0L;
+        File[] children = f.listFiles();
+        if (children != null) {
+            for (File c : children) {
+                sum += sumRegularBytes(c);
+            }
+        }
+        return sum;
+    }
+
     private void sendPreparedFiles(List<File> files, File rootTmp, String name, String target,
                                    String targetName, boolean auto) {
         String recTitle = "";
         long totalBytes = 0;
         if (files != null && !files.isEmpty()) {
-            String firstName = files.get(0).getName();
-            recTitle = files.size() > 1 ? (firstName + " 等 " + files.size() + " 个文件") : firstName;
+            int fileCount = 0;
             for (File f : files) {
                 if (f != null) {
-                    totalBytes += f.length();
+                    fileCount += countRegularFiles(f);
+                    totalBytes += sumRegularBytes(f);
                 }
+            }
+            File first = files.get(0);
+            String firstName = first != null ? first.getName() : "";
+            if (files.size() == 1 && first != null && first.isDirectory()) {
+                recTitle = firstName + " (" + fileCount + " 个文件)";
+            } else {
+                recTitle = fileCount > 1 ? (firstName + " 等 " + fileCount + " 个文件") : firstName;
             }
         }
         try {
@@ -4643,8 +5044,9 @@ public class MainActivity extends Activity {
                 paths.put(f.getAbsolutePath());
             }
             final String summary = auto
-                    ? Mobile.sendAuto(SIGNAL_URL, keyFile().getAbsolutePath(),
-                            pairedFile().getAbsolutePath(), target, name, paths.toString(), lanHint(), "")
+                    ? Mobile.sendAuto(TransferService.getSignalUrl(MainActivity.this), keyFile().getAbsolutePath(),
+                            pairedFile().getAbsolutePath(), target, name, paths.toString(), lanHint(),
+                            TransferService.getStunServers(MainActivity.this))
                     : Mobile.sendFilesWithKey(target, name, keyFile().getAbsolutePath(), paths.toString());
             onSendSucceeded(summary, targetName, recTitle, totalBytes);
         } catch (Exception e) {
@@ -4657,7 +5059,7 @@ public class MainActivity extends Activity {
                 }
             }
             if (rootTmp != null) {
-                rootTmp.delete();
+                deleteRecursive(rootTmp);
             }
         }
     }
@@ -4667,6 +5069,10 @@ public class MainActivity extends Activity {
         if (sendPickTile != null) {
             sendPickTile.setEnabled(!busy);
             sendPickTile.setAlpha(busy ? 0.6f : 1f);
+        }
+        if (sendFolderTile != null) {
+            sendFolderTile.setEnabled(!busy);
+            sendFolderTile.setAlpha(busy ? 0.6f : 1f);
         }
         if (sendTextTile != null) {
             sendTextTile.setEnabled(!busy);
@@ -5081,6 +5487,13 @@ public class MainActivity extends Activity {
                 } else {
                     uploadTempJoinUris(picked);
                 }
+            }
+            return;
+        }
+        if (requestCode == PICK_FOLDER) {
+            Uri treeUri = data.getData();
+            if (treeUri != null) {
+                sendFolderTree(treeUri, deviceName, selectedTarget, resolveTargetName(selectedTarget));
             }
             return;
         }
@@ -5625,6 +6038,8 @@ public class MainActivity extends Activity {
         static final int TEXT = 5;
         static final int TRANSFER = 6;
         static final int DEVICES = 7;
+        static final int FOLDER = 8;
+        static final int INFO = 9;
 
         private final int kind;
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -5719,6 +6134,19 @@ public class MainActivity extends Activity {
                         w * 0.12f, h * 0.12f, paint);
                 c.drawLine(w * 0.32f, h * 0.42f, w * 0.68f, h * 0.42f, paint);
                 c.drawLine(w * 0.32f, h * 0.58f, w * 0.56f, h * 0.58f, paint);
+            } else if (kind == FOLDER) {
+                p.moveTo(w * 0.16f, h * 0.28f);
+                p.lineTo(w * 0.42f, h * 0.28f);
+                p.lineTo(w * 0.50f, h * 0.36f);
+                p.lineTo(w * 0.84f, h * 0.36f);
+                p.lineTo(w * 0.84f, h * 0.76f);
+                p.lineTo(w * 0.16f, h * 0.76f);
+                p.close();
+                c.drawPath(p, paint);
+            } else if (kind == INFO) {
+                c.drawCircle(w * 0.5f, h * 0.5f, w * 0.34f, paint);
+                c.drawLine(w * 0.5f, h * 0.46f, w * 0.5f, h * 0.68f, paint);
+                c.drawPoint(w * 0.5f, h * 0.33f, paint);
             } else { // CLIP
                 c.drawRoundRect(new RectF(w * 0.34f, h * 0.34f, w * 0.82f, h * 0.82f),
                         w * 0.08f, h * 0.08f, paint);
@@ -6072,10 +6500,23 @@ public class MainActivity extends Activity {
         return -1;
     }
 
-    private static void deleteTree(File f, File dir) {
-        if (f != null && f.exists()) {
-            f.delete();
+    private static void deleteRecursive(File f) {
+        if (f == null || !f.exists()) {
+            return;
         }
+        if (f.isDirectory()) {
+            File[] children = f.listFiles();
+            if (children != null) {
+                for (File c : children) {
+                    deleteRecursive(c);
+                }
+            }
+        }
+        f.delete();
+    }
+
+    private static void deleteTree(File f, File dir) {
+        deleteRecursive(f);
         if (dir != null && dir.exists()) {
             dir.delete();
         }

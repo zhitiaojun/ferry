@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -399,18 +398,19 @@ func localCandidates(cs []signaling.Candidate) []punch.Candidate {
 }
 
 func describeFiles(paths []string) ([]signaling.FileInfo, int64, error) {
-	out := make([]signaling.FileInfo, 0, len(paths))
+	items, err := transfer.ExpandSendItems(paths)
+	if err != nil {
+		return nil, 0, err
+	}
+	out := make([]signaling.FileInfo, 0, len(items))
 	var total int64
-	for _, p := range paths {
-		st, err := os.Stat(p)
+	for _, it := range items {
+		st, err := os.Stat(it.DiskPath)
 		if err != nil {
 			return nil, 0, err
 		}
-		if st.IsDir() {
-			return nil, 0, fmt.Errorf("%s is a directory", p)
-		}
 		out = append(out, signaling.FileInfo{
-			Name: filepath.Base(p), Size: st.Size(),
+			Name: it.RelPath, Size: st.Size(),
 		})
 		total += st.Size()
 	}

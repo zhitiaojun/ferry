@@ -414,3 +414,94 @@ func TestUploadBatchCount(t *testing.T) {
 		t.Fatalf("multi upload = %+v, want BatchCount=2 for both", got)
 	}
 }
+
+func TestChunkedUploadAndCancel(t *testing.T) {
+	dir := t.TempDir()
+	var uploaded []File
+	srv, err := NewScoped(ScopedOptions{
+		Mode:    "recv",
+		RecvDir: dir,
+		Token:   "tokchunk",
+		Log:     logging.New(io.Discard),
+		OnUploaded: func(f File) {
+			uploaded = append(uploaded, f)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload := bytes.Repeat([]byte("chunked-data-"), 4096)
+	rawSum := sha256.Sum256(payload)
+	wantHash := hex.EncodeToString(rawSum[:])
+
+	// 1. Init -> two chunks -> finish.
+	initReq := httptest.NewRequest(http.MethodPost, "/tokchunk/api/upload/init",
+		strings.NewReader(fmt.Sprintf(`{"name":"streamed.bin","size":%d,"batch_count":1}`, len(payload))))
+	initRec := httptest.NewRecorder()
+	srv.ServeHTTP(initRec, initReq)
+	if initRec.Code != http.StatusOK {
+		t.Fatalf("init = %d %s", initRec.Code, initRec.Body.String())
+	}
+	var initResp struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(initRec.Body.Bytes(), &initResp); err != nil || initResp.ID == "" {
+		t.Fatalf("decode init: %v %s", err, initRec.Body.String())
+	}
+
+	half := len(payload) / 2
+	for _, part := range []struct {
+		off int
+		b   []byte
+	}{{0, payload[:half]}, {half, payload[half:]}} {
+		cReq := httptest.NewRequest(http.MethodPost,
+			fmt.Sprintf("/tokchunk/api/upload/chunk?id=%s&offset=%d", initResp.ID, part.off),
+			bytes.NewReader(part.b))
+		cRec := httptest.NewRecorder()
+		srv.ServeHTTP(cRec, cReq)
+		if cRec.Code != http.StatusOK {
+			t.Fatalf("chunk off=%d = %d %s", part.off, cRec.Code, cRec.Body.String())
+		}
+	}
+
+	finReq := httptest.NewRequest(http.MethodPost, "/tokchunk/api/upload/finish?id="+initResp.ID, nil)
+	finRec := httptest.NewRecorder()
+	srv.ServeHTTP(finRec, finReq)
+	if finRec.Code != http.StatusOK {
+		t.Fatalf("finish = %d %s", finRec.Code, finRec.Body.String())
+	}
+	if len(uploaded) != 1 || uploaded[0].SHA256 != wantHash || uploaded[0].BatchCount != 1 {
+		t.Fatalf("uploaded = %+v, want hash %s", uploaded, wantHash)
+	}
+	gotBytes, err := os.ReadFile(filepath.Join(dir, "streamed.bin"))
+	if err != nil || !bytes.Equal(gotBytes, payload) {
+		t.Fatalf("disk file mismatch err=%v len=%d", err, len(gotBytes))
+	}
+
+	// 2. Init -> one chunk -> host CancelActive cleans up .part.
+	init2 := httptest.NewRequest(http.MethodPost, "/tokchunk/api/upload/init",
+		strings.NewReader(`{"name":"aborted.bin","size":1024,"batch_count":1}`))
+	rec2 := httptest.NewRecorder()
+	srv.ServeHTTP(rec2, init2)
+	var ir2 struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(rec2.Body.Bytes(), &ir2)
+	c2 := httptest.NewRequest(http.MethodPost, "/tokchunk/api/upload/chunk?id="+ir2.ID+"&offset=0", bytes.NewReader([]byte("hello")))
+	c2Rec := httptest.NewRecorder()
+	srv.ServeHTTP(c2Rec, c2)
+	if c2Rec.Code != http.StatusOK {
+		t.Fatalf("chunk2 = %d", c2Rec.Code)
+	}
+	if !srv.CancelActive() {
+		t.Fatal("CancelActive returned false")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "."+ir2.ID+".part")); !os.IsNotExist(err) {
+		t.Fatalf("expected temp part deleted on cancel, stat=%v", err)
+	}
+	if !strings.Contains(pageHTML, `id="tx-pause"`) {
+		t.Fatal("pageHTML missing tx-pause button")
+	}
+}

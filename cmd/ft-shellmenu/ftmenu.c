@@ -172,15 +172,19 @@ static void append_quoted(char *buf, size_t cap, const wchar_t *path) {
 }
 
 static void desktop_exe(wchar_t *out, DWORD cap) {
-    // Prefer the path the installer recorded, else the default install dir.
-    HKEY k;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\filetransfer", 0, KEY_READ, &k) == ERROR_SUCCESS) {
-        DWORD size = cap * sizeof(wchar_t), type = 0;
-        if (RegQueryValueExW(k, L"DesktopExe", NULL, &type, (LPBYTE)out, &size) == ERROR_SUCCESS && type == REG_SZ) {
+    // Prefer the path the installer recorded (checking Software\Ferry first,
+    // then legacy Software\filetransfer), else the default install dir.
+    const wchar_t *keys[] = {L"Software\\Ferry", L"Software\\filetransfer"};
+    for (int i = 0; i < 2; i++) {
+        HKEY k;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER, keys[i], 0, KEY_READ, &k) == ERROR_SUCCESS) {
+            DWORD size = cap * sizeof(wchar_t), type = 0;
+            if (RegQueryValueExW(k, L"DesktopExe", NULL, &type, (LPBYTE)out, &size) == ERROR_SUCCESS && type == REG_SZ) {
+                RegCloseKey(k);
+                return;
+            }
             RegCloseKey(k);
-            return;
         }
-        RegCloseKey(k);
     }
     wchar_t *local = NULL;
     size_t n = 0;

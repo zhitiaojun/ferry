@@ -15,7 +15,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -532,18 +531,21 @@ func SendFilesWithKey(peerAddr, name, keyPath, pathsJSON string) (string, error)
 			devID = k.ID()
 		}
 	}
-	var totalBytes int64
-	for _, p := range paths {
-		if st, serr := os.Stat(p); serr == nil {
-			totalBytes += st.Size()
-		}
+	files, totalBytes, err := describeFiles(paths)
+	if err != nil {
+		res.Error = err.Error()
+		return marshalSummary(res), err
 	}
-	txSeq := beginActiveTransfer("send", peerAddr, filepath.Base(paths[0]), len(paths), totalBytes)
+	firstName := ""
+	if len(files) > 0 {
+		firstName = files[0].Name
+	}
+	txSeq := beginActiveTransfer("send", peerAddr, firstName, len(files), totalBytes)
 	ctrl := transfer.NewController()
 	attachActiveTransferController(txSeq, ctrl, true, true)
 	defer endActiveTransfer(txSeq)
 
-	res, err := sendFilesLAN(context.Background(), peerAddr, name, devID, key, paths, 10*time.Second, txSeq, ctrl, nil)
+	res, err = sendFilesLAN(context.Background(), peerAddr, name, devID, key, paths, 10*time.Second, txSeq, ctrl, nil)
 	if ctrl.IsCancelled() {
 		res.Error = "已取消传输"
 		return marshalSummary(res), errors.New("已取消传输")

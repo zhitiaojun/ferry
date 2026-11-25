@@ -363,14 +363,14 @@ func (w *tempWin) layout(cw, ch int32) {
 		w.recvCardR = rectT{pad, w.px(226), cw - pad, w.px(326)}
 		w.toJoinR = rectT{pad, ch - w.px(52), cw - pad, ch - w.px(22)}
 	case tsModeHost:
-		qrSz := w.px(208)
+		qrSz := w.px(188)
 		qx := (cw - qrSz) / 2
-		qy := w.px(96)
+		qy := w.px(88)
 		w.qrRect = rectT{qx, qy, qx + qrSz, qy + qrSz}
-		btnY := ch - w.px(60)
+		btnY := ch - w.px(56)
 		half := (cw - pad*2 - w.px(12)) / 2
-		w.copyRect = rectT{pad, btnY, pad + half, btnY + w.px(38)}
-		w.stopRect = rectT{w.copyRect.right + w.px(12), btnY, cw - pad, btnY + w.px(38)}
+		w.copyRect = rectT{pad, btnY, pad + half, btnY + w.px(36)}
+		w.stopRect = rectT{w.copyRect.right + w.px(12), btnY, cw - pad, btnY + w.px(36)}
 	case tsModeJoin:
 		w.codeBoxR = rectT{pad, w.px(150), cw - pad, w.px(196)}
 		w.joinGoRect = rectT{pad, w.px(214), cw - pad, w.px(254)}
@@ -549,12 +549,12 @@ func (w *tempWin) paint(hwnd syscall.Handle) {
 		if len(codeStr) == 6 {
 			codeStr = codeStr[:3] + " " + codeStr[3:]
 		}
-		cy := w.qrRect.bottom + pClamp(w.px(14))
-		cv.drawAlphaText(w.fontCode, codeStr, rectT{pad, cy, cr.right - pad, cy + w.px(32)},
+		cy := w.qrRect.bottom + pClamp(w.px(10))
+		cv.drawAlphaText(w.fontCode, codeStr, rectT{pad, cy, cr.right - pad, cy + w.px(30)},
 			dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
 
 		ttlText := fmt.Sprintf("10 分钟有效 · 剩余 %02d:%02d", st.TTLSeconds/60, st.TTLSeconds%60)
-		cv.drawAlphaText(w.fontSm, ttlText, rectT{pad, cy + w.px(36), cr.right - pad, cy + w.px(58)},
+		cv.drawAlphaText(w.fontSm, ttlText, rectT{pad, cy + w.px(32), cr.right - pad, cy + w.px(52)},
 			dtCenter|dtSingleLine|dtVCenter, w.pal.ink2)
 
 		infoText := st.ShareURL
@@ -569,11 +569,37 @@ func (w *tempWin) paint(hwnd syscall.Handle) {
 		txMeta := w.txMeta
 		txPct := w.txPct
 		txPaused := w.txPaused
+		txStage := w.txStage
 		tempWinMu.Unlock()
+		w.txPauseR, w.txCancelR = rectT{}, rectT{}
 		if txActive {
-			w.drawTempProgress(cv, rectT{pad, cy + w.px(58), cr.right - pad, cy + w.px(110)}, txTitle, txMeta, txPct, txPaused)
+			boxTop := cy + w.px(54)
+			w.drawTempProgress(cv, rectT{pad, boxTop, cr.right - pad, boxTop + w.px(52)}, txTitle, txMeta, txPct, txPaused)
+			btnT := boxTop + w.px(56)
+			btnB := btnT + w.px(26)
+			cwBtn := w.px(64)
+			w.txCancelR = rectT{cr.right - pad - cwBtn, btnT, cr.right - pad, btnB}
+			if txStage != "verifying" {
+				w.txPauseR = rectT{w.txCancelR.left - w.px(8) - w.px(64), btnT, w.txCancelR.left - w.px(8), btnB}
+				pLabel := "暂停"
+				if txPaused {
+					pLabel = "继续"
+				}
+				pFill := w.pal.paper2
+				if w.hover == tsHoverTxPause {
+					pFill = w.pal.accentSoft
+				}
+				cv.drawAlphaRoundRect(w.txPauseR, float64(w.px(6)), pFill, 235, w.pal.line, 255, 1.0)
+				cv.drawAlphaText(w.fontSm, pLabel, w.txPauseR, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
+			}
+			cFill := w.pal.paper2
+			if w.hover == tsHoverTxCancel {
+				cFill = w.pal.paper3
+			}
+			cv.drawAlphaRoundRect(w.txCancelR, float64(w.px(6)), cFill, 235, w.pal.danger, 200, 1.0)
+			cv.drawAlphaText(w.fontSm, "取消", w.txCancelR, dtCenter|dtSingleLine|dtVCenter, w.pal.danger)
 		} else {
-			cv.drawAlphaText(w.fontSm, infoText, rectT{pad, cy + w.px(62), cr.right - pad, cy + w.px(88)},
+			cv.drawAlphaText(w.fontSm, infoText, rectT{pad, cy + w.px(58), cr.right - pad, cy + w.px(84)},
 				dtCenter|dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink3)
 		}
 
@@ -675,6 +701,10 @@ func (w *tempWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
 		z = tsHoverRecv
 	case w.mode == tsModeSelect && ptIn(w.toJoinR, x, y):
 		z = tsHoverToJoin
+	case w.mode == tsModeHost && w.txPauseR.right > w.txPauseR.left && ptIn(w.txPauseR, x, y):
+		z = tsHoverTxPause
+	case w.mode == tsModeHost && w.txCancelR.right > w.txCancelR.left && ptIn(w.txCancelR, x, y):
+		z = tsHoverTxCancel
 	case w.mode == tsModeHost && ptIn(w.copyRect, x, y):
 		z = tsHoverCopy
 	case w.mode == tsModeHost && ptIn(w.stopRect, x, y):
@@ -730,6 +760,15 @@ func (w *tempWin) onClick(hwnd syscall.Handle, x, y int32) {
 		}
 	case tsModeHost:
 		switch {
+		case ptIn(w.txPauseR, x, y) && w.host != nil:
+			if w.host.TogglePauseActive() {
+				procInvalidateRect.Call(uintptr(hwnd), 0, 0)
+			}
+		case ptIn(w.txCancelR, x, y) && w.host != nil:
+			if w.host.CancelActive() {
+				w.status = "已取消当前传输"
+				procInvalidateRect.Call(uintptr(hwnd), 0, 0)
+			}
 		case ptIn(w.copyRect, x, y) && w.host != nil:
 			copyToClipboard(hwnd, w.host.Status().ShareURL)
 			w.status = "已复制临时快传链接"
@@ -787,7 +826,7 @@ func (w *tempWin) startHost(mode string, files []string) {
 		recvDir := a.receiveDir()
 		if err == nil {
 			host, err = tempshare.StartHost(tempshare.HostOptions{
-				BaseURL:     a.webBase,
+				BaseURL:     a.currentWebBase(),
 				Key:         key,
 				DeviceName:  a.deviceName(),
 				Mode:        mode,
@@ -905,7 +944,7 @@ func (w *tempWin) joinByCode() {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		sess, err := tempshare.ResolveByCode(ctx, a.webBase, code)
+		sess, err := tempshare.ResolveByCode(ctx, a.currentWebBase(), code)
 		if err != nil {
 			w.finishJoinError(hwnd, err.Error())
 			return

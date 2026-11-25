@@ -3,7 +3,7 @@
 #
 #   ./android/build.sh
 #
-# Output: android/build/ft-debug.apk (arm64-v8a only).
+# Output: android/build/ferry-android-arm64.apk (arm64-v8a only).
 # Requires the local toolchain under .tools/ (JDK 17, Android SDK 34,
 # NDK r27c, Go, gomobile). Native tools get Windows-style paths (cygpath -m).
 set -euo pipefail
@@ -26,6 +26,7 @@ export TMP=$(m "$TOOLS/tmp") TEMP=$(m "$TOOLS/tmp")
 export PATH="$TOOLS/go/bin:$TOOLS/gopath/bin:$JDK/bin:$PATH"
 
 VER_NAME=${VER_NAME:-1.0.0}
+VER_CODE=${VER_CODE:-1000}
 
 echo "== go build =="
 (cd "$ROOT" && go build ./...)
@@ -67,7 +68,7 @@ echo "== aapt2 link =="
 "$BT/aapt2.exe" link -o "$(m "$WORK/base.apk")" \
   --manifest "$(m "$ROOT/android/AndroidManifest.xml")" \
   -I "$(m "$AJAR")" --min-sdk-version 21 --target-sdk-version 34 \
-  --version-code 1000 --version-name "$VER_NAME" "$(m "$WORK/res.zip")"
+  --version-code "$VER_CODE" --version-name "$VER_NAME" "$(m "$WORK/res.zip")"
 
 echo "== package =="
 cp "$WORK/dex/classes.dex" "$WORK/classes.dex"
@@ -103,10 +104,10 @@ echo "== sign =="
 "$JDK/bin/java" -jar "$(m "$BT/lib/apksigner.jar")" sign \
   --ks "$(m "$KS")" --ks-key-alias "$ALIAS" \
   --ks-pass "pass:$KSPASS" --key-pass "pass:$KPASS" \
-  --out "$(m "$OUT/ft-debug.apk")" "$(m "$WORK/aligned.apk")"
+  --out "$(m "$OUT/ferry-android-arm64.apk")" "$(m "$WORK/aligned.apk")"
 
-"$JDK/bin/java" -jar "$(m "$BT/lib/apksigner.jar")" verify --print-certs "$(m "$OUT/ft-debug.apk")" | head -4
+"$JDK/bin/java" -jar "$(m "$BT/lib/apksigner.jar")" verify --print-certs "$(m "$OUT/ferry-android-arm64.apk")" | head -4
 
 echo
-echo "APK: $OUT/ft-debug.apk"
-ls -l "$OUT/ft-debug.apk"
+echo "APK: $OUT/ferry-android-arm64.apk"
+ls -l "$OUT/ferry-android-arm64.apk"

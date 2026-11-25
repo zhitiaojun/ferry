@@ -23,17 +23,20 @@ import (
 //go:embed all:payload
 var payload embed.FS
 
+var version = "1.0.0"
+
 const (
-	appName        = "Ferry"
-	runKeyPath     = `Software\Microsoft\Windows\CurrentVersion\Run`
-	runValue       = "Ferry"
-	legacyRunValue = "filetransfer"
-	ctxKeyPath     = `Software\Classes\*\shell\FileTransfer`
+	appName          = "Ferry"
+	runKeyPath       = `Software\Microsoft\Windows\CurrentVersion\Run`
+	runValue         = "Ferry"
+	legacyRunValue   = "filetransfer"
+	ctxKeyPath       = `Software\Classes\*\shell\FileTransfer`
 	// classicMenuCLSID is the well-known per-user switch that makes Explorer use
 	// the Windows 10 context menu, where plain registry verbs are first-level.
 	classicMenuCLSID = `Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32`
 	classicMenuRoot  = `Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}`
-	appKeyPath       = `Software\filetransfer`
+	appKeyPath       = `Software\Ferry`
+	legacyAppKeyPath = `Software\filetransfer`
 	uninstallKeyPath = `Software\Microsoft\Windows\CurrentVersion\Uninstall\Ferry`
 )
 
@@ -274,7 +277,18 @@ func writeDesktopExeKey(desktopExe string) error {
 		return err
 	}
 	defer k.Close()
-	return k.SetStringValue("DesktopExe", desktopExe)
+	if err := k.SetStringValue("DesktopExe", desktopExe); err != nil {
+		return err
+	}
+	// Migrate any ClassicMenu marker from the legacy Software\filetransfer key.
+	if lk, lerr := registry.OpenKey(registry.CURRENT_USER, legacyAppKeyPath, registry.QUERY_VALUE); lerr == nil {
+		if v, _, verr := lk.GetIntegerValue("ClassicMenu"); verr == nil && v == 1 {
+			_ = k.SetDWordValue("ClassicMenu", 1)
+		}
+		lk.Close()
+		_ = registry.DeleteKey(registry.CURRENT_USER, legacyAppKeyPath)
+	}
+	return nil
 }
 
 func setRunAutostart(enable bool, desktopExe string) error {
@@ -305,7 +319,7 @@ func writeUninstallKey(dir, setupExe, iconPath string) error {
 	defer k.Close()
 	for name, val := range map[string]string{
 		"DisplayName":     "轻渡 (Ferry)",
-		"DisplayVersion":  "1.0.0",
+		"DisplayVersion":  version,
 		"Publisher":       "zhitiaojun",
 		"InstallLocation": dir,
 		"UninstallString": fmt.Sprintf(`"%s" -uninstall -dir "%s"`, setupExe, dir),
@@ -343,14 +357,17 @@ func remove(dir string) (bool, error) {
 		k.Close()
 	}
 	// revert the classic-menu switch only if we were the ones who enabled it
-	if mk, err := registry.OpenKey(registry.CURRENT_USER, appKeyPath, registry.QUERY_VALUE); err == nil {
-		if v, _, verr := mk.GetIntegerValue("ClassicMenu"); verr == nil && v == 1 {
-			_ = setClassicMenu(false)
+	for _, keyPath := range []string{appKeyPath, legacyAppKeyPath} {
+		if mk, err := registry.OpenKey(registry.CURRENT_USER, keyPath, registry.QUERY_VALUE); err == nil {
+			if v, _, verr := mk.GetIntegerValue("ClassicMenu"); verr == nil && v == 1 {
+				_ = setClassicMenu(false)
+			}
+			mk.Close()
 		}
-		mk.Close()
 	}
 	_ = registry.DeleteKey(registry.CURRENT_USER, uninstallKeyPath)
 	_ = registry.DeleteKey(registry.CURRENT_USER, appKeyPath)
+	_ = registry.DeleteKey(registry.CURRENT_USER, legacyAppKeyPath)
 	removeContextMenu()
 	_ = removeShellMenu()
 	removeShortcuts()

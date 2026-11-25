@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -15,9 +16,10 @@ import (
 	"github.com/cwlindean/filetransfer/core/session"
 )
 
-// recvFile is one file being written to <out>/<name>.ftpart.
+// recvFile is one file being written to <out>/<relpath>.ftpart.
 type recvFile struct {
 	entry   proto.FileEntry
+	target  string
 	part    string
 	f       *os.File
 	h       hash.Hash
@@ -80,13 +82,19 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 		return nil, fmt.Errorf("create output dir: %w", err)
 	}
 
+	cleanOut := filepath.Clean(outDir)
 	files := make([]recvFile, len(m.Files))
 	for i, e := range m.Files {
-		if !safeName(e.Name) {
+		target, ok := safeRelPath(cleanOut, e.Name)
+		if !ok {
 			_ = s.SendError(proto.CodeManifestInvalid, "unsafe file name %q", e.Name)
 			return nil, proto.NewError(proto.CodeManifestInvalid, fmt.Sprintf("unsafe file name %q", e.Name))
 		}
-		rf := recvFile{entry: e, part: filepath.Join(outDir, e.Name+".ftpart"), h: sha256.New()}
+		rf := recvFile{entry: e, target: target, part: target + ".ftpart", h: sha256.New()}
+		if err := os.MkdirAll(filepath.Dir(rf.part), 0o755); err != nil {
+			_ = s.SendError(proto.CodeIOError, "create parent dir %s: %v", e.Name, err)
+			return nil, fmt.Errorf("create parent dir: %w", err)
+		}
 		st, statErr := os.Stat(rf.part)
 		switch {
 		case statErr == nil:
@@ -120,6 +128,11 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 		for i := range files {
 			if files[i].part != "" {
 				_ = os.Remove(files[i].part)
+				for dir := filepath.Dir(files[i].part); dir != cleanOut && strings.HasPrefix(dir, cleanOut+string(filepath.Separator)); dir = filepath.Dir(dir) {
+					if os.Remove(dir) != nil {
+						break
+					}
+				}
 			}
 		}
 	}
@@ -582,7 +595,7 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 				}
 			}
 			for i := range files {
-				if err := os.Rename(files[i].part, filepath.Join(outDir, files[i].entry.Name)); err != nil {
+				if err := os.Rename(files[i].part, files[i].target); err != nil {
 					_ = s.SendError(proto.CodeIOError, "rename %s: %v", files[i].entry.Name, err)
 					return nil, fmt.Errorf("rename %s: %w", files[i].entry.Name, err)
 				}
@@ -672,10 +685,16 @@ func remoteErrorFrom(payload []byte) error {
 	return &session.RemoteError{Code: msg.Code, Msg: msg.Message}
 }
 
-// safeName rejects names that could escape outDir.
-func safeName(name string) bool {
-	if name == "" || name == "." || name == ".." {
-		return false
+// safeRelPath rejects names or relative paths that could escape outDir.
+func safeRelPath(outDir, name string) (string, bool) {
+	if err := proto.ValidateFileName(name); err != nil {
+		return "", false
 	}
-	return filepath.Base(name) == name
+	cleanOut := filepath.Clean(outDir)
+	target := filepath.Join(cleanOut, filepath.FromSlash(name))
+	rel, err := filepath.Rel(cleanOut, filepath.Clean(target))
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", false
+	}
+	return target, true
 }

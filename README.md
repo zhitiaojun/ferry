@@ -5,7 +5,7 @@
 轻渡（Ferry）专注于在你的手机、电脑与浏览器之间快速、安全、无损地传输文件与文本：无需账号注册、不经第三方网盘压缩或留存，基于 Go 单一核心实现 **局域网直连 → NAT 打洞 P2P（QUIC）→ 高吞吐 WSS 中继** 三档链路自动调度，并支持大模型 MCP 工具直连调用。
 
 > [!NOTE]
-> 当前版本：`v1.0.0-beta.26`（协议版本 `v1`）。仓库保持私有维护，按公开发布文档标准编写；建议从 Releases 下载预编译产物或按下方指引从源码构建。
+> 当前版本：`v1.0.0-beta.37`（协议版本 `v1`）。仓库保持私有维护，按公开发布文档标准编写；建议从 Releases 下载预编译产物或按下方指引从源码构建。当前跨网直连与穿透基于 IPv4（LAN / UDP 打洞 / WSS 中继），IPv6 直连探测暂未实现。
 
 ---
 
@@ -33,15 +33,15 @@
 - **两种免账号配对方式**：
   - 扫描二维码或导入 `ftpair://` 配对 URI。
   - **SPAKE2 一次性 6 位配对码**：口令仅在本地参与密钥协商，明文口令不经由服务器传递。
-- **路径穿越与载荷防护**：协议层（`Manifest.Validate`）与落盘前清洗（`safeName` / `cleanName`）双重拦截 `..`、路径分隔符与非法文件名；服务端内置按 IP 登录限频、按设备配对消息限频及单房间带宽保护。
+- **路径穿越与载荷防护**：协议层（`Manifest.Validate`）与落盘前清洗（`safeRelPath` / `cleanName`）支持安全的 POSIX `/` 相对路径（单段 ≤ 255 字节、总长 ≤ 1024 字节）以保留文件夹目录树，同时严格拦截 `\`、`:`、`..`、`.`、空段与 NUL；服务端内置按 IP 登录限频、按设备配对消息限频及单房间带宽保护。
 
 ### 3. 全平台客户端与临时快传
 
 | 端 / 组件 | 入口 / 产物 | 核心能力 |
 |---|---|---|
-| **Windows 桌面端** | `ferry-desktop-windows-amd64.exe` / `ferry-setup-windows-amd64.exe` | 原生 Win32 界面、托盘常驻、DWM Acrylic 接收确认弹窗、顶部磁吸拖拽投放面板、资源管理器右键菜单扩展（`ftmenu.dll`）、开机自启、一键安装/卸载 |
-| **Android 原生端** | `ferry-android-arm64.apk` | 原生 Java + `gomobile` Go 核心（API 21+，16 KB 页对齐），支持文件/文字/剪贴板发送、系统「分享」面板接入、1.5x 默认变焦扫码、`TransferService` 常驻后台与锁屏低功耗休眠 |
-| **浏览器临时快传** | `/transfer`、`/app`、`/s/<token>` | 免配对一码双用：客户端生成 Ed25519 签名的 10 分钟临时 HTTPS 链接与 6 位取件码；浏览器支持公网加密中继与「同 Wi-Fi 极速直连」切换 |
+| **Windows 桌面端** | `ferry-desktop-windows-amd64.exe` / `ferry-setup-windows-amd64.exe` | 纯 Win32 GDI 自绘 + DWM Acrylic 弹窗与设置对话窗（无 WebView2 运行时依赖）、托盘常驻、文件夹/图片自动剪贴板互传、自定义服务器地址、资源管理器右键菜单扩展（`ftmenu.dll`）、一键安装/卸载与「关于」页 |
+| **Android 原生端** | `ferry-android-arm64.apk` (`cn.cwlindean.ferry`) | 原生 Java + `gomobile` Go 核心（API 21+，16 KB 页对齐），支持文件与文件夹树发送、文字/剪贴板、系统「分享」面板接入、自定义服务器设置、4 标签底部导航（含「关于」页）与 `TransferService` 低功耗保活 |
+| **浏览器临时快传** | `/transfer`、`/app`、`/s/<token>` | 免配对一码双用：支持 `file.slice` 分块流式上传、`showSaveFilePicker` + 纯 JS 增量 SHA-256 流式下载、暂停/恢复与取消（不断开控制信道），并支持「同 Wi-Fi 极速直连」切换 |
 | **跨平台 CLI & MCP** | `ferry` (`cmd/ferry`) | Windows / Linux / macOS 命令行收发、常驻守护进程 (`ferry daemon`)、临时快传 (`ferry share`)、标准 stdio JSON-RPC 2.0 **MCP Server** (`ferry mcp`) |
 | **信令与中继服务端** | `ferry-server-linux-amd64` (`cmd/ft-server`) | 单二进制、全内存状态；集成 WebSocket 信令 (`/signal`)、房间中继 (`/relay`)、匿名快传网页门户与双端口 UDP STUN 服务 |
 

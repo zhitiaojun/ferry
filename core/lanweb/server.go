@@ -11,6 +11,7 @@
 package lanweb
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -29,6 +30,7 @@ import (
 	"time"
 
 	"github.com/cwlindean/filetransfer/core/logging"
+	"github.com/cwlindean/filetransfer/core/transfer"
 )
 
 // MaxUpload bounds one browser upload (single file) to keep a hostile page
@@ -52,11 +54,28 @@ type Progress struct {
 	ID         uint64
 	Direction  string // "send" | "recv"
 	Channel    string // "lan" | "relay"
-	Stage      string // "transferring" | "verifying"
+	Stage      string // "transferring" | "paused" | "verifying"
 	FileName   string
 	BytesDone  int64
 	BytesTotal int64
 	Done       bool
+}
+
+type chunkUpload struct {
+	mu         sync.Mutex
+	id         string
+	name       string
+	tmpPath    string
+	expected   int64
+	written    int64
+	batchCount int
+	f          *os.File
+	h          io.Writer
+	sum        interface{ Sum([]byte) []byte }
+	txID       uint64
+	lastEmit   time.Time
+	paused     bool
+	cancelled  bool
 }
 
 var progressSeq atomic.Uint64
@@ -93,6 +112,15 @@ type Server struct {
 	mu        sync.Mutex
 	files     map[string]File   // by name
 	filePaths map[string]string // exposed name -> absolute path
+
+	chunksMu sync.Mutex
+	chunks   map[string]*chunkUpload
+
+	activeMu      sync.Mutex
+	activeKind    string // "upload" | "download" | ""
+	activeChunkID string
+	activeCtrl    *transfer.Controller
+	activePaused  atomic.Bool
 }
 
 // New creates a server rooted at dir (created if needed). A random token is
@@ -293,6 +321,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case rest == "/api/list":
 		s.handleList(w, r)
+	case rest == "/api/upload/init":
+		s.handleUploadInit(w, r)
+	case rest == "/api/upload/chunk":
+		s.handleUploadChunk(w, r)
+	case rest == "/api/upload/finish":
+		s.handleUploadFinish(w, r)
+	case rest == "/api/upload/cancel":
+		s.handleUploadCancel(w, r)
+	case rest == "/api/upload/status":
+		s.handleUploadStatus(w, r)
 	case rest == "/upload":
 		s.handleUpload(w, r)
 	case strings.HasPrefix(rest, "/f/"):
@@ -496,36 +534,458 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, name str
 	w.Header().Set("Content-Length", fmt.Sprint(info.Size()))
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+clean+"\"")
 
+	ctrl := transfer.NewController()
+	s.setActiveDownload(ctrl)
+	defer s.clearActiveDownload(ctrl)
+
 	dst := w
-	if r.Method == http.MethodGet && s.onProgress != nil {
-		txID := NextProgressID()
-		total := info.Size()
-		s.NotifyProgress(Progress{
-			ID:         txID,
-			Direction:  "send",
-			Channel:    "lan",
-			Stage:      "transferring",
-			FileName:   clean,
-			BytesDone:  0,
-			BytesTotal: total,
-		})
-		prw := &progressResponseWriter{
+	if r.Method == http.MethodGet {
+		var txID uint64
+		if s.onProgress != nil {
+			txID = NextProgressID()
+			total := info.Size()
+			s.NotifyProgress(Progress{
+				ID:         txID,
+				Direction:  "send",
+				Channel:    "lan",
+				Stage:      "transferring",
+				FileName:   clean,
+				BytesDone:  0,
+				BytesTotal: total,
+			})
+			defer s.NotifyProgress(Progress{
+				ID:        txID,
+				Direction: "send",
+				Channel:   "lan",
+				FileName:  clean,
+				Done:      true,
+			})
+		}
+		dst = &progressResponseWriter{
 			ResponseWriter: w,
 			txID:           txID,
 			fileName:       clean,
-			total:          total,
+			total:          info.Size(),
+			ctrl:           ctrl,
+			reqCtx:         r.Context(),
 			notify:         s.onProgress,
 		}
-		defer s.NotifyProgress(Progress{
-			ID:        txID,
-			Direction: "send",
-			Channel:   "lan",
-			FileName:  clean,
-			Done:      true,
-		})
-		dst = prw
 	}
 	http.ServeContent(dst, r, clean, info.ModTime(), f)
+}
+
+func (s *Server) setActiveDownload(ctrl *transfer.Controller) {
+	s.activeMu.Lock()
+	s.activeKind = "download"
+	s.activeChunkID = ""
+	s.activeCtrl = ctrl
+	s.activePaused.Store(false)
+	s.activeMu.Unlock()
+}
+
+func (s *Server) clearActiveDownload(ctrl *transfer.Controller) {
+	s.activeMu.Lock()
+	if s.activeKind == "download" && s.activeCtrl == ctrl {
+		s.activeKind = ""
+		s.activeCtrl = nil
+		s.activePaused.Store(false)
+	}
+	s.activeMu.Unlock()
+}
+
+func (s *Server) setActiveUpload(id string) {
+	s.activeMu.Lock()
+	s.activeKind = "upload"
+	s.activeChunkID = id
+	s.activeCtrl = nil
+	s.activePaused.Store(false)
+	s.activeMu.Unlock()
+}
+
+func (s *Server) clearActiveUpload(id string) {
+	s.activeMu.Lock()
+	if s.activeKind == "upload" && s.activeChunkID == id {
+		s.activeKind = ""
+		s.activeChunkID = ""
+		s.activePaused.Store(false)
+	}
+	s.activeMu.Unlock()
+}
+
+// ActivePaused reports whether the current HTTP upload or download is paused.
+func (s *Server) ActivePaused() bool {
+	if s == nil {
+		return false
+	}
+	return s.activePaused.Load()
+}
+
+// TogglePauseActive pauses or resumes the active HTTP upload or download.
+func (s *Server) TogglePauseActive() bool {
+	if s == nil {
+		return false
+	}
+	s.activeMu.Lock()
+	kind := s.activeKind
+	ctrl := s.activeCtrl
+	chunkID := s.activeChunkID
+	s.activeMu.Unlock()
+
+	if kind == "download" && ctrl != nil {
+		paused := ctrl.TogglePause()
+		s.activePaused.Store(paused)
+		return true
+	}
+	if kind == "upload" && chunkID != "" {
+		cu := s.getChunk(chunkID)
+		if cu == nil {
+			return false
+		}
+		cu.mu.Lock()
+		if cu.cancelled {
+			cu.mu.Unlock()
+			return false
+		}
+		cu.paused = !cu.paused
+		paused := cu.paused
+		stage := "transferring"
+		if paused {
+			stage = "paused"
+		}
+		txID, name, done, total := cu.txID, cu.name, cu.written, cu.expected
+		cu.mu.Unlock()
+		s.activePaused.Store(paused)
+		s.NotifyProgress(Progress{
+			ID:         txID,
+			Direction:  "recv",
+			Channel:    "lan",
+			Stage:      stage,
+			FileName:   name,
+			BytesDone:  done,
+			BytesTotal: total,
+		})
+		return true
+	}
+	return false
+}
+
+// CancelActive cancels the active HTTP upload or download.
+func (s *Server) CancelActive() bool {
+	if s == nil {
+		return false
+	}
+	s.activeMu.Lock()
+	kind := s.activeKind
+	ctrl := s.activeCtrl
+	chunkID := s.activeChunkID
+	s.activeMu.Unlock()
+
+	if kind == "download" && ctrl != nil {
+		ctrl.Cancel()
+		return true
+	}
+	if kind == "upload" && chunkID != "" {
+		return s.cancelChunk(chunkID)
+	}
+	return false
+}
+
+func (s *Server) getChunk(id string) *chunkUpload {
+	s.chunksMu.Lock()
+	defer s.chunksMu.Unlock()
+	if s.chunks == nil {
+		return nil
+	}
+	return s.chunks[id]
+}
+
+func (s *Server) cancelChunk(id string) bool {
+	s.chunksMu.Lock()
+	cu := s.chunks[id]
+	if cu != nil {
+		delete(s.chunks, id)
+	}
+	s.chunksMu.Unlock()
+	if cu == nil {
+		return false
+	}
+	cu.mu.Lock()
+	cu.cancelled = true
+	if cu.f != nil {
+		_ = cu.f.Close()
+		cu.f = nil
+	}
+	if cu.tmpPath != "" {
+		_ = os.Remove(cu.tmpPath)
+	}
+	txID, name := cu.txID, cu.name
+	cu.mu.Unlock()
+	s.clearActiveUpload(id)
+	s.NotifyProgress(Progress{
+		ID:        txID,
+		Direction: "recv",
+		Channel:   "lan",
+		FileName:  name,
+		Done:      true,
+	})
+	return true
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func (s *Server) handleUploadInit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.AllowUpload() {
+		http.Error(w, "upload disabled in send-only mode", http.StatusForbidden)
+		return
+	}
+	var req struct {
+		Name       string `json:"name"`
+		Size       int64  `json:"size"`
+		BatchCount int    `json:"batch_count"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	name := cleanName(req.Name)
+	if name == "" {
+		http.Error(w, "invalid file name", http.StatusBadRequest)
+		return
+	}
+	if req.Size < 0 || req.Size > MaxUpload {
+		http.Error(w, "size out of range", http.StatusBadRequest)
+		return
+	}
+	final := s.UniqueName(name)
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		http.Error(w, "id generation failed", http.StatusInternalServerError)
+		return
+	}
+	id := hex.EncodeToString(raw[:])
+	tmpPath := filepath.Join(s.dir, "."+id+".part")
+	out, err := os.Create(tmpPath)
+	if err != nil {
+		http.Error(w, "create temp file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	h := sha256.New()
+	txID := NextProgressID()
+	cu := &chunkUpload{
+		id:         id,
+		name:       final,
+		tmpPath:    tmpPath,
+		expected:   req.Size,
+		batchCount: req.BatchCount,
+		f:          out,
+		h:          io.MultiWriter(out, h),
+		sum:        h,
+		txID:       txID,
+	}
+	s.chunksMu.Lock()
+	if s.chunks == nil {
+		s.chunks = map[string]*chunkUpload{}
+	}
+	s.chunks[id] = cu
+	s.chunksMu.Unlock()
+	s.setActiveUpload(id)
+	s.NotifyProgress(Progress{
+		ID:         txID,
+		Direction:  "recv",
+		Channel:    "lan",
+		Stage:      "transferring",
+		FileName:   final,
+		BytesDone:  0,
+		BytesTotal: req.Size,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "name": final})
+}
+
+func (s *Server) handleUploadChunk(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	cu := s.getChunk(id)
+	if cu == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "upload session not found", "cancelled": true})
+		return
+	}
+	off, perr := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("offset")), 10, 64)
+	if perr != nil || off < 0 {
+		http.Error(w, "bad offset", http.StatusBadRequest)
+		return
+	}
+
+	cu.mu.Lock()
+	defer cu.mu.Unlock()
+	if cu.cancelled {
+		writeJSON(w, http.StatusConflict, map[string]any{"cancelled": true, "error": "cancelled"})
+		return
+	}
+	if cu.paused {
+		writeJSON(w, http.StatusConflict, map[string]any{"paused": true, "written": cu.written})
+		return
+	}
+	if off != cu.written {
+		http.Error(w, fmt.Sprintf("offset mismatch: got %d want %d", off, cu.written), http.StatusConflict)
+		return
+	}
+	const maxChunkBody = 8 << 20
+	limited := io.LimitReader(http.MaxBytesReader(w, r.Body, maxChunkBody), maxChunkBody+1)
+	n, err := io.Copy(cu.h, limited)
+	if err != nil {
+		http.Error(w, "write chunk: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if n > maxChunkBody {
+		http.Error(w, "chunk too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	if cu.written+n > cu.expected {
+		http.Error(w, "upload exceeds declared size", http.StatusBadRequest)
+		return
+	}
+	cu.written += n
+	now := time.Now()
+	if now.Sub(cu.lastEmit) >= 120*time.Millisecond || (cu.expected > 0 && cu.written >= cu.expected) {
+		cu.lastEmit = now
+		s.NotifyProgress(Progress{
+			ID:         cu.txID,
+			Direction:  "recv",
+			Channel:    "lan",
+			Stage:      "transferring",
+			FileName:   cu.name,
+			BytesDone:  cu.written,
+			BytesTotal: cu.expected,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"written": cu.written})
+}
+
+func (s *Server) handleUploadStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	cu := s.getChunk(id)
+	if cu == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"cancelled": true})
+		return
+	}
+	cu.mu.Lock()
+	paused, cancelled, written := cu.paused, cu.cancelled, cu.written
+	cu.mu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"paused": paused, "cancelled": cancelled, "written": written})
+}
+
+func (s *Server) handleUploadFinish(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	s.chunksMu.Lock()
+	cu := s.chunks[id]
+	if cu != nil {
+		delete(s.chunks, id)
+	}
+	s.chunksMu.Unlock()
+	if cu == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"cancelled": true, "error": "upload session not found"})
+		return
+	}
+	cu.mu.Lock()
+	defer cu.mu.Unlock()
+	s.clearActiveUpload(id)
+	if cu.cancelled {
+		writeJSON(w, http.StatusConflict, map[string]any{"cancelled": true, "error": "cancelled"})
+		return
+	}
+	s.NotifyProgress(Progress{
+		ID:         cu.txID,
+		Direction:  "recv",
+		Channel:    "lan",
+		Stage:      "verifying",
+		FileName:   cu.name,
+		BytesDone:  cu.written,
+		BytesTotal: cu.expected,
+	})
+	defer s.NotifyProgress(Progress{
+		ID:        cu.txID,
+		Direction: "recv",
+		Channel:   "lan",
+		FileName:  cu.name,
+		Done:      true,
+	})
+	if cu.f != nil {
+		if err := cu.f.Sync(); err != nil {
+			_ = cu.f.Close()
+			cu.f = nil
+			_ = os.Remove(cu.tmpPath)
+			http.Error(w, "sync: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := cu.f.Close(); err != nil {
+			cu.f = nil
+			_ = os.Remove(cu.tmpPath)
+			http.Error(w, "close: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		cu.f = nil
+	}
+	if cu.written != cu.expected {
+		_ = os.Remove(cu.tmpPath)
+		http.Error(w, fmt.Sprintf("size mismatch: got %d want %d", cu.written, cu.expected), http.StatusBadRequest)
+		return
+	}
+	final := s.UniqueName(cu.name)
+	finalPath := filepath.Join(s.dir, final)
+	if err := os.Rename(cu.tmpPath, finalPath); err != nil {
+		_ = os.Remove(cu.tmpPath)
+		http.Error(w, "rename: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	info, _ := os.Stat(finalPath)
+	var mtime int64
+	if info != nil {
+		mtime = info.ModTime().UnixMilli()
+	}
+	rec := File{
+		Name:       final,
+		Size:       cu.written,
+		SHA256:     hex.EncodeToString(cu.sum.Sum(nil)),
+		ModTime:    mtime,
+		BatchCount: cu.batchCount,
+	}
+	s.mu.Lock()
+	s.files[rec.Name] = rec
+	s.mu.Unlock()
+	s.NotifyUploaded(rec)
+	if s.log != nil {
+		s.log.Event("lanweb.upload", map[string]any{"file": rec.Name, "size": rec.Size, "sha256": rec.SHA256})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"file": rec})
+}
+
+func (s *Server) handleUploadCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	s.cancelChunk(id)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 type progressReader struct {
@@ -572,17 +1032,61 @@ type progressResponseWriter struct {
 	total    int64
 	done     int64
 	lastEmit time.Time
+	ctrl     *transfer.Controller
+	reqCtx   context.Context
 	notify   func(Progress)
 }
 
 func (p *progressResponseWriter) Write(b []byte) (int, error) {
+	if p.ctrl != nil {
+		wasPaused := false
+		for p.ctrl.IsPaused() {
+			if p.ctrl.IsCancelled() {
+				return 0, transfer.ErrCancelled
+			}
+			if !wasPaused {
+				wasPaused = true
+				if p.notify != nil && p.txID != 0 {
+					p.notify(Progress{
+						ID:         p.txID,
+						Direction:  "send",
+						Channel:    "lan",
+						Stage:      "paused",
+						FileName:   p.fileName,
+						BytesDone:  p.done,
+						BytesTotal: p.total,
+					})
+				}
+			}
+			ch := p.ctrl.StateCh()
+			select {
+			case <-ch:
+			case <-p.reqCtx.Done():
+				return 0, p.reqCtx.Err()
+			}
+		}
+		if wasPaused && p.notify != nil && p.txID != 0 {
+			p.notify(Progress{
+				ID:         p.txID,
+				Direction:  "send",
+				Channel:    "lan",
+				Stage:      "transferring",
+				FileName:   p.fileName,
+				BytesDone:  p.done,
+				BytesTotal: p.total,
+			})
+		}
+		if p.ctrl.IsCancelled() {
+			return 0, transfer.ErrCancelled
+		}
+	}
 	if cl := strings.TrimSpace(p.ResponseWriter.Header().Get("Content-Length")); cl != "" {
 		if n, err := strconv.ParseInt(cl, 10, 64); err == nil && n > 0 {
 			p.total = n
 		}
 	}
 	n, err := p.ResponseWriter.Write(b)
-	if n > 0 && p.notify != nil {
+	if n > 0 && p.notify != nil && p.txID != 0 {
 		p.done += int64(n)
 		now := time.Now()
 		if now.Sub(p.lastEmit) >= 120*time.Millisecond || (p.total > 0 && p.done >= p.total) {

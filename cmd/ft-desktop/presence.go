@@ -313,7 +313,7 @@ func (a *app) acquireSignalForPair(ctx context.Context, key *identity.Key) (*sig
 		return cl, func() {}, nil
 	}
 	release := a.holdSignaling()
-	cl, err := signaling.Dial(ctx, a.signalURL, key, nil)
+	cl, err := signaling.Dial(ctx, a.currentSignalURL(), key, nil)
 	if err != nil {
 		release()
 		return nil, nil, err
@@ -328,8 +328,40 @@ func (a *app) startPresence(ctx context.Context, key *identity.Key) {
 	if a == nil || key == nil {
 		return
 	}
+	a.mu.Lock()
+	a.presenceCtx = ctx
+	a.presenceKey = key
+	sigURL := a.signalURL
+	alreadyOn := a.sigLoopOn
+	if sigURL != "" && !alreadyOn {
+		a.sigLoopOn = true
+	}
+	a.mu.Unlock()
+
 	go a.runLANDiscovery(ctx, key)
-	if a.signalURL != "" {
+	if sigURL != "" && !alreadyOn {
+		go a.runSignalingPresence(ctx, key)
+	}
+}
+
+func (a *app) restartSignaling() {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	stopCur := a.sigStopCur
+	ctx := a.presenceCtx
+	key := a.presenceKey
+	sigURL := a.signalURL
+	needStart := ctx != nil && key != nil && sigURL != "" && !a.sigLoopOn
+	if needStart {
+		a.sigLoopOn = true
+	}
+	a.mu.Unlock()
+	if stopCur != nil {
+		stopCur()
+	}
+	if needStart {
 		go a.runSignalingPresence(ctx, key)
 	}
 }
@@ -480,7 +512,7 @@ func (a *app) serveOneSignaling(ctx, rootCtx context.Context, key *identity.Key)
 	a.notifyMainPaint()
 
 	dialCtx, dialCancel := context.WithTimeout(ctx, 10*time.Second)
-	cl, err := signaling.Dial(dialCtx, a.signalURL, key, nil)
+	cl, err := signaling.Dial(dialCtx, a.currentSignalURL(), key, nil)
 	dialCancel()
 	if err != nil {
 		if ctx.Err() == nil {
@@ -641,11 +673,11 @@ func (a *app) receiveOneAuto(
 	outDir := a.receiveDir()
 	res, err := client.ReceiveAuto(rctx, client.ReceiveOptions{
 		Key:         key,
-		SignalURL:   a.signalURL,
+		SignalURL:   a.currentSignalURL(),
 		OutDir:      outDir,
 		PairedPath:  a.pairedPath,
 		Name:        a.deviceName(),
-		STUNServers: a.stunServers,
+		STUNServers: a.currentSTUNServers(),
 		Control:     ctrl,
 		OnStatus: func(st client.Status) {
 			ch := ""

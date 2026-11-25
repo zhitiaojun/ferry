@@ -64,7 +64,8 @@ const pageHTML = `<!doctype html>
   .tx-acts{display:flex;align-items:center;gap:6px;flex:none}
   .tx-pct{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--accent);flex:none}
   .tx-btn{font:inherit;font-size:11px;font-weight:600;padding:3px 9px;border:1px solid var(--line);border-radius:7px;
-          background:var(--card);color:var(--danger);cursor:pointer;white-space:nowrap}
+          background:var(--card);color:var(--ink);cursor:pointer;white-space:nowrap}
+  .tx-btn.danger{color:var(--danger)}
   .tx-btn:hover{background:var(--paper-3)}
   .tx-meta{margin-top:7px;font-family:var(--mono);font-size:12px;color:var(--ink-2);word-break:break-word}
   #msg{margin-top:10px;font-size:13px;color:var(--ink-2);white-space:pre-wrap}
@@ -115,7 +116,7 @@ const pageHTML = `<!doctype html>
       <input id="pick" type="file" multiple style="display:none">
     </div>
     <div class="tx-box" id="tx-box" hidden>
-      <div class="tx-top"><span class="tx-name" id="tx-name"></span><div class="tx-acts"><span class="tx-pct" id="tx-pct"></span><button type="button" class="tx-btn" id="tx-cancel">取消</button></div></div>
+      <div class="tx-top"><span class="tx-name" id="tx-name"></span><div class="tx-acts"><span class="tx-pct" id="tx-pct"></span><button type="button" class="tx-btn" id="tx-pause">暂停</button><button type="button" class="tx-btn danger" id="tx-cancel">取消</button></div></div>
       <div id="bar"><i></i></div>
       <div class="tx-meta" id="tx-meta"></div>
     </div>
@@ -164,8 +165,23 @@ const pageHTML = `<!doctype html>
     tr.appendChild(td1);tr.appendChild(td2);tr.appendChild(td3);tr.appendChild(td4);rows.appendChild(tr);
   }
   var busy = false;
-  var curXhr = null;
+  var upPaused = false;
   var upCancelled = false;
+  var upAbort = null;
+  var upSessionId = null;
+  var pauseWake = null;
+  var pauseBtn = document.getElementById("tx-pause");
+  var cancelBtn = document.getElementById("tx-cancel");
+  function wakePause(){
+    if(pauseWake){ var fn = pauseWake; pauseWake = null; fn(); }
+  }
+  function waitWhilePaused(){
+    return new Promise(function(resolve){
+      if(!upPaused || upCancelled){ resolve(); return; }
+      pauseWake = resolve;
+    });
+  }
+  function sleepMs(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
   function load(){
     fetch(base+"/api/list",{cache:"no-store"}).then(function(r){return r.json()}).then(function(j){
       if(j.name){ document.getElementById("peer").textContent = "已连接设备：" + j.name + "（局域网直连）"; }
@@ -190,75 +206,149 @@ const pageHTML = `<!doctype html>
     if(note) parts.push(note);
     txMeta.textContent = parts.join(" · ");
   }
-  function send(files){
+  async function uploadOne(f, idx, totalFiles){
+    var fsize = f.size || 0;
+    var label = (totalFiles > 1 ? ("(" + idx + "/" + totalFiles + ") ") : "") + f.name;
+    var ac = new AbortController();
+    upAbort = ac;
+    var initResp = await fetch(base + "/api/upload/init", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({name: f.name, size: fsize, batch_count: totalFiles}),
+      signal: ac.signal
+    });
+    if(!initResp.ok){
+      throw new Error("初始化失败 " + initResp.status + " " + (await initResp.text()));
+    }
+    var initData = await initResp.json();
+    upSessionId = initData.id;
+    var CHUNK = 512 * 1024;
+    var off = 0;
+    var start = performance.now();
+    var samples = [{ t: start, b: 0 }];
+    var lastUi = 0;
+    showTx("上传中：" + label, 0, fsize, 0);
+    while(off < fsize){
+      if(upCancelled) throw new Error("__CANCELLED__");
+      if(upPaused){
+        showTx("已暂停：" + label, off, fsize, 0, "已暂停");
+        await waitWhilePaused();
+        if(upCancelled) throw new Error("__CANCELLED__");
+        samples = [{ t: performance.now(), b: off }];
+      }
+      var end = Math.min(off + CHUNK, fsize);
+      var slice = f.slice(off, end);
+      ac = new AbortController();
+      upAbort = ac;
+      var resp = await fetch(base + "/api/upload/chunk?id=" + encodeURIComponent(upSessionId) + "&offset=" + off, {
+        method: "POST",
+        body: slice,
+        signal: ac.signal
+      });
+      if(resp.status === 409){
+        var st = {};
+        try{ st = await resp.json(); }catch(e){}
+        if(st.cancelled) throw new Error("__CANCELLED__");
+        if(st.paused){
+          showTx("已暂停：" + label, off, fsize, 0, "对端已暂停");
+          while(!upCancelled){
+            await sleepMs(450);
+            if(upCancelled) throw new Error("__CANCELLED__");
+            var sr = await fetch(base + "/api/upload/status?id=" + encodeURIComponent(upSessionId), {cache:"no-store"});
+            if(!sr.ok) throw new Error("__CANCELLED__");
+            var sj = await sr.json();
+            if(sj.cancelled) throw new Error("__CANCELLED__");
+            if(!sj.paused) break;
+          }
+          samples = [{ t: performance.now(), b: off }];
+          continue;
+        }
+      }
+      if(!resp.ok){
+        throw new Error("分块失败 " + resp.status + " " + (await resp.text()));
+      }
+      off = end;
+      var now = performance.now();
+      if(now - lastUi >= 100 || off >= fsize){
+        lastUi = now;
+        samples.push({ t: now, b: off });
+        while(samples.length > 2 && now - samples[0].t > 2000) samples.shift();
+        var dt = (now - samples[0].t) / 1000, db = off - samples[0].b;
+        var bps = (dt >= 0.15 && db > 0) ? (db / dt) : ((now - start) >= 150 && off > 0 ? (off / ((now - start) / 1000)) : 0);
+        showTx("上传中：" + label, off, fsize, bps, off >= fsize ? "对方校验保存中…" : "");
+      }
+    }
+    if(upCancelled) throw new Error("__CANCELLED__");
+    pauseBtn.disabled = true;
+    ac = new AbortController();
+    upAbort = ac;
+    var finResp = await fetch(base + "/api/upload/finish?id=" + encodeURIComponent(upSessionId), {
+      method: "POST",
+      signal: ac.signal
+    });
+    upSessionId = null;
+    upAbort = null;
+    if(!finResp.ok){
+      throw new Error("收尾失败 " + finResp.status + " " + (await finResp.text()));
+    }
+    var totalDt = (performance.now() - start) / 1000;
+    var avgSpd = (totalDt >= 0.1 && fsize > 0) ? fmtSpeed(fsize / totalDt) : "";
+    msg.textContent = "上传完成：" + f.name + (avgSpd ? "（平均 " + avgSpd + "）" : "");
+  }
+  async function send(files){
     if(!files || !files.length) return;
     if(busy){ msg.textContent="正在上传中，请稍候"; return; }
     var list = Array.prototype.slice.call(files);
     var totalFiles = list.length;
-    var idx = 0;
     busy = true;
+    upPaused = false;
     upCancelled = false;
+    upSessionId = null;
+    upAbort = null;
+    pauseBtn.textContent = "暂停";
+    pauseBtn.disabled = false;
     msg.textContent = "";
-    function next(){
-      if(upCancelled){
-        busy = false; curXhr = null; txBox.hidden = true;
+    try{
+      for(var i = 0; i < totalFiles; i++){
+        pauseBtn.disabled = false;
+        await uploadOne(list[i], i + 1, totalFiles);
+      }
+      if(totalFiles > 1) msg.textContent = "全部上传完成（共 " + totalFiles + " 个文件）";
+    }catch(e){
+      if(upSessionId){
+        fetch(base + "/api/upload/cancel?id=" + encodeURIComponent(upSessionId), {method: "POST"}).catch(function(){});
+        upSessionId = null;
+      }
+      if(upCancelled || (e && (e.name === "AbortError" || e.message === "__CANCELLED__"))){
         msg.textContent = "已取消上传";
-        load();
-        return;
+      }else{
+        msg.textContent = "上传失败：" + (e && e.message ? e.message : String(e));
       }
-      if(idx >= list.length){
-        busy = false;
-        curXhr = null;
-        txBox.hidden = true;
-        msg.textContent = totalFiles > 1 ? ("全部上传完成（共 " + totalFiles + " 个文件）") : msg.textContent;
-        load();
-        return;
-      }
-      var f = list[idx++];
-      var fsize = f.size || 0;
-      var label = "上传中：" + (totalFiles > 1 ? ("(" + idx + "/" + totalFiles + ") ") : "") + f.name;
-      var start = performance.now();
-      var samples = [{ t: start, b: 0 }];
-      var fd = new FormData();
-      fd.append("file", f, f.name);
-      showTx(label, 0, fsize, 0);
-      var xhr = new XMLHttpRequest();
-      curXhr = xhr;
-      xhr.open("POST", base+"/upload");
-      xhr.setRequestHeader("X-File-Size", String(fsize));
-      xhr.upload.onprogress = function(e){
-        var total = fsize > 0 ? fsize : (e.lengthComputable ? e.total : 0);
-        var loaded = total > 0 ? Math.min(total, e.loaded) : e.loaded;
-        var now = performance.now();
-        samples.push({ t: now, b: loaded });
-        while(samples.length > 2 && now - samples[0].t > 2000) samples.shift();
-        var dt = (now - samples[0].t) / 1000, db = loaded - samples[0].b;
-        var bps = (dt >= 0.15 && db > 0) ? (db / dt) : ((now - start) >= 150 && loaded > 0 ? (loaded / ((now - start) / 1000)) : 0);
-        var note = (total === 0 || loaded >= total) ? "对方校验保存中…" : "";
-        showTx(label, loaded, total, bps, note);
-      };
-      xhr.onload = function(){
-        if(curXhr === xhr) curXhr = null;
-        if(xhr.status !== 200){
-          busy = false; txBox.hidden = true;
-          msg.textContent = "上传失败：" + xhr.status + " " + (xhr.responseText || "");
-          return;
-        }
-        var totalDt = (performance.now() - start) / 1000;
-        var avgSpd = (totalDt >= 0.1 && fsize > 0) ? fmtSpeed(fsize / totalDt) : "";
-        msg.textContent = "上传完成：" + f.name + (avgSpd ? "（平均 " + avgSpd + "）" : "");
-        next();
-      };
-      xhr.onerror = function(){ curXhr = null; busy = false; txBox.hidden = true; msg.textContent = "上传失败：网络错误"; };
-      xhr.onabort = function(){ curXhr = null; busy = false; txBox.hidden = true; msg.textContent = "已取消上传"; load(); };
-      xhr.send(fd);
+    }finally{
+      busy = false;
+      upPaused = false;
+      upAbort = null;
+      wakePause();
+      txBox.hidden = true;
+      load();
     }
-    next();
   }
-  document.getElementById("tx-cancel").onclick = function(){
+  pauseBtn.onclick = function(){
+    if(!busy || upCancelled) return;
+    upPaused = !upPaused;
+    pauseBtn.textContent = upPaused ? "继续" : "暂停";
+    if(!upPaused) wakePause();
+  };
+  cancelBtn.onclick = function(){
     if(!busy) return;
     upCancelled = true;
-    if(curXhr) curXhr.abort();
+    upPaused = false;
+    wakePause();
+    if(upAbort) upAbort.abort();
+    if(upSessionId){
+      fetch(base + "/api/upload/cancel?id=" + encodeURIComponent(upSessionId), {method: "POST"}).catch(function(){});
+      upSessionId = null;
+    }
   };
   var drop=document.getElementById("drop");
   var pick=document.getElementById("pick");

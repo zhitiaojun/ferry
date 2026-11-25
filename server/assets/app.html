@@ -211,6 +211,7 @@
           <span class="tx-name" id="dl-name"></span>
           <div class="tx-acts">
             <span class="tx-pct" id="dl-pct"></span>
+            <button type="button" class="tx-btn" id="dl-pause">暂停</button>
             <button type="button" class="tx-btn danger" id="dl-cancel">取消</button>
           </div>
         </div>
@@ -312,9 +313,20 @@
     if (state.put) {
       if (state.put.drainTimer) { clearInterval(state.put.drainTimer); state.put.drainTimer = null; }
       if (state.put.pauseTimer) { clearInterval(state.put.pauseTimer); state.put.pauseTimer = null; }
+      state.put.aborted = true;
     }
     state.put = null;
     if ($('up-pause')) { $('up-pause').textContent = '暂停'; $('up-pause').disabled = false; }
+  }
+
+  function clearGetJob(abortWritable) {
+    var g = state.get;
+    state.get = null;
+    if (g && g.writable && abortWritable) {
+      try { g.writeQueue.catch(function () {}).then(function () { return g.writable.abort(); }); } catch (e) {}
+    }
+    if ($('dl-pause')) { $('dl-pause').textContent = '暂停'; $('dl-pause').disabled = false; }
+    hideTx('dl');
   }
 
   function reconnectAfterCancel(msg) {
@@ -336,10 +348,10 @@
     });
   }
 
-  function togglePutPause() {
+  function setPutPausedUI(paused, byHost) {
     var p = state.put;
-    if (!p || !p.buf || !state.ws) return;
-    p.paused = !p.paused;
+    if (!p || !state.ws) return;
+    p.paused = paused;
     $('up-pause').textContent = p.paused ? '继续' : '暂停';
     var label = (p.totalFiles > 1 ? '(' + p.idx + '/' + p.totalFiles + ') ' : '') + p.name;
     var actualSent = Math.max(0, Math.min(p.total, p.off - (state.ws ? state.ws.bufferedAmount : 0)));
@@ -353,8 +365,9 @@
           relaySend({ t: 'list' });
         }, 15000);
       }
-      showTx('up', '已暂停：' + label, actualSent, p.total, 0, '已暂停');
-      setStatus('已暂停上传：' + p.name);
+      var note = byHost ? '对方已暂停' : '已暂停';
+      showTx('up', '已暂停：' + label, actualSent, p.total, 0, note);
+      setStatus((byHost ? '对方已暂停上传：' : '已暂停上传：') + p.name);
       return;
     }
     if (p.pauseTimer) { clearInterval(p.pauseTimer); p.pauseTimer = null; }
@@ -362,6 +375,37 @@
     showTx('up', '上传中：' + label, actualSent, p.total, 0);
     setStatus('继续上传：' + p.name);
     if (p.resumeFn) p.resumeFn();
+  }
+
+  function togglePutPause() {
+    var p = state.put;
+    if (!p || !state.ws || p.aborted) return;
+    var next = !p.paused;
+    relaySend({ t: next ? 'put.pause' : 'put.resume' });
+    setPutPausedUI(next, false);
+  }
+
+  function setGetPausedUI(paused, note) {
+    var g = state.get;
+    if (!g) return;
+    g.paused = paused;
+    $('dl-pause').textContent = paused ? '继续' : '暂停';
+    if (paused) {
+      showTx('dl', '已暂停：' + g.name, g.have, g.size, 0, note || '已暂停');
+      setStatus((note || '已暂停下载') + '：' + g.name);
+    } else {
+      g.tracker = makeSpeedTracker();
+      showTx('dl', '下载中：' + g.name, g.have, g.size, 0);
+      setStatus('继续下载：' + g.name);
+    }
+  }
+
+  function toggleGetPause() {
+    var g = state.get;
+    if (!g || !state.ws) return;
+    var next = !g.paused;
+    relaySend({ t: next ? 'get.pause' : 'get.resume' });
+    setGetPausedUI(next, next ? '已暂停' : '');
   }
 
   function startTTL(sec) {
@@ -379,7 +423,7 @@
 
   function closeRelay() {
     var old = state.ws;
-    state.ws = null; state.get = null; clearPutJob(); state.putNext = null;
+    state.ws = null; clearGetJob(true); clearPutJob(); state.putNext = null;
     hideTx('up'); hideTx('dl');
     if (old) {
       old.onopen = old.onmessage = old.onerror = old.onclose = null;
@@ -474,11 +518,74 @@
 
   function relaySend(obj) { if (state.ws) state.ws.send(JSON.stringify(obj)); }
 
-  function sha256Hex(buf) {
-    if (!window.crypto || !crypto.subtle) return Promise.resolve(null);
-    return crypto.subtle.digest('SHA-256', buf).then(function (d) {
-      return Array.from(new Uint8Array(d)).map(function (x) { return x.toString(16).padStart(2, '0'); }).join('');
-    });
+  // Streaming pure-JS SHA-256 so large downloads compute hashes incrementally
+  // without holding an entire duplicate ArrayBuffer in RAM.
+  var SHA256_K = [
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+  ];
+  function makeSha256() {
+    var H = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+    var buf = new Uint8Array(64), bufLen = 0, total = 0, w = new Int32Array(64);
+    function compress(block, off) {
+      for (var i = 0; i < 16; i++) {
+        var j = off + i * 4;
+        w[i] = (block[j] << 24) | (block[j + 1] << 16) | (block[j + 2] << 8) | block[j + 3];
+      }
+      for (i = 16; i < 64; i++) {
+        var s0 = ((w[i - 15] >>> 7) | (w[i - 15] << 25)) ^ ((w[i - 15] >>> 18) | (w[i - 15] << 14)) ^ (w[i - 15] >>> 3);
+        var s1 = ((w[i - 2] >>> 17) | (w[i - 2] << 15)) ^ ((w[i - 2] >>> 19) | (w[i - 2] << 13)) ^ (w[i - 2] >>> 10);
+        w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0;
+      }
+      var a = H[0], b = H[1], c = H[2], d = H[3], e = H[4], f = H[5], g = H[6], h = H[7];
+      for (i = 0; i < 64; i++) {
+        var S1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7));
+        var ch = (e & f) ^ (~e & g);
+        var t1 = (h + S1 + ch + SHA256_K[i] + w[i]) | 0;
+        var S0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10));
+        var maj = (a & b) ^ (a & c) ^ (b & c);
+        var t2 = (S0 + maj) | 0;
+        h = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+      }
+      H[0] = (H[0] + a) | 0; H[1] = (H[1] + b) | 0; H[2] = (H[2] + c) | 0; H[3] = (H[3] + d) | 0;
+      H[4] = (H[4] + e) | 0; H[5] = (H[5] + f) | 0; H[6] = (H[6] + g) | 0; H[7] = (H[7] + h) | 0;
+    }
+    return {
+      update: function (u8) {
+        total += u8.length;
+        var pos = 0;
+        if (bufLen > 0) {
+          var take = Math.min(64 - bufLen, u8.length);
+          buf.set(u8.subarray(0, take), bufLen);
+          bufLen += take; pos += take;
+          if (bufLen === 64) { compress(buf, 0); bufLen = 0; }
+        }
+        while (pos + 64 <= u8.length) { compress(u8, pos); pos += 64; }
+        if (pos < u8.length) { buf.set(u8.subarray(pos), 0); bufLen = u8.length - pos; }
+      },
+      hex: function () {
+        var pad = new Uint8Array(bufLen < 56 ? 64 : 128);
+        pad.set(buf.subarray(0, bufLen), 0);
+        pad[bufLen] = 0x80;
+        var bitHi = Math.floor(total / 0x20000000);
+        var bitLo = (total * 8) >>> 0;
+        var lenOff = pad.length - 8;
+        pad[lenOff] = (bitHi >>> 24) & 0xff; pad[lenOff + 1] = (bitHi >>> 16) & 0xff;
+        pad[lenOff + 2] = (bitHi >>> 8) & 0xff; pad[lenOff + 3] = bitHi & 0xff;
+        pad[lenOff + 4] = (bitLo >>> 24) & 0xff; pad[lenOff + 5] = (bitLo >>> 16) & 0xff;
+        pad[lenOff + 6] = (bitLo >>> 8) & 0xff; pad[lenOff + 7] = bitLo & 0xff;
+        for (var off = 0; off < pad.length; off += 64) compress(pad, off);
+        var out = '';
+        for (var i = 0; i < 8; i++) out += (H[i] >>> 0).toString(16).padStart(8, '0');
+        return out;
+      }
+    };
   }
 
   function wireRelay(ws) {
@@ -487,10 +594,18 @@
       if (typeof ev.data === 'string') { relayControl(ev.data); return; }
       var g = state.get;
       if (g) {
-        g.chunks.push(ev.data);
-        g.have += ev.data.byteLength;
+        var u8 = new Uint8Array(ev.data);
+        g.sha.update(u8);
+        if (g.writable) {
+          g.writeQueue = g.writeQueue.then(function () {
+            return g.writable.write(u8);
+          });
+        } else {
+          g.chunks.push(u8);
+        }
+        g.have += u8.byteLength;
         var now = performance.now();
-        if (now - g.lastUi >= 100 || (g.size > 0 && g.have >= g.size)) {
+        if (!g.paused && (now - g.lastUi >= 100 || (g.size > 0 && g.have >= g.size))) {
           g.lastUi = now;
           var bps = g.tracker.update(g.have);
           showTx('dl', '下载中：' + g.name, g.have, g.size, bps);
@@ -499,7 +614,7 @@
     };
     ws.onclose = function () {
       if (state.ws !== ws) return;
-      state.ws = null; state.get = null; clearPutJob(); state.putNext = null;
+      state.ws = null; clearGetJob(true); clearPutJob(); state.putNext = null;
       hideTx('up'); hideTx('dl');
       setBadge('failed', '连接已断开');
       setStatus('与发起端的连接已断开，如对方仍在线可点击「重新连接」');
@@ -512,32 +627,68 @@
     try { msg = JSON.parse(text); } catch (e) { return; }
     if (msg.t === 'files') { render(msg.files || []); return; }
     if (msg.t === 'get.begin') {
-      state.get = { name: msg.name, size: msg.size || 0, chunks: [], have: 0, tracker: makeSpeedTracker(), lastUi: 0 };
+      if (!state.get) {
+        state.get = { name: msg.name, size: msg.size || 0, chunks: [], writable: null, writeQueue: Promise.resolve(), sha: makeSha256(), have: 0, paused: false, tracker: makeSpeedTracker(), lastUi: 0 };
+      } else {
+        state.get.name = msg.name;
+        state.get.size = msg.size || 0;
+      }
       showTx('dl', '下载中：' + msg.name, 0, msg.size || 0, 0);
       setStatus('下载中：' + msg.name);
       return;
     }
+    if (msg.t === 'get.paused') {
+      setGetPausedUI(true, msg.by === 'host' ? '对方已暂停' : '已暂停');
+      return;
+    }
+    if (msg.t === 'get.resumed') {
+      setGetPausedUI(false, '');
+      return;
+    }
+    if (msg.t === 'get.cancelled') {
+      clearGetJob(true);
+      setStatus('已取消下载');
+      return;
+    }
     if (msg.t === 'get.end') {
-      var g = state.get; state.get = null;
+      var g = state.get;
+      state.get = null;
       if (!g) return;
+      if ($('dl-pause')) { $('dl-pause').textContent = '暂停'; $('dl-pause').disabled = false; }
       var avgBps = g.tracker ? g.tracker.avg(g.have) : 0;
-      showTx('dl', '下载中：' + g.name, g.size || g.have, g.size || g.have, 0, '正在校验 SHA-256…');
-      var blob = new Blob(g.chunks);
-      blob.arrayBuffer().then(function (buf) {
-        return sha256Hex(buf).then(function (h) {
+      var h = g.sha.hex();
+      var finish = function () {
+        hideTx('dl');
+        var spd = fmtSpeed(avgBps);
+        var note = !h ? '' : (msg.sha256 && msg.sha256 !== h ? '（哈希不一致！）' : '（SHA-256 校验通过）');
+        setStatus('下载完成：' + g.name + ' · ' + fmtSize(g.have) + (spd ? ' · 平均 ' + spd : '') + note);
+      };
+      if (g.writable) {
+        showTx('dl', '下载中：' + g.name, g.size || g.have, g.size || g.have, 0, '正在写入磁盘…');
+        g.writeQueue.then(function () { return g.writable.close(); }).then(finish).catch(function (e) {
           hideTx('dl');
-          var spd = fmtSpeed(avgBps);
-          var note = !h ? '' : (msg.sha256 && msg.sha256 !== h ? '（哈希不一致！）' : '（SHA-256 校验通过）');
-          setStatus('下载完成：' + g.name + ' · ' + fmtSize(buf.byteLength) + (spd ? ' · 平均 ' + spd : '') + note);
-          var url = URL.createObjectURL(blob);
-          var a = document.createElement('a');
-          a.href = url; a.download = g.name; document.body.appendChild(a); a.click();
-          setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 4000);
+          setStatus('保存文件失败：' + (e && e.message ? e.message : String(e)));
         });
-      });
+      } else {
+        var blob = new Blob(g.chunks);
+        g.chunks = null;
+        finish();
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url; a.download = g.name; document.body.appendChild(a); a.click();
+        setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 4000);
+      }
       return;
     }
     if (msg.t === 'put.ready') { if (state.put) { state.put.name = msg.name; pumpPut(); } return; }
+    if (msg.t === 'put.pause') { setPutPausedUI(true, true); return; }
+    if (msg.t === 'put.resume') { setPutPausedUI(false, false); return; }
+    if (msg.t === 'put.cancelled') {
+      clearPutJob(); state.putNext = null;
+      hideTx('up');
+      setStatus('已取消上传');
+      return;
+    }
     if (msg.t === 'put.ok') {
       var prevPut = state.put;
       clearPutJob();
@@ -549,19 +700,42 @@
       return;
     }
     if (msg.t === 'err') {
-      state.get = null; clearPutJob(); state.putNext = null;
+      clearGetJob(true); clearPutJob(); state.putNext = null;
       hideTx('up'); hideTx('dl');
       setStatus('传输失败：' + msg.msg);
     }
   }
 
-  function relayDownload(name) {
+  function startRelayGet(name, writable) {
     if (!state.ws) return;
-    if (state.get) { setStatus('已有文件正在下载，请稍候'); return; }
-    state.get = { name: name, size: 0, chunks: [], have: 0, tracker: makeSpeedTracker(), lastUi: 0 };
+    state.get = {
+      name: name, size: 0, chunks: writable ? null : [], writable: writable, writeQueue: Promise.resolve(),
+      sha: makeSha256(), have: 0, paused: false, tracker: makeSpeedTracker(), lastUi: 0
+    };
+    if ($('dl-pause')) { $('dl-pause').textContent = '暂停'; $('dl-pause').disabled = false; }
     showTx('dl', '正在请求下载：' + name, 0, 0, 0);
     setStatus('正在请求下载：' + name);
     relaySend({ t: 'get', name: name });
+  }
+
+  function relayDownload(name) {
+    if (!state.ws) return;
+    if (state.get) { setStatus('已有文件正在下载，请稍候'); return; }
+    if (typeof window.showSaveFilePicker === 'function') {
+      window.showSaveFilePicker({ suggestedName: name }).then(function (handle) {
+        return handle.createWritable();
+      }).then(function (writable) {
+        startRelayGet(name, writable);
+      }).catch(function (err) {
+        if (err && err.name === 'AbortError') {
+          setStatus('已取消保存');
+          return;
+        }
+        startRelayGet(name, null);
+      });
+      return;
+    }
+    startRelayGet(name, null);
   }
 
   function uploadFiles(files) {
@@ -581,25 +755,15 @@
       doneCount++;
       var job = {
         file: f, idx: doneCount, totalFiles: total, total: f.size || 0,
-        buf: null, off: 0, name: f.name, tracker: makeSpeedTracker(), drainTimer: null, pauseTimer: null, paused: false, resumeFn: null, lastUi: 0
+        off: 0, name: f.name, tracker: makeSpeedTracker(), drainTimer: null, pauseTimer: null, paused: false, aborted: false, resumeFn: null, lastUi: 0
       };
       state.put = job;
       $('up-pause').textContent = '暂停';
       $('up-pause').disabled = false;
       var label = (total > 1 ? '(' + doneCount + '/' + total + ') ' : '') + f.name;
       showTx('up', '准备上传：' + label, 0, job.total, 0);
-      setStatus('准备上传：' + f.name);
-      f.arrayBuffer().then(function (buf) {
-        if (state.put !== job || !state.ws) return;
-        job.buf = buf;
-        job.total = buf.byteLength;
-        job.tracker = makeSpeedTracker();
-        showTx('up', '上传中：' + label, 0, job.total, 0);
-        setStatus('上传中：' + f.name);
-        relaySend({ t: 'put.begin', name: f.name, size: f.size });
-      }).catch(function (e) {
-        if (state.put === job) { clearPutJob(); state.putNext = null; hideTx('up'); setStatus('读取失败：' + e); }
-      });
+      setStatus('上传中：' + f.name);
+      relaySend({ t: 'put.begin', name: f.name, size: job.total });
     };
     state.putNext = next;
     next();
@@ -608,7 +772,7 @@
   function pumpPut() {
     var p = state.put;
     if (!p) return;
-    var CH = 256 * 1024, HIGH_WATER = 2 * 1024 * 1024, BURST = 8;
+    var CH = 256 * 1024, HIGH_WATER = 2 * 1024 * 1024;
     var label = (p.totalFiles > 1 ? '(' + p.idx + '/' + p.totalFiles + ') ' : '') + p.name;
     var renderPutProgress = function (force) {
       if (!state.put || state.put !== p || !state.ws) return 0;
@@ -627,17 +791,35 @@
       }
       return actualSent;
     };
-    var step = function () {
-      if (!state.put || state.put !== p || !state.ws || p.paused) return;
-      var sent = 0;
-      while (!p.paused && p.off < p.total && state.ws.bufferedAmount < HIGH_WATER && sent < BURST) {
-        var end = Math.min(p.off + CH, p.total);
-        state.ws.send(p.buf.slice(p.off, end));
-        p.off = end; sent++;
+    var pumping = false;
+    var step = async function () {
+      if (pumping) return;
+      pumping = true;
+      try {
+        while (state.put === p && state.ws && !p.paused && !p.aborted && p.off < p.total) {
+          if (state.ws.bufferedAmount >= HIGH_WATER) {
+            renderPutProgress(false);
+            await new Promise(function (r) { setTimeout(r, 20); });
+            continue;
+          }
+          var end = Math.min(p.off + CH, p.total);
+          var ab = await p.file.slice(p.off, end).arrayBuffer();
+          if (!state.put || state.put !== p || !state.ws || p.aborted) return;
+          if (p.paused) return;
+          state.ws.send(ab);
+          p.off = end;
+          renderPutProgress(p.off >= p.total);
+        }
+      } catch (e) {
+        if (state.put === p && !p.aborted) {
+          clearPutJob(); state.putNext = null; hideTx('up');
+          setStatus('读取或上传失败：' + (e && e.message ? e.message : String(e)));
+        }
+        return;
+      } finally {
+        pumping = false;
       }
-      renderPutProgress(p.off >= p.total);
-      if (p.paused) return;
-      if (p.off < p.total) { setTimeout(step, 20); return; }
+      if (!state.put || state.put !== p || !state.ws || p.paused || p.aborted || p.off < p.total) return;
       $('up-pause').disabled = true;
       relaySend({ t: 'put.end' });
       if (!p.drainTimer) {
@@ -661,11 +843,25 @@
   $('up-pause').addEventListener('click', togglePutPause);
   $('up-cancel').addEventListener('click', function () {
     if (!state.put) return;
-    reconnectAfterCancel('已取消上传');
+    if (!state.ws || state.ws.readyState !== 1) {
+      reconnectAfterCancel('已取消上传');
+      return;
+    }
+    clearPutJob(); state.putNext = null;
+    hideTx('up');
+    relaySend({ t: 'put.cancel' });
+    setStatus('已取消上传');
   });
+  $('dl-pause').addEventListener('click', toggleGetPause);
   $('dl-cancel').addEventListener('click', function () {
     if (!state.get) return;
-    reconnectAfterCancel('已取消下载');
+    if (!state.ws || state.ws.readyState !== 1) {
+      reconnectAfterCancel('已取消下载');
+      return;
+    }
+    clearGetJob(true);
+    relaySend({ t: 'get.cancel' });
+    setStatus('已取消下载');
   });
 
   $('go').addEventListener('click', connectByCode);

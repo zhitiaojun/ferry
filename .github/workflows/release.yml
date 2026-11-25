@@ -59,7 +59,7 @@ jobs:
           Copy-Item deploy/msix/ft.ico cmd/ft-setup/payload/menu/ -Force
           Copy-Item deploy/msix/Assets/*.png cmd/ft-setup/payload/menu/Assets/ -Force
 
-          go build -trimpath -ldflags="-H=windowsgui" -o out/windows/ferry-setup-windows-amd64.exe ./cmd/ft-setup
+          go build -trimpath -ldflags="-H=windowsgui -X main.version=$ver" -o out/windows/ferry-setup-windows-amd64.exe ./cmd/ft-setup
           go vet ./...
           go test -count=1 ./cmd/ferry ./cmd/ft-desktop
       - uses: actions/upload-artifact@v4

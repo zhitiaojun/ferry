@@ -111,3 +111,52 @@ func TestWriteTempTextFile(t *testing.T) {
 		t.Fatalf("content = %q, want %q", string(got), want)
 	}
 }
+
+func TestServerConfigPersistenceAndValidation(t *testing.T) {
+	tmp := t.TempDir()
+	sp := filepath.Join(tmp, "settings.json")
+	a := newApp(defaultReceiveDir(), 18800)
+	a.settingsPath = sp
+	a.signalURL = "wss://ferry.cwlindean.cn/signal"
+	a.webBase = "https://ferry.cwlindean.cn"
+	a.stunServers = splitSTUNList("123.57.253.208:40000,123.57.253.208:40001")
+
+	if a.isCustomServerConfig() {
+		t.Fatal("default server config should not be marked custom")
+	}
+	if err := a.setServerConfig("http://bad", "", ""); err == nil {
+		t.Fatal("expected invalid signal scheme rejected")
+	}
+	if err := a.setServerConfig("", "ftp://bad", ""); err == nil {
+		t.Fatal("expected invalid web scheme rejected")
+	}
+	if err := a.setServerConfig("", "", "bad-stun"); err == nil {
+		t.Fatal("expected invalid stun rejected")
+	}
+
+	if err := a.setServerConfig("wss://self.example.com/signal", "https://self.example.com/", "1.2.3.4:3478, 5.6.7.8:3479"); err != nil {
+		t.Fatalf("setServerConfig: %v", err)
+	}
+	if !a.isCustomServerConfig() {
+		t.Fatal("expected isCustomServerConfig=true")
+	}
+	sig, web, stun := a.serverConfig()
+	if sig != "wss://self.example.com/signal" || web != "https://self.example.com" || stun != "1.2.3.4:3478,5.6.7.8:3479" {
+		t.Fatalf("serverConfig = %q, %q, %q", sig, web, stun)
+	}
+	loaded := loadDesktopSettings(sp)
+	if loaded.SignalURL != sig || loaded.WebBaseURL != web || loaded.STUNServers != stun {
+		t.Fatalf("persisted server config = %+v", loaded)
+	}
+
+	if err := a.resetServerConfig(); err != nil {
+		t.Fatalf("resetServerConfig: %v", err)
+	}
+	if a.isCustomServerConfig() {
+		t.Fatal("expected isCustomServerConfig=false after reset")
+	}
+	reloaded := loadDesktopSettings(sp)
+	if reloaded.SignalURL != "" || reloaded.WebBaseURL != "" || reloaded.STUNServers != "" {
+		t.Fatalf("expected persisted server overrides cleared, got %+v", reloaded)
+	}
+}

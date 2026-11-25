@@ -27,6 +27,7 @@ const (
 	DefaultChunkSize uint32 = 262144
 	MaxFiles                = 1024
 	MaxNameLen              = 255
+	MaxRelPathLen           = 1024
 	MaxDeviceName           = 64
 	MaxErrorMessage         = 512
 )
@@ -142,7 +143,7 @@ func (m *Manifest) Encode() ([]byte, error) {
 	w.u32(uint32(len(m.Files)))
 	for i := range m.Files {
 		f := &m.Files[i]
-		if len(f.Name) > MaxNameLen {
+		if len(f.Name) > MaxRelPathLen {
 			return nil, NewError(CodeManifestInvalid, "file name too long")
 		}
 		w.str(f.Name)
@@ -169,7 +170,7 @@ func ParseManifest(p []byte) (*Manifest, error) {
 	m.Files = make([]FileEntry, 0, count)
 	for i := uint32(0); i < count; i++ {
 		var f FileEntry
-		f.Name = r.str(MaxNameLen)
+		f.Name = r.str(MaxRelPathLen)
 		f.Size = r.u64()
 		f.MtimeMS = r.i64()
 		copy(f.SHA256[:], r.array(32))
@@ -201,18 +202,34 @@ func (m *Manifest) Validate() error {
 	return nil
 }
 
-// ValidateFileName enforces the receiver-side name rules of §3.4.
+// ValidateFileName enforces the receiver-side name/relative-path rules of §3.4.
+// Single files use a plain file name; folder transfers use POSIX '/' separated
+// relative paths without traversal, backslashes, colons, or NUL bytes.
 func ValidateFileName(name string) error {
-	if len(name) == 0 || len(name) > MaxNameLen {
+	if len(name) == 0 || len(name) > MaxRelPathLen {
 		return NewError(CodeManifestInvalid, "file name length out of range")
 	}
-	if name == "." || name == ".." {
-		return NewError(CodeManifestInvalid, "file name must not be . or ..")
+	if name[0] == '/' || name[len(name)-1] == '/' {
+		return NewError(CodeManifestInvalid, "file name must not start or end with /")
 	}
 	for _, c := range name {
-		if c == '/' || c == '\\' || c == 0 {
-			return NewError(CodeManifestInvalid, "file name contains a path separator or NUL")
+		if c == '\\' || c == 0 || c == ':' {
+			return NewError(CodeManifestInvalid, "file name contains an unsafe character or NUL")
 		}
+	}
+	start := 0
+	for i := 0; i <= len(name); i++ {
+		if i < len(name) && name[i] != '/' {
+			continue
+		}
+		seg := name[start:i]
+		if len(seg) == 0 || len(seg) > MaxNameLen {
+			return NewError(CodeManifestInvalid, "path segment length out of range")
+		}
+		if seg == "." || seg == ".." {
+			return NewError(CodeManifestInvalid, "file name must not contain . or ..")
+		}
+		start = i + 1
 	}
 	return nil
 }

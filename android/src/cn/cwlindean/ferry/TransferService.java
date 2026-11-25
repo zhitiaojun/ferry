@@ -1,4 +1,4 @@
-package cn.cwlindean.ft;
+package cn.cwlindean.ferry;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -61,17 +61,116 @@ import mobile.Mobile;
  */
 public class TransferService extends Service implements EventListener {
     private static final String TAG = "FerryService";
-    static final String CHANNEL_STATUS = "ft-transfer";
-    static final String CHANNEL_RECEIVED = "ft-received";
+    static final String CHANNEL_STATUS = "ferry-transfer";
+    static final String CHANNEL_RECEIVED = "ferry-received";
     static final int NOTIFICATION_ID = 1;
     private static final int RECV_NOTIF_BASE = 200;
 
-    static final String ACTION_START_RECV = "cn.cwlindean.ft.ACTION_START_RECV";
-    static final String ACTION_STOP_RECV = "cn.cwlindean.ft.ACTION_STOP_RECV";
-    static final String ACTION_UPDATE_TEXT = "cn.cwlindean.ft.ACTION_UPDATE_TEXT";
-    static final String ACTION_SWEEP_INBOX = "cn.cwlindean.ft.ACTION_SWEEP_INBOX";
+    static final String ACTION_START_RECV = "cn.cwlindean.ferry.ACTION_START_RECV";
+    static final String ACTION_STOP_RECV = "cn.cwlindean.ferry.ACTION_STOP_RECV";
+    static final String ACTION_UPDATE_TEXT = "cn.cwlindean.ferry.ACTION_UPDATE_TEXT";
+    static final String ACTION_SWEEP_INBOX = "cn.cwlindean.ferry.ACTION_SWEEP_INBOX";
 
-    static final String SIGNAL_URL = "wss://ferry.cwlindean.cn/signal";
+    static final String DEFAULT_SIGNAL_URL = "wss://ferry.cwlindean.cn/signal";
+    static final String DEFAULT_WEB_BASE_URL = "https://ferry.cwlindean.cn";
+    static final String DEFAULT_STUN_SERVERS = "";
+
+    public static String getSignalUrl(Context ctx) {
+        String v = prefs(ctx).getString("serverSignalUrl", "").trim();
+        return v.isEmpty() ? DEFAULT_SIGNAL_URL : v;
+    }
+
+    public static String getWebBaseUrl(Context ctx) {
+        String v = prefs(ctx).getString("serverWebBaseUrl", "").trim();
+        while (v.endsWith("/")) {
+            v = v.substring(0, v.length() - 1);
+        }
+        return v.isEmpty() ? DEFAULT_WEB_BASE_URL : v;
+    }
+
+    public static String getStunServers(Context ctx) {
+        return prefs(ctx).getString("serverStunServers", DEFAULT_STUN_SERVERS).trim();
+    }
+
+    public static boolean isCustomServer(Context ctx) {
+        SharedPreferences sp = prefs(ctx);
+        String sig = sp.getString("serverSignalUrl", "").trim();
+        String web = sp.getString("serverWebBaseUrl", "").trim();
+        String stun = sp.getString("serverStunServers", "").trim();
+        return (!sig.isEmpty() && !sig.equals(DEFAULT_SIGNAL_URL))
+                || (!web.isEmpty() && !web.equals(DEFAULT_WEB_BASE_URL))
+                || !stun.isEmpty();
+    }
+
+    public static String getServerHostLabel(Context ctx) {
+        String sig = getSignalUrl(ctx);
+        try {
+            Uri u = Uri.parse(sig);
+            String host = u.getHost();
+            if (host != null && !host.isEmpty()) {
+                int port = u.getPort();
+                return port > 0 ? (host + ":" + port) : host;
+            }
+        } catch (Exception ignored) {
+        }
+        return "ferry.cwlindean.cn";
+    }
+
+    public static String saveServerConfig(Context ctx, String signal, String webBase, String stun) {
+        String sig = signal == null ? "" : signal.trim();
+        if (!sig.isEmpty()) {
+            if (!(sig.startsWith("wss://") || sig.startsWith("ws://"))) {
+                return "信令地址必须以 wss:// 或 ws:// 开头";
+            }
+            Uri u = Uri.parse(sig);
+            if (u.getHost() == null || u.getHost().trim().isEmpty()) {
+                return "信令地址缺少主机名";
+            }
+            if (DEFAULT_SIGNAL_URL.equals(sig)) {
+                sig = "";
+            }
+        }
+        String web = webBase == null ? "" : webBase.trim();
+        while (web.endsWith("/")) {
+            web = web.substring(0, web.length() - 1);
+        }
+        if (!web.isEmpty()) {
+            if (!(web.startsWith("https://") || web.startsWith("http://"))) {
+                return "临时快传地址必须以 https:// 或 http:// 开头";
+            }
+            Uri u = Uri.parse(web);
+            if (u.getHost() == null || u.getHost().trim().isEmpty()) {
+                return "临时快传地址缺少主机名";
+            }
+            if (DEFAULT_WEB_BASE_URL.equals(web)) {
+                web = "";
+            }
+        }
+        String rawStun = stun == null ? "" : stun.trim();
+        StringBuilder normStun = new StringBuilder();
+        if (!rawStun.isEmpty()) {
+            String[] parts = rawStun.split(",");
+            for (String p : parts) {
+                String tok = p.trim();
+                if (tok.isEmpty()) {
+                    continue;
+                }
+                if (tok.contains(" ") || tok.contains("\t") || tok.contains("\n")) {
+                    return "STUN 服务器地址不能包含空白字符：" + tok;
+                }
+                if (normStun.length() > 0) {
+                    normStun.append(", ");
+                }
+                normStun.append(tok);
+            }
+        }
+        prefs(ctx).edit()
+                .putString("serverSignalUrl", sig)
+                .putString("serverWebBaseUrl", web)
+                .putString("serverStunServers", normStun.toString())
+                .apply();
+        return "";
+    }
 
     public interface UiBridge {
         void onServiceStateChanged(boolean running, String lanPort, String error);
@@ -256,8 +355,9 @@ public class TransferService extends Service implements EventListener {
             }
             try {
                 Mobile.setScreenAwake(screenAwake);
-                Mobile.startAutoReceive(name, inboxDir(this).getAbsolutePath(), SIGNAL_URL,
-                        keyFile(this).getAbsolutePath(), pairedFile(this).getAbsolutePath(), hint, "");
+                Mobile.startAutoReceive(name, inboxDir(this).getAbsolutePath(), getSignalUrl(this),
+                        keyFile(this).getAbsolutePath(), pairedFile(this).getAbsolutePath(), hint,
+                        getStunServers(this));
             } catch (Exception e) {
                 Log.e(TAG, "startAutoReceive", e);
                 errMsg = e.getMessage() != null ? e.getMessage() : "启动失败";
@@ -460,20 +560,22 @@ public class TransferService extends Service implements EventListener {
             Log.w(TAG, "drainReceived", e);
         }
 
-        // Sweep any leftover files staged before crash/restart.
-        File[] files = inboxDir(this).listFiles();
-        if (files != null) {
-            for (File f : files) {
-                if (f.isFile() && !f.getName().endsWith(".ftpart")) {
-                    String[] saved = exportStagedFile(this, f, f.getName());
-                    if (saved != null) {
-                        JSONObject rec = makeRecentJson(f.getName(), saved[0], guessMime(f.getName()), "", f.length(), f.lastModified(), "recv", "");
-                        appendRecentRecord(this, rec);
-                        exported.add(rec);
-                    }
-                }
+        // Sweep any leftover files staged before crash/restart (including nested folders).
+        List<String> leftoverRel = new ArrayList<>();
+        List<File> leftoverFiles = new ArrayList<>();
+        File inbox = inboxDir(this);
+        collectInboxFiles(inbox, "", leftoverRel, leftoverFiles);
+        for (int i = 0; i < leftoverFiles.size(); i++) {
+            File f = leftoverFiles.get(i);
+            String rel = leftoverRel.get(i);
+            String[] saved = exportStagedFile(this, f, rel);
+            if (saved != null) {
+                JSONObject rec = makeRecentJson(rel, saved[0], guessMime(rel), "", f.length(), f.lastModified(), "recv", "");
+                appendRecentRecord(this, rec);
+                exported.add(rec);
             }
         }
+        pruneEmptySubdirs(inbox, false);
 
         if (!exported.isEmpty()) {
             UiBridge b = sUiBridge;
@@ -875,8 +977,80 @@ public class TransferService extends Service implements EventListener {
         }
     }
 
+    private static void collectInboxFiles(File dir, String relPrefix, List<String> outRel, List<File> outFiles) {
+        if (dir == null || !dir.isDirectory()) {
+            return;
+        }
+        File[] children = dir.listFiles();
+        if (children == null) {
+            return;
+        }
+        for (File f : children) {
+            String name = f.getName();
+            if (".".equals(name) || "..".equals(name)) {
+                continue;
+            }
+            String rel = relPrefix.isEmpty() ? name : (relPrefix + "/" + name);
+            if (f.isDirectory()) {
+                collectInboxFiles(f, rel, outRel, outFiles);
+            } else if (f.isFile() && !name.endsWith(".ftpart")) {
+                outRel.add(rel);
+                outFiles.add(f);
+            }
+        }
+    }
+
+    private static void pruneEmptySubdirs(File dir, boolean deleteSelf) {
+        if (dir == null || !dir.isDirectory()) {
+            return;
+        }
+        File[] children = dir.listFiles();
+        if (children != null) {
+            for (File c : children) {
+                if (c.isDirectory()) {
+                    pruneEmptySubdirs(c, true);
+                }
+            }
+        }
+        if (deleteSelf) {
+            File[] rem = dir.listFiles();
+            if (rem == null || rem.length == 0) {
+                dir.delete();
+            }
+        }
+    }
+
+    private static List<String> sanitizeRelSegments(String relPath, String fallbackName) {
+        List<String> segs = new ArrayList<>();
+        if (relPath != null) {
+            String norm = relPath.replace('\\', '/');
+            for (String part : norm.split("/")) {
+                String p = part.trim();
+                if (p.isEmpty() || ".".equals(p) || "..".equals(p)) {
+                    continue;
+                }
+                segs.add(p);
+            }
+        }
+        if (segs.isEmpty()) {
+            segs.add((fallbackName == null || fallbackName.isEmpty()) ? "file" : fallbackName);
+        }
+        return segs;
+    }
+
     public static String[] exportStagedFile(Context ctx, File src, String fileName) {
-        String mime = guessMime(fileName);
+        List<String> segs = sanitizeRelSegments(fileName, src.getName());
+        String leafName = segs.get(segs.size() - 1);
+        List<String> subDirs = segs.subList(0, segs.size() - 1);
+        StringBuilder subDirRel = new StringBuilder();
+        for (int i = 0; i < subDirs.size(); i++) {
+            if (i > 0) {
+                subDirRel.append('/');
+            }
+            subDirRel.append(subDirs.get(i));
+        }
+
+        String mime = guessMime(leafName);
         SharedPreferences sp = prefs(ctx);
         String customUri = sp.getString("customDownloadTreeUri", "").trim();
         String customLbl = sp.getString("customDownloadLabel", "").trim();
@@ -887,7 +1061,7 @@ public class TransferService extends Service implements EventListener {
             try {
                 Uri tree = Uri.parse(customUri);
                 if (hasPersistedTreePermission(ctx, tree)) {
-                    savedUri = saveToCustomTree(ctx, tree, src, fileName, mime);
+                    savedUri = saveToCustomTree(ctx, tree, src, subDirs, leafName, mime);
                     if (savedUri != null) {
                         destLabel = customLbl.isEmpty() ? "自定义文件夹" : customLbl;
                     }
@@ -896,7 +1070,7 @@ public class TransferService extends Service implements EventListener {
             }
         }
         if (savedUri == null) {
-            savedUri = saveToPublicDownloads(ctx, src, fileName, mime);
+            savedUri = saveToPublicDownloads(ctx, src, subDirRel.toString(), leafName, mime);
             destLabel = "下载";
         }
         if (savedUri == null) {
@@ -904,6 +1078,18 @@ public class TransferService extends Service implements EventListener {
         }
         if (!src.delete()) {
             Log.w(TAG, "could not delete staged file: " + src);
+        } else {
+            File inboxRoot = inboxDir(ctx);
+            File cur = src.getParentFile();
+            while (cur != null && !cur.equals(inboxRoot)) {
+                File[] rem = cur.listFiles();
+                if (rem != null && rem.length > 0) {
+                    break;
+                }
+                File parent = cur.getParentFile();
+                cur.delete();
+                cur = parent;
+            }
         }
         return new String[]{savedUri, destLabel};
     }
@@ -917,17 +1103,59 @@ public class TransferService extends Service implements EventListener {
         return false;
     }
 
-    private static String saveToCustomTree(Context ctx, Uri treeUri, File src, String fileName, String mime) {
+    private static Uri ensureChildDir(android.content.ContentResolver cr, Uri treeUri, Uri parentDocUri, String name) {
+        try {
+            String parentId = DocumentsContract.getDocumentId(parentDocUri);
+            Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId);
+            String[] cols = new String[]{
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    DocumentsContract.Document.COLUMN_MIME_TYPE
+            };
+            try (android.database.Cursor c = cr.query(childrenUri, cols, null, null, null)) {
+                if (c != null) {
+                    while (c.moveToNext()) {
+                        String disp = c.getString(1);
+                        String mime = c.getString(2);
+                        if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime) && name.equals(disp)) {
+                            String cid = c.getString(0);
+                            if (cid != null && !cid.isEmpty()) {
+                                return DocumentsContract.buildDocumentUriUsingTree(treeUri, cid);
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        try {
+            return DocumentsContract.createDocument(cr, parentDocUri, DocumentsContract.Document.MIME_TYPE_DIR, name);
+        } catch (Exception e) {
+            Log.e(TAG, "ensureChildDir: " + name, e);
+            return null;
+        }
+    }
+
+    private static String saveToCustomTree(Context ctx, Uri treeUri, File src, List<String> subDirs, String fileName, String mime) {
         Uri docUri = null;
         try {
+            android.content.ContentResolver cr = ctx.getContentResolver();
             String treeDocId = DocumentsContract.getTreeDocumentId(treeUri);
             Uri parentDocUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocId);
-            docUri = DocumentsContract.createDocument(ctx.getContentResolver(), parentDocUri, mime, fileName);
+            if (subDirs != null) {
+                for (String seg : subDirs) {
+                    parentDocUri = ensureChildDir(cr, treeUri, parentDocUri, seg);
+                    if (parentDocUri == null) {
+                        return null;
+                    }
+                }
+            }
+            docUri = DocumentsContract.createDocument(cr, parentDocUri, mime, fileName);
             if (docUri == null) {
                 return null;
             }
             try (InputStream in = new FileInputStream(src);
-                 OutputStream out = ctx.getContentResolver().openOutputStream(docUri, "w")) {
+                 OutputStream out = cr.openOutputStream(docUri, "w")) {
                 if (out == null) {
                     throw new Exception("openOutputStream null");
                 }
@@ -946,12 +1174,15 @@ public class TransferService extends Service implements EventListener {
         }
     }
 
-    private static String saveToPublicDownloads(Context ctx, File src, String fileName, String mime) {
+    private static String saveToPublicDownloads(Context ctx, File src, String subDirRel, String fileName, String mime) {
         if (Build.VERSION.SDK_INT >= 29) {
             ContentValues cv = new ContentValues();
             cv.put(MediaStore.Downloads.DISPLAY_NAME, fileName);
             cv.put(MediaStore.Downloads.MIME_TYPE, mime);
-            cv.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+            String relPath = (subDirRel == null || subDirRel.isEmpty())
+                    ? Environment.DIRECTORY_DOWNLOADS
+                    : (Environment.DIRECTORY_DOWNLOADS + "/" + subDirRel);
+            cv.put(MediaStore.Downloads.RELATIVE_PATH, relPath);
             cv.put(MediaStore.Downloads.IS_PENDING, 1);
             Uri uri = ctx.getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
             if (uri == null) {
@@ -979,6 +1210,9 @@ public class TransferService extends Service implements EventListener {
         }
         try {
             File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+            if (subDirRel != null && !subDirRel.isEmpty()) {
+                dir = new File(dir, subDirRel.replace('/', File.separatorChar));
+            }
             if (!dir.exists() && !dir.mkdirs()) {
                 return null;
             }

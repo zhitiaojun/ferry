@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/lanweb"
 	"github.com/cwlindean/filetransfer/core/tempshare"
@@ -396,5 +398,140 @@ func TestTempShareUploadDownloadControl(t *testing.T) {
 	})
 	if err != nil || via != "relay" || len(up) != 1 || !sawPaused {
 		t.Fatalf("pause/resume upload via=%q up=%v err=%v sawPaused=%v", via, up, err, sawPaused)
+	}
+}
+
+func TestWebHostRelayGetPauseCancelAndPutCancel(t *testing.T) {
+	dir := t.TempDir()
+	shared := filepath.Join(dir, "big.bin")
+	payload := bytes.Repeat([]byte("relay-host-ctrl-"), 1024*1024) // 16 MiB
+	if err := os.WriteFile(shared, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	var events []tempshare.TransferProgress
+	srv, err := lanweb.NewScoped(lanweb.ScopedOptions{
+		Mode:        "both",
+		RecvDir:     dir,
+		SharedFiles: []string{shared},
+		DeviceName:  "test-host",
+		Token:       "tokwh",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.Register("big.bin", int64(len(payload)), "dummy")
+
+	hostDone := make(chan error, 1)
+	wsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			hostDone <- err
+			return
+		}
+		defer c.Close(websocket.StatusNormalClosure, "bye")
+		hostDone <- tempshare.ServeWebHostWithProgress(r.Context(), c, srv, nil, func(p tempshare.TransferProgress) {
+			mu.Lock()
+			events = append(events, p)
+			mu.Unlock()
+		})
+	}))
+	defer wsSrv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	wsURL := "ws" + strings.TrimPrefix(wsSrv.URL, "http")
+	gc, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gc.SetReadLimit(4 << 20)
+	defer gc.Close(websocket.StatusNormalClosure, "bye")
+
+	sendText := func(v any) {
+		b, _ := json.Marshal(v)
+		if err := gc.Write(ctx, websocket.MessageText, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readCtrl := func() map[string]any {
+		for {
+			typ, b, err := gc.Read(ctx)
+			if err != nil {
+				t.Fatalf("read ctrl: %v", err)
+			}
+			if typ == websocket.MessageBinary {
+				continue
+			}
+			var m map[string]any
+			if err := json.Unmarshal(b, &m); err != nil {
+				t.Fatal(err)
+			}
+			return m
+		}
+	}
+
+	// 1. Start get, read first binary chunk, pause, resume, then cancel; WS must remain alive for list.
+	sendText(map[string]any{"t": "get", "name": "big.bin"})
+	if m := readCtrl(); m["t"] != "get.begin" {
+		t.Fatalf("expected get.begin, got %v", m)
+	}
+	if typ, _, err := gc.Read(ctx); err != nil || typ != websocket.MessageBinary {
+		t.Fatalf("expected initial binary chunk, got typ=%v err=%v", typ, err)
+	}
+	sendText(map[string]any{"t": "get.pause"})
+	if m := readCtrl(); m["t"] != "get.paused" {
+		t.Fatalf("expected get.paused, got %v", m)
+	}
+	sendText(map[string]any{"t": "get.resume"})
+	if m := readCtrl(); m["t"] != "get.resumed" {
+		t.Fatalf("expected get.resumed, got %v", m)
+	}
+	sendText(map[string]any{"t": "get.cancel"})
+	if m := readCtrl(); m["t"] != "get.cancelled" {
+		t.Fatalf("expected get.cancelled, got %v", m)
+	}
+
+	// Subsequent list still succeeds without reconnecting WS.
+	sendText(map[string]any{"t": "list"})
+	if m := readCtrl(); m["t"] != "files" {
+		t.Fatalf("expected files after get.cancel, got %v", m)
+	}
+
+	// 2. Start put, pause, cancel; .part removed and WS stays alive.
+	sendText(map[string]any{"t": "put.begin", "name": "up.bin", "size": 1024})
+	ready := readCtrl()
+	if ready["t"] != "put.ready" {
+		t.Fatalf("expected put.ready, got %v", ready)
+	}
+	upName, _ := ready["name"].(string)
+	if err := gc.Write(ctx, websocket.MessageBinary, []byte("partial")); err != nil {
+		t.Fatal(err)
+	}
+	sendText(map[string]any{"t": "put.pause"})
+	sendText(map[string]any{"t": "put.cancel"})
+	if m := readCtrl(); m["t"] != "put.cancelled" {
+		t.Fatalf("expected put.cancelled, got %v", m)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, upName+".part")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected .part removed after put.cancel, stat=%v", statErr)
+	}
+	sendText(map[string]any{"t": "bye"})
+
+	mu.Lock()
+	sawPaused := false
+	for _, ev := range events {
+		if ev.Stage == "paused" {
+			sawPaused = true
+			break
+		}
+	}
+	mu.Unlock()
+	if !sawPaused {
+		t.Fatalf("expected paused progress stage recorded")
+	}
+	if herr := <-hostDone; herr != nil {
+		t.Fatalf("host run error: %v", herr)
 	}
 }

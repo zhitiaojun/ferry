@@ -247,4 +247,9 @@ M5 剩余：无（G5 已出，2026-11-08 收尾记录见文末）。
 - [x] **Windows 桌面拖拽浮窗与 Web 修复**：
   - `cmd/ft-desktop/droppanel.go` 扩展 `SetWinEventHook` 至 `EVENT_OBJECT_CREATE..HIDE` 修复 Windows 11 复用 `SysDragImage` 漏触发问题，接入统一主题 `theme()`；`mainwin.go`/`tray.go`/`send.go` 补全双缓冲绘制与实时台账刷新。
   - `server/assets/app.html` 修复中继多文件队列、`#drop` 选择与 WS 回收；`core/lanweb/page.go` 修复列表缓存与上传锁（BJ 服务端尚未重部署）。
-- [ ] **待完成**：提交本次全部工作区改动至 Git；若需上线更新后的公网 Web 页与桌面 `ft-setup.exe`，需单独审批部署 BJ 与重新打安装器/正式签名 APK。
+- [x] **v1.0.0-beta.37 缺陷补齐、文件夹传输、流式网页与包名迁移（2026-11-26）**：
+  - 协议与双端文件夹层级传输：`core/proto` 支持安全 POSIX `/` 相对路径，`core/transfer` / `core/mobile` / 桌面端 / Android（SAF `ACTION_OPEN_DOCUMENT_TREE` + `MediaStore.RELATIVE_PATH`/SAF 子目录复用）保留嵌套目录结构，跳过空目录。
+  - 浏览器与临时快传流式 + 暂停/取消对齐：`core/lanweb` 分块流式上传与 `#tx-pause`、`core/tempshare` `get/put` 控制帧不断 WS、`server/assets/app.html` `file.slice` + `showSaveFilePicker` + 纯 JS 增量 SHA-256、桌面快传窗增加暂停/取消。
+  - 自定义服务器配置 UI + 极简「关于」页：桌面与 Android 设置页新增信令 WSS / 临时快传 HTTPS / STUN 配置与恢复默认；双端新增第 4 标签「关于」。
+  - Android 包名从 `cn.cwlindean.ft` 迁移至 `cn.cwlindean.ferry`；Windows 注册表迁移至 `HKCU\Software\Ferry` 并为 `ft-setup` 注入发布版本号；`site/index.html` 清理旧 `ft` 示例；IPv6 明确未改动与暂未实现。
+- [ ] **待完成**：等待 GitHub Actions 构建 `v1.0.0-beta.37` 产物；若需让公网门户与网页下载同步更新 `server/assets/app.html`，待用户后续单独审批再部署 BJ 服务端。

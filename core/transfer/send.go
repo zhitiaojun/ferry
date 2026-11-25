@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,11 +19,107 @@ import (
 	"github.com/cwlindean/filetransfer/core/session"
 )
 
-// Send streams paths to the peer over an established session using a sliding
-// window of unacknowledged chunks so RTT does not stall throughput.
-func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
-	start := time.Now()
+// SendItem describes one concrete regular file on disk and its safe POSIX
+// relative path inside the transfer MANIFEST.
+type SendItem struct {
+	DiskPath string
+	RelPath  string
+}
+
+// ExpandSendItems resolves files and directories into an ordered list of
+// regular files with collision-free POSIX relative paths. Empty directories
+// and symlinks / non-regular entries are skipped.
+func ExpandSendItems(paths []string) ([]SendItem, error) {
 	if len(paths) == 0 {
+		return nil, errors.New("transfer: no input files")
+	}
+	used := make(map[string]struct{})
+	var items []SendItem
+	for _, p := range paths {
+		st, err := os.Stat(p)
+		if err != nil {
+			return nil, fmt.Errorf("stat %s: %w", p, err)
+		}
+		if !st.IsDir() {
+			if !st.Mode().IsRegular() {
+				continue
+			}
+			rel := dedupRelPath(filepath.Base(p), used)
+			if err := proto.ValidateFileName(rel); err != nil {
+				return nil, err
+			}
+			items = append(items, SendItem{DiskPath: p, RelPath: rel})
+			continue
+		}
+		rootName := filepath.Base(filepath.Clean(p))
+		if rootName == "" || rootName == "." || rootName == ".." || rootName == string(filepath.Separator) || strings.ContainsRune(rootName, ':') {
+			rootName = "folder"
+		}
+		err = filepath.WalkDir(p, func(sub string, d fs.DirEntry, werr error) error {
+			if werr != nil {
+				return werr
+			}
+			if d.IsDir() {
+				return nil
+			}
+			// Never follow symlinks outside the chosen directory.
+			info, lerr := os.Lstat(sub)
+			if lerr != nil || !info.Mode().IsRegular() {
+				return nil
+			}
+			rel, rerr := filepath.Rel(p, sub)
+			if rerr != nil {
+				return rerr
+			}
+			relSlash := rootName + "/" + filepath.ToSlash(rel)
+			relSlash = dedupRelPath(relSlash, used)
+			if verr := proto.ValidateFileName(relSlash); verr != nil {
+				return verr
+			}
+			items = append(items, SendItem{DiskPath: sub, RelPath: relSlash})
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(items) == 0 {
+		return nil, errors.New("transfer: no input files")
+	}
+	return items, nil
+}
+
+func dedupRelPath(rel string, used map[string]struct{}) string {
+	if _, exists := used[rel]; !exists {
+		used[rel] = struct{}{}
+		return rel
+	}
+	dir, base := path.Split(rel)
+	ext := path.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	for n := 2; ; n++ {
+		cand := fmt.Sprintf("%s%s (%d)%s", dir, stem, n, ext)
+		if _, exists := used[cand]; !exists {
+			used[cand] = struct{}{}
+			return cand
+		}
+	}
+}
+
+// Send streams paths (files or directories) to the peer over an established
+// session using a sliding window of unacknowledged chunks so RTT does not stall throughput.
+func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
+	items, err := ExpandSendItems(paths)
+	if err != nil {
+		return nil, err
+	}
+	return SendItems(s, items, cfg)
+}
+
+// SendItems streams pre-expanded SendItem entries to the peer over an established session.
+func SendItems(s *session.Session, items []SendItem, cfg Config) (*Result, error) {
+	start := time.Now()
+	if len(items) == 0 {
 		return nil, errors.New("transfer: no input files")
 	}
 	if cfg.Control != nil && cfg.Control.IsCancelled() {
@@ -36,17 +135,17 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 		defer unreg()
 	}
 
-	entries := make([]proto.FileEntry, 0, len(paths))
-	for _, p := range paths {
-		st, err := os.Stat(p)
+	entries := make([]proto.FileEntry, 0, len(items))
+	for _, it := range items {
+		st, err := os.Stat(it.DiskPath)
 		if err != nil {
-			return nil, fmt.Errorf("stat %s: %w", p, err)
+			return nil, fmt.Errorf("stat %s: %w", it.DiskPath, err)
 		}
 		if st.IsDir() {
-			return nil, fmt.Errorf("transfer: %s is a directory", p)
+			return nil, fmt.Errorf("transfer: %s is a directory", it.DiskPath)
 		}
 		entries = append(entries, proto.FileEntry{
-			Name:    filepath.Base(p),
+			Name:    it.RelPath,
 			Size:    uint64(st.Size()),
 			MtimeMS: st.ModTime().UnixMilli(),
 		})
@@ -72,7 +171,7 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 	if cfg.Log != nil {
 		cfg.Log.Event("transfer.start", map[string]any{
 			"transfer_id": hex.EncodeToString(tid[:]),
-			"files":       len(paths),
+			"files":       len(items),
 			"chunk_size":  manifest.ChunkSize,
 			"bytes":       totalSize(entries),
 			"peer":        s.Peer.Name,
@@ -97,7 +196,7 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 	}
 
 	buf := make([]byte, cfg.chunkSize())
-	hashes := make([][32]byte, len(paths))
+	hashes := make([][32]byte, len(items))
 	batchTotal := int64(totalSize(entries))
 	var completedBefore int64
 	var sessionBase int64
@@ -115,7 +214,8 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 		defer upg.stop()
 	}
 
-	for i, p := range paths {
+	for i, item := range items {
+		p := item.DiskPath
 		if entries[i].Size == 0 {
 			hashes[i] = sha256.Sum256(nil)
 			if cfg.OnDetailProgress != nil {

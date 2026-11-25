@@ -59,6 +59,8 @@ func main() {
 		os.WriteFile("dpi-debug.txt", []byte(fmt.Sprintf("dpi=%d screen=%dx%d\n", d, w, h)), 0644)
 	}
 	flag.Parse()
+	explicitFlags := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { explicitFlags[f.Name] = true })
 
 	settingsPath := defaultSettingsPath()
 	cfg := loadDesktopSettings(settingsPath)
@@ -91,9 +93,21 @@ func main() {
 	if app.pairedPath == "" {
 		app.pairedPath = defaultPairedPath()
 	}
-	app.signalURL = *flagSig
-	app.stunServers = splitSTUNList(*flagSTUN)
-	app.webBase = *flagWebBase
+	sigVal := *flagSig
+	if !explicitFlags["signal"] && cfg.SignalURL != "" {
+		sigVal = cfg.SignalURL
+	}
+	webVal := *flagWebBase
+	if !explicitFlags["web"] && cfg.WebBaseURL != "" {
+		webVal = cfg.WebBaseURL
+	}
+	stunVal := *flagSTUN
+	if !explicitFlags["stun"] && cfg.STUNServers != "" {
+		stunVal = cfg.STUNServers
+	}
+	app.signalURL = sigVal
+	app.stunServers = splitSTUNList(stunVal)
+	app.webBase = strings.TrimRight(strings.TrimSpace(webVal), "/")
 	if *flagLog != "" {
 		f, err := os.OpenFile(*flagLog, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
@@ -298,6 +312,9 @@ type app struct {
 	sigHoldCount int
 	sigResumeCh  chan struct{}
 	sigStopCur   context.CancelFunc
+	sigLoopOn    bool
+	presenceCtx  context.Context
+	presenceKey  *identity.Key
 	cloudPeers   map[string]bool
 	lanPeers     map[string]lanPeerEntry
 	lanScanning  bool
