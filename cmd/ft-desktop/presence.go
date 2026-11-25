@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -654,9 +653,15 @@ func (a *app) receiveOneAuto(
 		},
 	}, cl, req, peerPub, candCh, readyCh)
 	if err != nil {
-		if ctrl.IsCancelled() || errors.Is(err, transfer.ErrCancelled) {
+		if ctrl.IsCancelled() {
 			a.event("desktop.auto_recv_cancelled", map[string]any{"peer": truncID(req.FromDevice)})
 			a.note(fmt.Sprintf("%s  ← %s · 已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerName)))
+			a.notifyMainPaint()
+			return
+		}
+		if transfer.IsCancelled(err) {
+			a.event("desktop.auto_recv_peer_cancelled", map[string]any{"peer": truncID(req.FromDevice)})
+			a.note(fmt.Sprintf("%s  ← %s · 对方已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerName)))
 			a.notifyMainPaint()
 			return
 		}

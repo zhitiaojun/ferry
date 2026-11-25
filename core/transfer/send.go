@@ -655,7 +655,7 @@ func sendFile(
 		_ = s.Conn().SetWriteDeadline(time.Now().Add(300 * time.Millisecond))
 		_ = s.SendError(proto.CodeCancelled, "发送方已取消传输")
 		_ = s.Conn().SetWriteDeadline(time.Time{})
-		_ = s.Conn().SetReadDeadline(time.Now())
+		_ = s.Conn().SetReadDeadline(time.Now().Add(250 * time.Millisecond))
 		<-ackDone
 		return zero, 0, 0, ErrCancelled
 	}
@@ -724,13 +724,30 @@ func readFileAcks(
 		return err
 	}
 
+	var cancelDeadline time.Time
 	for {
-		fr, err := s.Recv(cfg.timeout())
+		timeout := cfg.timeout()
+		if cfg.Control != nil && cfg.Control.IsCancelled() {
+			if cancelDeadline.IsZero() {
+				cancelDeadline = time.Now().Add(250 * time.Millisecond)
+			}
+			rem := time.Until(cancelDeadline)
+			if rem <= 0 {
+				return fail(ErrCancelled)
+			}
+			if rem < timeout {
+				timeout = rem
+			}
+		}
+		fr, err := s.Recv(timeout)
 		if err != nil {
 			if cfg.Control != nil && cfg.Control.IsCancelled() {
 				return fail(ErrCancelled)
 			}
 			return fail(err)
+		}
+		if cfg.Control != nil && cfg.Control.IsCancelled() {
+			continue
 		}
 		switch fr.Type {
 		case proto.TypePing:

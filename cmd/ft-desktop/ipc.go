@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -280,8 +279,11 @@ func (d *desktopIPC) sendDirectLAN(ctx context.Context, addr string, files []str
 		},
 	}, addr, files)
 	if err != nil {
-		if ctrl.IsCancelled() || errors.Is(err, transfer.ErrCancelled) {
+		if ctrl.IsCancelled() {
 			return ipc.SendResponse{OK: false, Error: "已取消传输"}
+		}
+		if transfer.IsCancelled(err) {
+			return ipc.SendResponse{OK: false, Error: "对方已取消传输"}
 		}
 		return ipc.SendResponse{OK: false, Error: err.Error()}
 	}
@@ -367,8 +369,11 @@ func (d *desktopIPC) sendToSelectedPeer(ctx context.Context, peer client.Peer, f
 			res, err = client.SendAuto(ctx, opts, peer.ID, files)
 		}
 		if err != nil {
-			if ctrl.IsCancelled() || errors.Is(err, transfer.ErrCancelled) {
+			if ctrl.IsCancelled() {
 				return ipc.SendResponse{OK: false, Error: "已取消传输"}
+			}
+			if transfer.IsCancelled(err) {
+				return ipc.SendResponse{OK: false, Error: "对方已取消传输"}
 			}
 			return ipc.SendResponse{OK: false, Error: err.Error()}
 		}

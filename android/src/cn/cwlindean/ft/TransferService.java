@@ -109,6 +109,22 @@ public class TransferService extends Service implements EventListener {
         }
     }
 
+    public static void clearUiBridge(UiBridge bridge) {
+        boolean cleared = false;
+        synchronized (BRIDGE_LOCK) {
+            if (sUiBridge == bridge) {
+                sUiBridge = null;
+                cleared = true;
+            }
+        }
+        if (cleared) {
+            try {
+                Mobile.setMainUIOpen(false);
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
     public static boolean isRecvRunning() {
         return sRecvRunning;
     }

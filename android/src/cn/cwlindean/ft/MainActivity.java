@@ -426,6 +426,11 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        TransferService.setUiBridge(uiBridge);
+        recvRunning = TransferService.isRecvRunning();
+        lanPort = TransferService.getLanPort();
+        loadRecentState();
+        pollActiveTransferOnce();
         if (recvRunning) {
             ioPool.execute(() -> {
                 try {
@@ -449,7 +454,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onStop() {
-        TransferService.setUiBridge(null);
+        TransferService.clearUiBridge(uiBridge);
         dismissIncomingConfirmDialog(false);
         stopProgressPolling();
         releaseMulticastLock();
@@ -574,7 +579,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        TransferService.setUiBridge(null);
+        TransferService.clearUiBridge(uiBridge);
         dismissShareSheet(true);
         closePairSheet();
         stopProgressPolling();
@@ -3889,7 +3894,9 @@ public class MainActivity extends Activity {
         while (recentEntries.size() > 30) {
             recentEntries.remove(recentEntries.size() - 1);
         }
-        persistRecentState();
+        final JSONObject rec = TransferService.makeRecentJson(
+                entry.name, entry.uri, entry.mime, entry.via, entry.bytes, entry.ts, entry.dir, entry.peer);
+        ioPool.execute(() -> TransferService.appendRecentRecord(this, rec));
         renderRecentList();
     }
 
@@ -4870,7 +4877,9 @@ public class MainActivity extends Activity {
                 JSONObject o = new JSONObject(raw);
                 if (!o.optBoolean("ok", false)) {
                     String errMsg = o.optString("error", raw);
-                    if (errMsg.contains("已取消")) {
+                    if (errMsg.contains("对方已取消")) {
+                        showSendBanner("", "对方已取消传输", false);
+                    } else if (errMsg.contains("已取消")) {
                         showSendBanner("", "已取消发送", false);
                     } else {
                         showSendBanner("fail", "发送失败：" + errMsg, true);
@@ -4902,7 +4911,9 @@ public class MainActivity extends Activity {
             } else {
                 stopKeepAlive();
             }
-            if (err != null && err.contains("已取消")) {
+            if (err != null && err.contains("对方已取消")) {
+                showSendBanner("", "对方已取消传输", false);
+            } else if (err != null && err.contains("已取消")) {
                 showSendBanner("", "已取消发送", false);
             } else {
                 showSendBanner("fail", "发送失败：" + err, true);

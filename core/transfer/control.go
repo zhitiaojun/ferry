@@ -4,10 +4,25 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"github.com/cwlindean/filetransfer/core/proto"
+	"github.com/cwlindean/filetransfer/core/session"
 )
 
 // ErrCancelled is returned when a transfer is cancelled locally or by the peer.
 var ErrCancelled = errors.New("transfer: cancelled")
+
+// IsCancelled reports whether err represents a local or peer transfer cancellation.
+func IsCancelled(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrCancelled) {
+		return true
+	}
+	var rem *session.RemoteError
+	return errors.As(err, &rem) && rem.Code == proto.CodeCancelled
+}
 
 var (
 	pingTokenKeepalive   = [8]byte{}

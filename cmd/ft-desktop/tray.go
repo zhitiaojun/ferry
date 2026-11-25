@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -425,9 +424,17 @@ func (t *tray) handle(nc net.Conn) {
 			t.app.event("desktop.lan_unpaired_rejected", map[string]any{"peer": peer, "name": peerName, "reason": err.Error()})
 			return
 		}
-		if ctrl.IsCancelled() || errors.Is(err, transfer.ErrCancelled) {
+		if ctrl.IsCancelled() {
 			t.app.event("desktop.transfer_cancelled", map[string]any{"peer": peer})
 			t.app.note(fmt.Sprintf("%s  ← %s · 已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerName)))
+			if h := existingMainWindow(); h != 0 {
+				procPostMessageW.Call(uintptr(h), wmAppPaint, 0, 0)
+			}
+			return
+		}
+		if transfer.IsCancelled(err) {
+			t.app.event("desktop.transfer_peer_cancelled", map[string]any{"peer": peer})
+			t.app.note(fmt.Sprintf("%s  ← %s · 对方已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerName)))
 			if h := existingMainWindow(); h != 0 {
 				procPostMessageW.Call(uintptr(h), wmAppPaint, 0, 0)
 			}

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/cwlindean/filetransfer/core/proto"
@@ -31,9 +32,12 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 	if cfg.Control != nil && cfg.Control.IsCancelled() {
 		return nil, ErrCancelled
 	}
+	var inRecvLoop atomic.Bool
 	if cfg.Control != nil {
 		unreg := cfg.Control.OnCancel(func() {
-			_ = s.Conn().SetReadDeadline(time.Now())
+			if !inRecvLoop.Load() {
+				_ = s.Conn().SetReadDeadline(time.Now())
+			}
 		})
 		defer unreg()
 	}
@@ -211,6 +215,12 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 		_ = s.SendError(proto.CodeCancelled, "接收方已取消传输")
 		_ = s.Conn().SetWriteDeadline(time.Time{})
 		removeParts()
+		_ = s.Conn().SetReadDeadline(time.Now().Add(250 * time.Millisecond))
+		for {
+			if _, rerr := s.Recv(250 * time.Millisecond); rerr != nil {
+				break
+			}
+		}
 		return nil, ErrCancelled
 	}
 
@@ -218,6 +228,8 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 		frame proto.Frame
 		err   error
 	}
+	inRecvLoop.Store(true)
+	defer inRecvLoop.Store(false)
 	frameCh := make(chan recvFrame, 64)
 	go func() {
 		defer close(frameCh)
@@ -261,6 +273,15 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 		}
 		readerDone = true
 		return nil
+	}
+	graceWaitPeerClose := func() {
+		if readerDone {
+			return
+		}
+		_ = s.Conn().SetReadDeadline(time.Now().Add(250 * time.Millisecond))
+		for range frameCh {
+		}
+		readerDone = true
 	}
 
 	paused := cfg.Control != nil && cfg.Control.IsPaused()
@@ -309,6 +330,7 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 				_ = s.SendError(proto.CodeCancelled, "接收方已取消传输")
 				_ = s.Conn().SetWriteDeadline(time.Time{})
 				removeParts()
+				graceWaitPeerClose()
 				return nil, ErrCancelled
 			}
 			nowPaused := cfg.Control.IsPaused()

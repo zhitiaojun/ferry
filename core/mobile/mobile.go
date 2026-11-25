@@ -511,9 +511,13 @@ func SendFilesWithKey(peerAddr, name, keyPath, pathsJSON string) (string, error)
 	defer endActiveTransfer(txSeq)
 
 	res, err := sendFilesLAN(context.Background(), peerAddr, name, devID, key, paths, 10*time.Second, txSeq, ctrl, nil)
-	if errors.Is(err, transfer.ErrCancelled) || ctrl.IsCancelled() {
+	if ctrl.IsCancelled() {
 		res.Error = "已取消传输"
 		return marshalSummary(res), errors.New("已取消传输")
+	}
+	if transfer.IsCancelled(err) {
+		res.Error = "对方已取消传输"
+		return marshalSummary(res), errors.New("对方已取消传输")
 	}
 	return marshalSummary(res), err
 }

@@ -1154,3 +1154,80 @@ func TestPauseSyncAndOwnerOnlyResume(t *testing.T) {
 		t.Fatal("hash mismatch after receiver pause sync")
 	}
 }
+
+func TestIsCancelledAndGracefulCancelDelivery(t *testing.T) {
+	if !IsCancelled(ErrCancelled) {
+		t.Fatal("IsCancelled(ErrCancelled) = false")
+	}
+	if !IsCancelled(&session.RemoteError{Code: proto.CodeCancelled, Msg: "peer cancelled"}) {
+		t.Fatal("IsCancelled(RemoteError{CodeCancelled}) = false")
+	}
+	if IsCancelled(errors.New("other error")) {
+		t.Fatal("IsCancelled(other error) = true")
+	}
+
+	// Simulate an asynchronous buffered transport (like WebSocket relay) where
+	// closing immediately on cancel could otherwise race ahead of CodeCancelled.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "cancel-grace.bin")
+	writePattern(t, src, 2<<20)
+	outDir := filepath.Join(dir, "out")
+
+	recvCtrl := NewController()
+	recvErrCh := make(chan error, 1)
+	go func() {
+		conn, aerr := ln.Accept()
+		if aerr != nil {
+			recvErrCh <- aerr
+			return
+		}
+		defer conn.Close()
+		sb, serr := session.Accept(conn, testParams("recv"))
+		if serr != nil {
+			recvErrCh <- serr
+			return
+		}
+		defer sb.Close()
+		once := false
+		_, rerr := Receive(sb, outDir, Config{
+			Timeout: 2 * time.Second,
+			Control: recvCtrl,
+			OnDetailProgress: func(s ProgressSnapshot) {
+				if !once && s.BytesDone >= 128<<10 {
+					once = true
+					recvCtrl.Cancel()
+				}
+			},
+		})
+		recvErrCh <- rerr
+	}()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	sa, err := session.Dial(conn, testParams("send"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sa.Close()
+
+	_, sendErr := Send(sa, []string{src}, Config{
+		ChunkSize:   64 << 10,
+		WindowBytes: 128 << 10,
+		Timeout:     2 * time.Second,
+	})
+	if rerr := <-recvErrCh; !errors.Is(rerr, ErrCancelled) {
+		t.Fatalf("expected receiver ErrCancelled, got %v", rerr)
+	}
+	if !IsCancelled(sendErr) {
+		t.Fatalf("expected sender to receive CodeCancelled (IsCancelled=true), got %v", sendErr)
+	}
+}

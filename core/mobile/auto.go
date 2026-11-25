@@ -770,8 +770,11 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 			})
 			return string(out), nil
 		}
-		if ctrl.IsCancelled() || errors.Is(lerr, transfer.ErrCancelled) {
+		if ctrl.IsCancelled() {
 			return "", errors.New("已取消传输")
+		}
+		if transfer.IsCancelled(lerr) {
+			return "", errors.New("对方已取消传输")
 		}
 		if logger != nil && lerr != nil {
 			logger.Event("send.lan_fallback", map[string]any{"peer": truncID(toID), "addr": lanAddr, "error": lerr.Error()})
@@ -816,8 +819,11 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 
 	res, err := client.SendAuto(ctx, opts, toID, paths)
 	if err != nil {
-		if ctrl.IsCancelled() || errors.Is(err, transfer.ErrCancelled) {
+		if ctrl.IsCancelled() {
 			return "", errors.New("已取消传输")
+		}
+		if transfer.IsCancelled(err) {
+			return "", errors.New("对方已取消传输")
 		}
 		return "", err
 	}
