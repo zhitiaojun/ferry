@@ -65,7 +65,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: windows-artifacts
-          path: out/windows/*
+          path: out/windows/ferry-setup-windows-amd64.exe
 
   build-linux:
     name: Build Linux (CLI / Relay Server)
@@ -205,7 +205,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: android-artifacts
-          path: out/android/*
+          path: out/android/ferry-android-arm64.apk
 
   release:
     name: Publish GitHub Release
@@ -228,6 +228,5 @@ jobs:
         with:
           files: |
             release-assets/*
-            site/index.html
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
