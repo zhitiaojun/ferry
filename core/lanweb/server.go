@@ -40,10 +40,11 @@ const TokenLen = 16
 
 // File describes one stored file.
 type File struct {
-	Name    string `json:"name"`
-	Size    int64  `json:"size"`
-	SHA256  string `json:"sha256"`
-	ModTime int64  `json:"mtime_ms"`
+	Name       string `json:"name"`
+	Size       int64  `json:"size"`
+	SHA256     string `json:"sha256"`
+	ModTime    int64  `json:"mtime_ms"`
+	BatchCount int    `json:"-"`
 }
 
 // Progress reports live HTTP or relay transfer progress from lanweb.
@@ -372,6 +373,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 	for _, f := range saved {
+		f.BatchCount = len(saved)
 		s.NotifyUploaded(f)
 	}
 	if s.log != nil {

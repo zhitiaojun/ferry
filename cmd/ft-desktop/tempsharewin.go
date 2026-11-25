@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -783,6 +784,7 @@ func (w *tempWin) startHost(mode string, files []string) {
 	go func() {
 		key, err := identity.LoadOrCreateKey(a.keyPath)
 		var host *tempshare.Host
+		recvDir := a.receiveDir()
 		if err == nil {
 			host, err = tempshare.StartHost(tempshare.HostOptions{
 				BaseURL:     a.webBase,
@@ -790,13 +792,21 @@ func (w *tempWin) startHost(mode string, files []string) {
 				DeviceName:  a.deviceName(),
 				Mode:        mode,
 				SharedFiles: files,
-				RecvDir:     a.receiveDir(),
+				RecvDir:     recvDir,
 				OnUploaded: func(f lanweb.File) {
+					var copiedImg bool
+					if f.BatchCount <= 1 {
+						copiedImg = a.maybeCopySingleImagePathsToClipboard([]string{filepath.Join(recvDir, f.Name)})
+					}
 					a.note(fmt.Sprintf("收到 %s · 来自 临时快传（网页）", f.Name))
 					if own != 0 {
 						procInvalidateRect.Call(uintptr(own), 0, 1)
 					}
 					procPostMessageW.Call(uintptr(hwnd), wmTempUpdate, 0, 0)
+					if copiedImg && trayHandle != nil {
+						trayHandle.balloon("图片已复制到剪贴板",
+							fmt.Sprintf("已通过临时快传收到 %s，已复制到剪贴板并存入 %s", f.Name, recvDir))
+					}
 				},
 				OnProgress: func(p tempshare.TransferProgress) {
 					updateTempWinProgress(hwnd, p)
@@ -958,6 +968,7 @@ func (w *tempWin) joinByCode() {
 			if via == "lan" {
 				viaLabel = "局域网直连"
 			}
+			copiedImg := a.maybeCopySingleImagePathsToClipboard(saved)
 			a.note(fmt.Sprintf("收到 %d 个文件 · 来自 %s（%s）", len(saved), sess.Name, viaLabel))
 			if own != 0 {
 				procInvalidateRect.Call(uintptr(own), 0, 1)
@@ -967,7 +978,11 @@ func (w *tempWin) joinByCode() {
 			tempWinMu.Unlock()
 			if cur != nil {
 				cur.busy = false
-				cur.status = fmt.Sprintf("已通过%s下载 %d 个文件到接收目录", viaLabel, len(saved))
+				if copiedImg {
+					cur.status = fmt.Sprintf("已通过%s下载 %d 个文件到接收目录（图片已复制到剪贴板）", viaLabel, len(saved))
+				} else {
+					cur.status = fmt.Sprintf("已通过%s下载 %d 个文件到接收目录", viaLabel, len(saved))
+				}
 				procPostMessageW.Call(uintptr(hwnd), wmTempUpdate, 0, 0)
 			}
 			return

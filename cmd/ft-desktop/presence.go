@@ -701,6 +701,7 @@ func (a *app) receiveOneAuto(
 	if chLabel == "" {
 		chLabel = "中继"
 	}
+	copiedImg := a.maybeCopySingleImageToClipboard(outDir, res.Files)
 	a.event("desktop.auto_recv_done", map[string]any{
 		"peer": truncID(req.FromDevice), "channel": chLabel, "files": res.Files, "bytes": res.Bytes,
 		"duration_ms": res.Duration.Milliseconds(),
@@ -709,7 +710,10 @@ func (a *app) receiveOneAuto(
 		time.Now().Format("15:04"), sanitizeLedgerText(peerName), summarizeFiles(res.Files), humanBytes(res.Bytes), fmtDur(time.Since(start)), chLabel))
 	a.notifyMainPaint()
 	if trayHandle != nil {
-		trayHandle.balloon(fmt.Sprintf("已接收 %d 个文件", len(res.Files)),
-			fmt.Sprintf("来自 %s（%s），共 %s，已存入 %s", peerName, chLabel, humanBytes(res.Bytes), outDir))
+		body := fmt.Sprintf("来自 %s（%s），共 %s，已存入 %s", peerName, chLabel, humanBytes(res.Bytes), outDir)
+		if copiedImg {
+			body = fmt.Sprintf("来自 %s（%s），共 %s，已复制到剪贴板并存入 %s", peerName, chLabel, humanBytes(res.Bytes), outDir)
+		}
+		trayHandle.balloon(fmt.Sprintf("已接收 %d 个文件", len(res.Files)), body)
 	}
 }

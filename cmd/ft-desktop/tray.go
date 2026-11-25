@@ -462,6 +462,7 @@ func (t *tray) handle(nc net.Conn) {
 		t.balloon("接收失败", err.Error())
 		return
 	}
+	copiedImg := t.app.maybeCopySingleImageToClipboard(outDir, res.Files)
 	t.app.event("desktop.transfer_done", map[string]any{
 		"peer": peer, "files": res.Files, "bytes": res.Bytes,
 	})
@@ -471,7 +472,11 @@ func (t *tray) handle(nc net.Conn) {
 		procPostMessageW.Call(uintptr(h), wmAppPaint, 0, 0)
 	}
 	title := fmt.Sprintf("已接收 %d 个文件", len(res.Files))
-	t.balloon(title, fmt.Sprintf("来自 %s，共 %s，已存入 %s", peerName, humanBytes(res.Bytes), outDir))
+	body := fmt.Sprintf("来自 %s，共 %s，已存入 %s", peerName, humanBytes(res.Bytes), outDir)
+	if copiedImg {
+		body = fmt.Sprintf("来自 %s，共 %s，已复制到剪贴板并存入 %s", peerName, humanBytes(res.Bytes), outDir)
+	}
+	t.balloon(title, body)
 }
 
 func trayWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {

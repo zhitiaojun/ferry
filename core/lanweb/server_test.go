@@ -366,3 +366,51 @@ func TestOnProgressUploadAndDownload(t *testing.T) {
 		t.Fatal("pageHTML missing speed/progress/cancel UI")
 	}
 }
+
+func TestUploadBatchCount(t *testing.T) {
+	dir := t.TempDir()
+	var got []File
+	srv, err := NewScoped(ScopedOptions{
+		Mode:    "recv",
+		RecvDir: dir,
+		Token:   "tokbatch",
+		Log:     logging.New(io.Discard),
+		OnUploaded: func(f File) {
+			got = append(got, f)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	upload := func(files map[string]string) {
+		var body bytes.Buffer
+		mw := multipart.NewWriter(&body)
+		for name, content := range files {
+			fw, err := mw.CreateFormFile("file", name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = fw.Write([]byte(content))
+		}
+		_ = mw.Close()
+		req := httptest.NewRequest(http.MethodPost, "/tokbatch/upload", &body)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("upload status = %d: %s", rec.Code, rec.Body.String())
+		}
+	}
+
+	upload(map[string]string{"one.png": "png-1"})
+	if len(got) != 1 || got[0].BatchCount != 1 {
+		t.Fatalf("single upload = %+v, want BatchCount=1", got)
+	}
+
+	got = nil
+	upload(map[string]string{"a.png": "png-a", "b.png": "png-b"})
+	if len(got) != 2 || got[0].BatchCount != 2 || got[1].BatchCount != 2 {
+		t.Fatalf("multi upload = %+v, want BatchCount=2 for both", got)
+	}
+}
