@@ -48,9 +48,10 @@ type ProgressSnapshot struct {
 
 // Config tunes a transfer. Zero values select the protocol defaults.
 type Config struct {
-	ChunkSize        uint32
-	WindowBytes      int
-	Timeout          time.Duration
+	ChunkSize           uint32
+	WindowBytes         int
+	Timeout             time.Duration
+	StartTimeout        time.Duration
 	MinBytesPerSec      int64
 	SlowGrace           time.Duration
 	SlowWindow          time.Duration
@@ -61,6 +62,10 @@ type Config struct {
 	// TransferID overrides the random id when the caller already committed to
 	// one (e.g. the signaling transfer id); zero means "generate".
 	TransferID [16]byte
+	// Confirm, when set on the receiver, is called after MANIFEST is validated
+	// and before any directory or .ftpart file is created. Returning an error
+	// rejects the transfer cleanly without writing to outDir.
+	Confirm func(m *proto.Manifest) error
 	// OnProgress, when set, is called after each acknowledged chunk with the
 	// number of bytes the peer confirmed for the current file. It is meant for
 	// path switching decisions (relay -> punch upgrade) and diagnostics.
@@ -120,6 +125,13 @@ func (c Config) timeout() time.Duration {
 		return sessionRecvTimeout
 	}
 	return c.Timeout
+}
+
+func (c Config) startTimeout() time.Duration {
+	if c.StartTimeout > 0 {
+		return c.StartTimeout
+	}
+	return c.timeout()
 }
 
 const sessionRecvTimeout = 30 * time.Second

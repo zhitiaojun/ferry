@@ -42,6 +42,7 @@ var (
 	procShellExecuteW            = shell32.NewProc("ShellExecuteW")
 	procFindWindowW              = user32.NewProc("FindWindowW")
 	procIsIconic                 = user32.NewProc("IsIconic")
+	procIsWindowVisible          = user32.NewProc("IsWindowVisible")
 	procIsZoomed                 = user32.NewProc("IsZoomed")
 	procGetSystemMetricsForDpi   = user32.NewProc("GetSystemMetricsForDpi")
 	procGetSystemMetrics         = user32.NewProc("GetSystemMetrics")

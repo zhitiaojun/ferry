@@ -129,10 +129,10 @@ func (d *desktopIPC) Peers(context.Context) (ipc.PeersResponse, error) {
 	for k, v := range a.cloudPeers {
 		cloudCopy[k] = v
 	}
-	lanCopy := make(map[string]string, len(a.lanPeers))
+	lanCopy := make(map[string]lanPeerEntry, len(a.lanPeers))
 	for k, v := range a.lanPeers {
 		if v.addr != "" && now.Sub(v.lastSeen) <= discovery.DeviceTTL {
-			lanCopy[k] = v.addr
+			lanCopy[k] = v
 		}
 	}
 	a.mu.Unlock()
@@ -149,14 +149,19 @@ func (d *desktopIPC) Peers(context.Context) (ipc.PeersResponse, error) {
 			PubKey:   p.PubKey,
 			PairedAt: p.PairedAt,
 			Online:   sigOnline && cloudCopy[p.DeviceID],
-			LANAddr:  lanCopy[p.DeviceID],
+			LANAddr:  lanCopy[p.DeviceID].addr,
 		})
 	}
-	for id, addr := range lanCopy {
+	for id, entry := range lanCopy {
+		name := nameByID[id]
+		if name == "" {
+			name = entry.name
+		}
 		lanList = append(lanList, ipc.LANPeerInfo{
 			DeviceID: id,
-			Name:     nameByID[id],
-			Addr:     addr,
+			Name:     name,
+			Addr:     entry.addr,
+			Iface:    entry.iface,
 		})
 	}
 	return ipc.PeersResponse{Paired: paired, LAN: lanList}, nil

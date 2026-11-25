@@ -48,14 +48,15 @@ var (
 )
 
 type receiver struct {
-	name   string
-	outDir string
-	devID  [32]byte
-	ln     *pathmgr.TCP
-	lanLst *discovery.Listener
-	cancel    context.CancelFunc
-	logger    *logging.Logger
-	logCloser io.Closer
+	name       string
+	outDir     string
+	pairedPath string
+	devID      [32]byte
+	ln         *pathmgr.TCP
+	lanLst     *discovery.Listener
+	cancel     context.CancelFunc
+	logger     *logging.Logger
+	logCloser  io.Closer
 
 	stopOnce sync.Once
 }
@@ -82,19 +83,29 @@ type summary struct {
 // StartReceiver listens on all interfaces, announces on the LAN and accepts
 // transfers into outDir until StopReceiver. It returns the listen address.
 func StartReceiver(name, outDir, hintJSON string) (string, error) {
-	return startReceiver(name, outDir, "", hintJSON)
+	return startReceiver(name, outDir, "", "", hintJSON)
 }
 
 // StartReceiverWithKey is like StartReceiver but uses the persistent Ed25519
 // device key at keyPath so LAN peers match entries in paired.json by DeviceID.
 func StartReceiverWithKey(name, outDir, keyPath, hintJSON string) (string, error) {
-	return startReceiver(name, outDir, keyPath, hintJSON)
+	return startReceiver(name, outDir, keyPath, "", hintJSON)
 }
 
-func startReceiver(name, outDir, keyPath, hintJSON string) (string, error) {
+// StartReceiverWithAuth is like StartReceiverWithKey and also configures
+// pairedPath so incoming LAN sessions verify paired DeviceIDs via CapAuth and
+// require foreground confirmation for unpaired peers.
+func StartReceiverWithAuth(name, outDir, keyPath, pairedPath, hintJSON string) (string, error) {
+	return startReceiver(name, outDir, keyPath, pairedPath, hintJSON)
+}
+
+func startReceiver(name, outDir, keyPath, pairedPath, hintJSON string) (string, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	if rcv != nil {
+		if pairedPath != "" {
+			rcv.pairedPath = pairedPath
+		}
 		return rcv.ln.Addr(), nil
 	}
 	name = pairing.SanitizeName(name)
@@ -140,7 +151,7 @@ func startReceiver(name, outDir, keyPath, hintJSON string) (string, error) {
 	if lerr != nil && logger != nil {
 		logger.Event("discovery.listen.error", map[string]any{"error": lerr.Error()})
 	}
-	r := &receiver{name: name, outDir: outDir, devID: devID, ln: ln, lanLst: lanLst, cancel: cancel, logger: logger, logCloser: logCloser}
+	r := &receiver{name: name, outDir: outDir, pairedPath: pairedPath, devID: devID, ln: ln, lanLst: lanLst, cancel: cancel, logger: logger, logCloser: logCloser}
 	rcv = r
 	go func() {
 		err := discovery.Announce(ctx, discovery.Config{
@@ -293,28 +304,69 @@ func (r *receiver) handle(ctx context.Context, nc net.Conn) {
 		DeviceID:     r.devID,
 		Name:         r.name,
 		Capabilities: proto.CapResume,
+		VerifyAuth:   true,
 	})
 	if err != nil {
 		r.logger.Event("session.error", map[string]any{"stage": "handshake", "error": err.Error()})
 		return
 	}
 	defer s.Close()
+	paired := r.pairedPath != "" && client.IsVerifiedPaired(r.pairedPath, s.Peer)
 	peerName := pairing.SanitizeName(s.Peer.Name)
 	if peerName == "" {
 		peerName = "局域网设备"
+	} else if paired {
+		identity.UpdatePeerName(r.pairedPath, hex.EncodeToString(s.Peer.DeviceID[:]), peerName)
 	}
-	txSeq := beginActiveTransfer("recv", peerName, "", 0, 0)
-	defer endActiveTransfer(txSeq)
-	updateActiveTransfer(txSeq, "transferring", "lan", "", "", 0, 0, -1, 0)
 
-	r.logger.Event("session.ready", map[string]any{"peer": s.Peer.Name, "path": "lan"})
-	res, err := transfer.Receive(s, r.outDir, transfer.Config{
+	var txSeq uint64
+	defer func() {
+		if txSeq != 0 {
+			endActiveTransfer(txSeq)
+		}
+	}()
+	if paired {
+		txSeq = beginActiveTransfer("recv", peerName, "", 0, 0)
+		updateActiveTransfer(txSeq, "transferring", "lan", "", "", 0, 0, -1, 0)
+	}
+
+	r.logger.Event("session.ready", map[string]any{"peer": s.Peer.Name, "path": "lan", "paired": paired})
+	confirmRejected := false
+	cfg := transfer.Config{
 		Log: r.logger,
 		OnDetailProgress: func(snap transfer.ProgressSnapshot) {
-			updateActiveTransfer(txSeq, snap.Stage, "lan", "", snap.FileName, snap.FileIndex, snap.FileCount, snap.BytesDone, snap.BytesTotal)
+			if txSeq != 0 {
+				updateActiveTransfer(txSeq, snap.Stage, "lan", "", snap.FileName, snap.FileIndex, snap.FileCount, snap.BytesDone, snap.BytesTotal)
+			}
 		},
-	})
+	}
+	if !paired {
+		addr := remoteHost(nc)
+		cfg.Confirm = func(m *proto.Manifest) error {
+			if cerr := requestIncomingConfirm(peerName, addr, m); cerr != nil {
+				confirmRejected = true
+				return cerr
+			}
+			var total int64
+			for _, f := range m.Files {
+				total += int64(f.Size)
+			}
+			firstName := ""
+			if len(m.Files) > 0 {
+				firstName = m.Files[0].Name
+			}
+			txSeq = beginActiveTransfer("recv", peerName, firstName, len(m.Files), total)
+			updateActiveTransfer(txSeq, "transferring", "lan", "", firstName, 1, len(m.Files), 0, total)
+			return nil
+		}
+	}
+
+	res, err := transfer.Receive(s, r.outDir, cfg)
 	if err != nil {
+		if confirmRejected {
+			r.logger.Event("lan.unpaired_rejected", map[string]any{"peer": peerName, "reason": err.Error()})
+			return
+		}
 		r.logger.Event("transfer.error", map[string]any{"error": err.Error()})
 		return
 	}
@@ -376,6 +428,12 @@ func Discover(name string, timeoutMS int, hintJSON string) (string, error) {
 // paths) to peerAddr and returns a JSON summary. gomobile cannot bind
 // []string, so the list crosses the bridge as JSON.
 func SendFiles(peerAddr, name, pathsJSON string) (string, error) {
+	return SendFilesWithKey(peerAddr, name, "", pathsJSON)
+}
+
+// SendFilesWithKey is like SendFiles and attaches the local Ed25519 identity
+// key when keyPath is set so paired receivers skip interactive confirmation.
+func SendFilesWithKey(peerAddr, name, keyPath, pathsJSON string) (string, error) {
 	res := summary{OK: false, Path: "lan"}
 	name = pairing.SanitizeName(name)
 	if name == "" {
@@ -390,6 +448,14 @@ func SendFiles(peerAddr, name, pathsJSON string) (string, error) {
 		res.Error = "peerAddr and at least one path are required"
 		return marshalSummary(res), fmt.Errorf("%s", res.Error)
 	}
+	var key *identity.Key
+	devID := identity.DeviceID(name)
+	if keyPath != "" {
+		if k, kerr := identity.LoadOrCreateKey(keyPath); kerr == nil {
+			key = k
+			devID = k.ID()
+		}
+	}
 	var totalBytes int64
 	for _, p := range paths {
 		if st, serr := os.Stat(p); serr == nil {
@@ -399,11 +465,11 @@ func SendFiles(peerAddr, name, pathsJSON string) (string, error) {
 	txSeq := beginActiveTransfer("send", peerAddr, filepath.Base(paths[0]), len(paths), totalBytes)
 	defer endActiveTransfer(txSeq)
 
-	res, err := sendFilesLAN(context.Background(), peerAddr, name, identity.DeviceID(name), paths, 10*time.Second, txSeq, nil)
+	res, err := sendFilesLAN(context.Background(), peerAddr, name, devID, key, paths, 10*time.Second, txSeq, nil)
 	return marshalSummary(res), err
 }
 
-func sendFilesLAN(ctx context.Context, peerAddr, name string, devID [32]byte, paths []string, dialTimeout time.Duration, txSeq uint64, logger *logging.Logger) (summary, error) {
+func sendFilesLAN(ctx context.Context, peerAddr, name string, devID [32]byte, key *identity.Key, paths []string, dialTimeout time.Duration, txSeq uint64, logger *logging.Logger) (summary, error) {
 	res := summary{OK: false, Path: "lan"}
 	d := pathmgr.NewTCPDial(peerAddr)
 	dctx, cancel := context.WithTimeout(ctx, dialTimeout)
@@ -418,20 +484,26 @@ func sendFilesLAN(ctx context.Context, peerAddr, name string, devID [32]byte, pa
 		res.Error = err.Error()
 		return res, err
 	}
-	s, err := session.Dial(nc, session.Params{
+	params := session.Params{
 		DeviceID:     devID,
 		Name:         name,
 		Capabilities: proto.CapResume,
-	})
+	}
+	if key != nil {
+		params.PubKey = key.Public()
+		params.Sign = key.Sign
+	}
+	s, err := session.Dial(nc, params)
 	if err != nil {
 		_ = nc.Close()
 		res.Error = err.Error()
 		return res, err
 	}
 	defer s.Close()
-	updateActiveTransfer(txSeq, "transferring", "lan", pairing.SanitizeName(s.Peer.Name), "", 0, 0, -1, 0)
+	updateActiveTransfer(txSeq, "waiting", "lan", pairing.SanitizeName(s.Peer.Name), "", 0, 0, -1, 0)
 	out, err := transfer.Send(s, paths, transfer.Config{
-		Log: logger,
+		StartTimeout: 65 * time.Second,
+		Log:          logger,
 		OnDetailProgress: func(snap transfer.ProgressSnapshot) {
 			updateActiveTransfer(txSeq, snap.Stage, "lan", "", snap.FileName, snap.FileIndex, snap.FileCount, snap.BytesDone, snap.BytesTotal)
 		},

@@ -206,6 +206,53 @@ func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error)
 	return res, nil
 }
 
+// sendToLANTarget pushes files directly over TCP to an unpaired LAN peer
+// (temporary transfer; receiver must have its main UI open and confirm).
+func sendToLANTarget(a *app, files []string, targetName, addr string) (client.Result, error) {
+	files = expandSendPaths(files)
+	if len(files) == 0 {
+		return client.Result{}, fmt.Errorf("所选文件夹内没有可发送的文件")
+	}
+	var totalBytes int64
+	for _, fp := range files {
+		if st, serr := os.Stat(fp); serr == nil {
+			totalBytes += st.Size()
+		}
+	}
+	label := strings.TrimSpace(targetName)
+	if label == "" {
+		label = addr
+	}
+	txID := a.beginTransfer("send", label, filepath.Base(files[0]), len(files), totalBytes)
+	defer a.endTransfer(txID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	opts := client.Options{
+		KeyPath: a.keyPath,
+		Name:    a.deviceName(),
+		OnStatus: func(st client.Status) {
+			a.updateTransfer(txID, st.Stage, "LAN", "", st.FileName, st.FileIndex, st.FileCount, st.BytesDone, st.BytesTotal)
+		},
+	}
+	res, err := client.SendLAN(ctx, opts, addr, files)
+	if err != nil {
+		a.event("desktop.lan_send_error", map[string]any{"addr": addr, "error": err.Error()})
+		a.note(fmt.Sprintf("%s  → %s · %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(label), summarizeFiles(files)))
+		return client.Result{}, err
+	}
+	if res.PeerName != "" {
+		label = res.PeerName
+	}
+	a.event("desktop.lan_send_done", map[string]any{
+		"addr": addr, "peer": label, "bytes": res.Bytes, "chunks": res.Chunks,
+		"duration_ms": res.Duration.Milliseconds(), "transfer_id": res.TransferID,
+	})
+	a.note(fmt.Sprintf("%s  → %s · %s · %s · %s · LAN",
+		time.Now().Format("15:04"), sanitizeLedgerText(label), summarizeFiles(files), humanBytes(res.Bytes), fmtDur(res.Duration)))
+	return res, nil
+}
+
 func fmtDur(d time.Duration) string {
 	if d < time.Second {
 		ms := d.Milliseconds()

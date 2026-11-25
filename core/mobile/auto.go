@@ -751,7 +751,7 @@ func SendAuto(signalURL, keyPath, pairedPath, toID, name, pathsJSON, hintJSON, s
 	defer endActiveTransfer(txSeq)
 
 	if lanAddr := lanPeerAddr(toID); lanAddr != "" {
-		res, lerr := sendFilesLAN(ctx, lanAddr, name, key.ID(), paths, 3*time.Second, txSeq, logger)
+		res, lerr := sendFilesLAN(ctx, lanAddr, name, key.ID(), key, paths, 3*time.Second, txSeq, logger)
 		if lerr == nil && res.OK {
 			if peerName := pairing.SanitizeName(res.Peer); peerName != "" {
 				identity.UpdatePeerName(pairedPath, toID, peerName)

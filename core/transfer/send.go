@@ -70,7 +70,7 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 	if err := s.SendMsg(proto.TypeManifest, manifest); err != nil {
 		return nil, err
 	}
-	startIdx, startOff, err := waitStart(s, tid, cfg.timeout())
+	startIdx, startOff, err := waitStart(s, tid, cfg.startTimeout())
 	if err != nil {
 		return nil, fmt.Errorf("manifest ack: %w", err)
 	}

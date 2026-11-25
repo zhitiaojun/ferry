@@ -46,6 +46,19 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 		_ = s.SendError(code, "%s", err)
 		return nil, err
 	}
+	if cfg.Confirm != nil {
+		if err := cfg.Confirm(m); err != nil {
+			code := proto.CodeCancelled
+			msg := err.Error()
+			var pe *proto.Error
+			if errors.As(err, &pe) {
+				code = pe.Code
+				msg = pe.Msg
+			}
+			_ = s.SendError(code, "%s", msg)
+			return nil, err
+		}
+	}
 
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create output dir: %w", err)

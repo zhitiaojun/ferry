@@ -17,12 +17,14 @@ import (
 	"github.com/cwlindean/filetransfer/core/client"
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/pairing"
+	"github.com/cwlindean/filetransfer/core/proto"
 )
 
 const (
-	mainClass     = "ftMainWin"
-	wmAppPaint    = wmApp + 10
-	wmAppReload   = wmApp + 11
+	mainClass         = "ftMainWin"
+	wmAppPaint        = wmApp + 10
+	wmAppReload       = wmApp + 11
+	wmConfirmIncoming = wmApp + 12
 	wmPrint       = 0x0317
 	wmPrintClient = 0x0318
 	wmSizeMsg     = 0x0005
@@ -77,6 +79,7 @@ const (
 	hoverTileFiles
 	hoverTileFolder
 	hoverQueueClear
+	hoverHomeScanLan
 	hoverAddDevice
 	hoverPeerPicker
 	hoverSendBtn
@@ -88,10 +91,13 @@ const (
 	hoverFltRecv
 	hoverOpenDir
 	hoverLedgerRow
+	hoverDevScanLanBtn
 	hoverDevAddBtn
 	hoverDevSendBtn
 	hoverDevRenameBtn
 	hoverDevDeleteBtn
+	hoverDevLanSendBtn
+	hoverDevLanSelectBtn
 	hoverSetRecv
 	hoverSetResetDir
 	hoverSetChangeDir
@@ -239,10 +245,12 @@ func appsUseDarkTheme() bool {
 }
 
 type mainWin struct {
-	app      *app
-	hwnd     syscall.Handle
-	peers    []client.Peer
-	sel      int
+	app         *app
+	hwnd        syscall.Handle
+	peers       []client.Peer
+	lanTargets  []lanPeerEntry
+	selectedLAN lanPeerEntry
+	sel         int
 	page     int
 	filter   int
 	queued   []string
@@ -274,6 +282,7 @@ type mainWin struct {
 	tileFolderR   rectT
 	queueBoxR     rectT
 	queueClearR   rectT
+	homeScanLanR  rectT
 	addDevLinkR   rectT
 	peerPickerR   rectT
 	sendBtnR      rectT
@@ -288,10 +297,13 @@ type mainWin struct {
 	activeTxR   rectT
 	ledgerRowsR []rectT
 
-	devAddBtnR     rectT
-	devSendBtnsR   []rectT
-	devRenameBtnsR []rectT
-	devDeleteBtnsR []rectT
+	devScanLanBtnR    rectT
+	devAddBtnR        rectT
+	devSendBtnsR      []rectT
+	devRenameBtnsR    []rectT
+	devDeleteBtnsR    []rectT
+	devLanSendBtnsR   []rectT
+	devLanSelectBtnsR []rectT
 
 	setRecvBtnR   rectT
 	setResetDirR  rectT
@@ -312,7 +324,146 @@ type mainWin struct {
 var (
 	mainMu   sync.Mutex
 	mainWinH syscall.Handle
+
+	incomingMu      sync.Mutex
+	pendingIncoming *incomingConfirmReq
 )
+
+type incomingConfirmReq struct {
+	title  string
+	body   string
+	dlg    syscall.Handle
+	done   bool
+	respCh chan error
+}
+
+func isMainWindowOpen() (syscall.Handle, bool) {
+	h := existingMainWindow()
+	if h == 0 {
+		return 0, false
+	}
+	vis, _, _ := procIsWindowVisible.Call(uintptr(h))
+	if vis == 0 {
+		return 0, false
+	}
+	iconic, _, _ := procIsIconic.Call(uintptr(h))
+	if iconic != 0 {
+		return 0, false
+	}
+	return h, true
+}
+
+func formatIncomingConfirmBody(peerName, remoteAddr string, m *proto.Manifest) string {
+	from := peerName
+	if from == "" {
+		from = "局域网未知设备"
+	}
+	if remoteAddr != "" {
+		from += " (" + remoteAddr + ")"
+	}
+	var total uint64
+	for _, f := range m.Files {
+		total += f.Size
+	}
+	var lines []string
+	limit := len(m.Files)
+	if limit > 3 {
+		limit = 3
+	}
+	for i := 0; i < limit; i++ {
+		lines = append(lines, fmt.Sprintf("• %s (%s)", m.Files[i].Name, humanBytes(int64(m.Files[i].Size))))
+	}
+	if len(m.Files) > limit {
+		lines = append(lines, fmt.Sprintf("• 等共 %d 个文件", len(m.Files)))
+	}
+	return fmt.Sprintf("来自：%s\n共 %d 个文件（%s）\n%s\n\n该设备未配对，仅本次临时接收",
+		from, len(m.Files), humanBytes(int64(total)), strings.Join(lines, "\n"))
+}
+
+func (r *incomingConfirmReq) resolve(err error) {
+	incomingMu.Lock()
+	if r.done {
+		incomingMu.Unlock()
+		return
+	}
+	r.done = true
+	if pendingIncoming == r {
+		pendingIncoming = nil
+	}
+	ch := r.respCh
+	incomingMu.Unlock()
+	select {
+	case ch <- err:
+	default:
+	}
+}
+
+func cancelPendingIncomingConfirm(reason string) {
+	incomingMu.Lock()
+	req := pendingIncoming
+	if req == nil || req.done {
+		incomingMu.Unlock()
+		return
+	}
+	req.done = true
+	pendingIncoming = nil
+	dlg := req.dlg
+	ch := req.respCh
+	incomingMu.Unlock()
+
+	if dlg != 0 {
+		procPostMessageW.Call(uintptr(dlg), wmClose, 0, 0)
+	}
+	if reason == "" {
+		reason = "对方已关闭主界面"
+	}
+	select {
+	case ch <- proto.NewError(proto.CodeCancelled, reason):
+	default:
+	}
+}
+
+func requestIncomingConfirm(peerName, remoteAddr string, m *proto.Manifest) error {
+	hwnd, ok := isMainWindowOpen()
+	if !ok {
+		return proto.NewError(proto.CodeUnauthorized, "对方未打开轻渡主界面，无法接收局域网临时文件")
+	}
+	req := &incomingConfirmReq{
+		title:  "收到局域网临时文件",
+		body:   formatIncomingConfirmBody(peerName, remoteAddr, m),
+		respCh: make(chan error, 1),
+	}
+	incomingMu.Lock()
+	if pendingIncoming != nil && !pendingIncoming.done {
+		incomingMu.Unlock()
+		return proto.NewError(proto.CodeCancelled, "对方正在确认另一条传输请求，请稍后再试")
+	}
+	pendingIncoming = req
+	incomingMu.Unlock()
+
+	procPostMessageW.Call(uintptr(hwnd), wmConfirmIncoming, 0, 0)
+
+	timer := time.NewTimer(60 * time.Second)
+	defer timer.Stop()
+	select {
+	case err := <-req.respCh:
+		return err
+	case <-timer.C:
+		incomingMu.Lock()
+		dlg := req.dlg
+		if !req.done {
+			req.done = true
+			if pendingIncoming == req {
+				pendingIncoming = nil
+			}
+		}
+		incomingMu.Unlock()
+		if dlg != 0 {
+			procPostMessageW.Call(uintptr(dlg), wmClose, 0, 0)
+		}
+		return proto.NewError(proto.CodeTimeout, "等待对方确认超时")
+	}
+}
 
 var recvEnabled atomic.Bool
 
@@ -441,15 +592,21 @@ func mainWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintpt
 	case wmEraseBkgnd:
 		return 1
 	case wmSizeMsg:
+		if wParam == 1 { // SIZE_MINIMIZED
+			cancelPendingIncomingConfirm("对方最小化了主界面")
+		}
 		procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 		return 0
 	case wmShowWindow:
 		if w != nil {
 			if wParam != 0 {
 				w.syncTimer(hwnd)
-			} else if w.timer != 0 {
-				procKillTimer.Call(uintptr(hwnd), mainTimerID)
-				w.timer = 0
+			} else {
+				cancelPendingIncomingConfirm("对方关闭了主界面")
+				if w.timer != 0 {
+					procKillTimer.Call(uintptr(hwnd), mainTimerID)
+					w.timer = 0
+				}
 			}
 		}
 		return 0
@@ -519,10 +676,51 @@ func mainWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintpt
 			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 		}
 		return 0
+	case wmConfirmIncoming:
+		incomingMu.Lock()
+		req := pendingIncoming
+		incomingMu.Unlock()
+		if req == nil {
+			return 0
+		}
+		if _, ok := isMainWindowOpen(); !ok {
+			req.resolve(proto.NewError(proto.CodeUnauthorized, "对方未打开轻渡主界面，无法接收局域网临时文件"))
+			return 0
+		}
+		procSetForegroundWindow.Call(uintptr(hwnd))
+		dlg := openConfirmDialog(confirmOpts{
+			Owner:       hwnd,
+			Title:       req.title,
+			Body:        req.body,
+			ConfirmText: "接收",
+			CancelText:  "拒绝",
+			OnConfirm: func() {
+				req.resolve(nil)
+			},
+			OnCancel: func() {
+				req.resolve(proto.NewError(proto.CodeCancelled, "对方拒绝接收"))
+			},
+		})
+		if dlg == 0 {
+			req.resolve(proto.NewError(proto.CodeCancelled, "无法弹出确认窗口"))
+			return 0
+		}
+		incomingMu.Lock()
+		stale := req.done
+		if !stale {
+			req.dlg = dlg
+		}
+		incomingMu.Unlock()
+		if stale {
+			procPostMessageW.Call(uintptr(dlg), wmClose, 0, 0)
+		}
+		return 0
 	case wmClose:
+		cancelPendingIncomingConfirm("对方关闭了主界面")
 		procShowWindow.Call(uintptr(hwnd), swHide)
 		return 0
 	case wmDestroy:
+		cancelPendingIncomingConfirm("对方关闭了主界面")
 		if w != nil {
 			if w.timer != 0 {
 				procKillTimer.Call(uintptr(hwnd), mainTimerID)
@@ -719,6 +917,29 @@ func (w *mainWin) loadPeers() {
 	if w.sel < 0 {
 		w.sel = 0
 	}
+	w.syncLANTargets()
+}
+
+func (w *mainWin) syncLANTargets() {
+	if w.app == nil {
+		w.lanTargets = nil
+		w.selectedLAN = lanPeerEntry{}
+		return
+	}
+	w.lanTargets = w.app.unpairedLANPeers(w.peers)
+	if w.selectedLAN.id != "" {
+		found := false
+		for _, e := range w.lanTargets {
+			if e.id == w.selectedLAN.id {
+				w.selectedLAN = e
+				found = true
+				break
+			}
+		}
+		if !found {
+			w.selectedLAN = lanPeerEntry{}
+		}
+	}
 }
 
 func (w *mainWin) syncTimer(hwnd syscall.Handle) {
@@ -729,16 +950,94 @@ func (w *mainWin) syncTimer(hwnd syscall.Handle) {
 	}
 }
 
-func (w *mainWin) hasPeers() bool { return len(w.peers) > 0 }
+type sendTarget struct {
+	isLAN bool
+	peer  client.Peer
+	lan   lanPeerEntry
+}
 
-func (w *mainWin) activePeer() (client.Peer, bool) {
-	if len(w.peers) == 0 {
-		return client.Peer{}, false
+func (t sendTarget) label() string {
+	if t.isLAN {
+		if t.lan.name != "" {
+			return t.lan.name
+		}
+		return t.lan.addr
 	}
-	if w.sel < 0 || w.sel >= len(w.peers) {
-		w.sel = 0
+	return peerLabel(t.peer)
+}
+
+func (w *mainWin) targetCount() int {
+	return len(w.peers) + len(w.lanTargets)
+}
+
+func (w *mainWin) hasPeers() bool { return w.targetCount() > 0 }
+
+func (w *mainWin) activeTarget() (sendTarget, bool) {
+	if w.selectedLAN.id != "" && w.selectedLAN.addr != "" {
+		return sendTarget{isLAN: true, lan: w.selectedLAN}, true
 	}
-	return w.peers[w.sel], true
+	if len(w.peers) > 0 {
+		if w.sel < 0 || w.sel >= len(w.peers) {
+			w.sel = 0
+		}
+		return sendTarget{peer: w.peers[w.sel]}, true
+	}
+	if len(w.lanTargets) > 0 {
+		return sendTarget{isLAN: true, lan: w.lanTargets[0]}, true
+	}
+	return sendTarget{}, false
+}
+
+func (w *mainWin) cycleTarget() {
+	total := w.targetCount()
+	if total <= 1 {
+		return
+	}
+	cur := 0
+	if w.selectedLAN.id != "" {
+		cur = len(w.peers)
+		for i, e := range w.lanTargets {
+			if e.id == w.selectedLAN.id {
+				cur = len(w.peers) + i
+				break
+			}
+		}
+	} else if len(w.peers) > 0 {
+		cur = w.sel
+	}
+	next := (cur + 1) % total
+	if next < len(w.peers) {
+		w.sel = next
+		w.selectedLAN = lanPeerEntry{}
+	} else {
+		w.selectedLAN = w.lanTargets[next-len(w.peers)]
+	}
+}
+
+func (w *mainWin) scanLAN(hwnd syscall.Handle) {
+	if w.app == nil {
+		return
+	}
+	w.status = "正在搜索同局域网设备…"
+	started := w.app.triggerLANScan(func(_ int) {
+		mainMu.Lock()
+		if mw := mainWins[hwnd]; mw != nil {
+			mw.syncLANTargets()
+			if len(mw.lanTargets) > 0 {
+				mw.status = fmt.Sprintf("已发现 %d 台局域网未配对设备", len(mw.lanTargets))
+			} else if len(mw.peers) > 0 {
+				mw.status = "未发现新的未配对局域网设备"
+			} else {
+				mw.status = "暂未发现其他局域网设备，请确认对方已打开轻渡"
+			}
+		}
+		mainMu.Unlock()
+		procPostMessageW.Call(uintptr(hwnd), wmAppPaint, 0, 0)
+	})
+	if !started {
+		w.status = "正在搜索局域网，请稍候…"
+	}
+	procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 }
 
 // ---------------------------------------------------------------------------
@@ -764,15 +1063,19 @@ func (w *mainWin) layout(cw, ch int32) {
 	w.navDevicesR = rectT{navX, w.navHomeR.bottom + p(6), navX + navW, w.navHomeR.bottom + p(6) + navH}
 	w.navSetR = rectT{navX, w.navDevicesR.bottom + p(6), navX + navW, w.navDevicesR.bottom + p(6) + navH}
 
+	w.syncLANTargets()
+
 	// Reset page-specific rects
 	w.tileFilesR, w.tileFolderR, w.queueBoxR, w.queueClearR = rectT{}, rectT{}, rectT{}, rectT{}
-	w.addDevLinkR, w.peerPickerR, w.sendBtnR, w.sendTextR, w.sendClipR, w.tempShareBtnR = rectT{}, rectT{}, rectT{}, rectT{}, rectT{}, rectT{}
+	w.homeScanLanR, w.addDevLinkR, w.peerPickerR, w.sendBtnR, w.sendTextR, w.sendClipR, w.tempShareBtnR = rectT{}, rectT{}, rectT{}, rectT{}, rectT{}, rectT{}, rectT{}
 	w.fltAllR, w.fltSendR, w.fltRecvR, w.openDirR, w.activeTxR = rectT{}, rectT{}, rectT{}, rectT{}, rectT{}
 	w.ledgerRowsR = w.ledgerRowsR[:0]
-	w.devAddBtnR = rectT{}
+	w.devScanLanBtnR, w.devAddBtnR = rectT{}, rectT{}
 	w.devSendBtnsR = w.devSendBtnsR[:0]
 	w.devRenameBtnsR = w.devRenameBtnsR[:0]
 	w.devDeleteBtnsR = w.devDeleteBtnsR[:0]
+	w.devLanSendBtnsR = w.devLanSendBtnsR[:0]
+	w.devLanSelectBtnsR = w.devLanSelectBtnsR[:0]
 	w.setRecvBtnR, w.setResetDirR, w.setChangeDirR, w.setOpenDirR, w.setAutoBtnR, w.setRenameBtnR, w.setCopyIDRowR = rectT{}, rectT{}, rectT{}, rectT{}, rectT{}, rectT{}, rectT{}
 
 	switch w.page {
@@ -810,7 +1113,8 @@ func (w *mainWin) layout(cw, ch int32) {
 			w.queueClearR = rectT{inR - p(42), y, inR, y + p(32)}
 			y = w.queueBoxR.bottom + p(12)
 		}
-		w.addDevLinkR = rectT{inR - p(64), y, inR, y + p(22)}
+		w.addDevLinkR = rectT{inR - p(56), y, inR, y + p(22)}
+		w.homeScanLanR = rectT{w.addDevLinkR.left - p(78), y, w.addDevLinkR.left - p(8), y + p(22)}
 		y += p(24)
 		w.peerPickerR = rectT{inL, y, inR, y + p(34)}
 		y = w.peerPickerR.bottom + p(14)
@@ -848,22 +1152,41 @@ func (w *mainWin) layout(cw, ch int32) {
 		pad := p(28)
 		paneR := cw - pad
 		w.devAddBtnR = rectT{paneR - p(96), topH + p(24), paneR, topH + p(58)}
+		w.devScanLanBtnR = rectT{w.devAddBtnR.left - p(10) - p(98), topH + p(24), w.devAddBtnR.left - p(10), topH + p(58)}
 		y := topH + p(94)
 		rowH := p(62)
 		btnGap := p(8)
-		for range w.peers {
-			if y+rowH > ch-p(36) {
+		maxY := ch - p(36)
+		if len(w.peers) == 0 {
+			y += p(68)
+		} else {
+			for range w.peers {
+				if y+rowH > maxY {
+					break
+				}
+				topB := y + p(15)
+				botB := y + rowH - p(15)
+				delR := rectT{paneR - p(70), topB, paneR - p(16), botB}
+				renR := rectT{delR.left - btnGap - p(62), topB, delR.left - btnGap, botB}
+				sendR := rectT{renR.left - btnGap - p(74), topB, renR.left - btnGap, botB}
+				w.devDeleteBtnsR = append(w.devDeleteBtnsR, delR)
+				w.devRenameBtnsR = append(w.devRenameBtnsR, renR)
+				w.devSendBtnsR = append(w.devSendBtnsR, sendR)
+				y += rowH
+			}
+		}
+		lanY := y + p(18) + p(46)
+		for range w.lanTargets {
+			if lanY+rowH > maxY {
 				break
 			}
-			topB := y + p(15)
-			botB := y + rowH - p(15)
-			delR := rectT{paneR - p(70), topB, paneR - p(16), botB}
-			renR := rectT{delR.left - btnGap - p(62), topB, delR.left - btnGap, botB}
-			sendR := rectT{renR.left - btnGap - p(74), topB, renR.left - btnGap, botB}
-			w.devDeleteBtnsR = append(w.devDeleteBtnsR, delR)
-			w.devRenameBtnsR = append(w.devRenameBtnsR, renR)
-			w.devSendBtnsR = append(w.devSendBtnsR, sendR)
-			y += rowH
+			topB := lanY + p(15)
+			botB := lanY + rowH - p(15)
+			selR := rectT{paneR - p(82), topB, paneR - p(16), botB}
+			sendR := rectT{selR.left - btnGap - p(74), topB, selR.left - btnGap, botB}
+			w.devLanSelectBtnsR = append(w.devLanSelectBtnsR, selR)
+			w.devLanSendBtnsR = append(w.devLanSendBtnsR, sendR)
+			lanY += rowH
 		}
 
 	case pageSettings:
@@ -1174,8 +1497,17 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 
 	// Recipient row
 	lblTop := w.addDevLinkR.top
-	cv.drawAlphaText(w.fontSm, "发给", rectT{w.tileFilesR.left, lblTop, w.addDevLinkR.left, w.addDevLinkR.bottom},
+	cv.drawAlphaText(w.fontSm, "发给", rectT{w.tileFilesR.left, lblTop, w.homeScanLanR.left, w.addDevLinkR.bottom},
 		dtSingleLine|dtVCenter, w.pal.ink2)
+	scanLbl := "搜索局域网"
+	if w.app != nil && w.app.isLANScanning() {
+		scanLbl = "搜索中…"
+	}
+	scanColor := w.pal.ink2
+	if w.hover == hoverHomeScanLan {
+		scanColor = w.pal.accent
+	}
+	cv.drawAlphaText(w.fontSm, scanLbl, w.homeScanLanR, dtRight|dtSingleLine|dtVCenter, scanColor)
 	cv.drawAlphaText(w.fontSm, "添加设备", w.addDevLinkR, dtRight|dtSingleLine|dtVCenter, w.pal.accent)
 
 	pEdge := w.pal.line
@@ -1183,16 +1515,19 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 		pEdge = w.pal.accent
 	}
 	cv.drawAlphaRoundRect(w.peerPickerR, float64(p(8)), w.pal.paper, tileA, pEdge, w.surfaceAlpha(220), 1.0)
-	if peer, ok := w.activePeer(); ok {
-		txt := peerLabel(peer)
-		if len(w.peers) > 1 {
+	if target, ok := w.activeTarget(); ok {
+		txt := target.label()
+		if target.isLAN {
+			txt += " · 局域网临时"
+		}
+		if w.targetCount() > 1 {
 			txt += "  ▾"
 		}
 		cv.drawAlphaText(w.fontBold, txt,
 			rectT{w.peerPickerR.left + p(10), w.peerPickerR.top, w.peerPickerR.right - p(10), w.peerPickerR.bottom},
 			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink)
 	} else {
-		cv.drawAlphaText(w.fontSm, "尚未配对设备，点此扫码添加",
+		cv.drawAlphaText(w.fontSm, "未配对，点此扫码或搜局域网",
 			rectT{w.peerPickerR.left + p(10), w.peerPickerR.top, w.peerPickerR.right - p(10), w.peerPickerR.bottom},
 			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
 	}
@@ -1465,7 +1800,7 @@ func stageDisplayLabel(stage string) string {
 	case "connecting":
 		return "连接中"
 	case "waiting":
-		return "等待接收方"
+		return "等待对方确认"
 	case "racing":
 		return "协商直连路径"
 	case "transferring":
@@ -1565,9 +1900,21 @@ func (w *mainWin) drawDevices(cv *glassCanvas, cr rectT) {
 	paneL := w.railR.right + pad
 	paneR := cr.right - pad
 
-	cv.drawAlphaText(w.fontH1, "设备", rectT{paneL, topH + p(20), paneR - p(110), topH + p(52)}, dtSingleLine|dtVCenter, w.pal.ink)
-	cv.drawAlphaText(w.fontSm, "已配对的设备可直接互相收发文件。", rectT{paneL, topH + p(54), paneR - p(110), topH + p(76)},
-		dtSingleLine|dtVCenter, w.pal.ink2)
+	cv.drawAlphaText(w.fontH1, "设备", rectT{paneL, topH + p(20), w.devScanLanBtnR.left - p(12), topH + p(52)}, dtSingleLine|dtVCenter, w.pal.ink)
+	cv.drawAlphaText(w.fontSm, "已配对设备免确认后台接收；附近局域网设备支持免配对临时发送。",
+		rectT{paneL, topH + p(54), w.devScanLanBtnR.left - p(12), topH + p(76)},
+		dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
+
+	scanFill := w.pal.paper2
+	if w.hover == hoverDevScanLanBtn {
+		scanFill = w.pal.paper3
+	}
+	cv.drawAlphaRoundRect(w.devScanLanBtnR, float64(p(8)), scanFill, w.surfaceAlpha(220), w.pal.line, w.surfaceAlpha(220), 1.0)
+	scanBtnLbl := "搜索局域网"
+	if w.app != nil && w.app.isLANScanning() {
+		scanBtnLbl = "搜索中…"
+	}
+	cv.drawAlphaText(w.fontSm, scanBtnLbl, w.devScanLanBtnR, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
 
 	addFill := w.pal.accent
 	if w.hover == hoverDevAddBtn {
@@ -1576,95 +1923,186 @@ func (w *mainWin) drawDevices(cv *glassCanvas, cr rectT) {
 	cv.drawAlphaRoundRect(w.devAddBtnR, float64(p(8)), addFill, 255, addFill, 255, 0)
 	cv.drawAlphaText(w.fontBold, "添加设备", w.devAddBtnR, dtCenter|dtSingleLine|dtVCenter, w.pal.accentInk)
 
-	if len(w.peers) == 0 {
-		box := rectT{paneL, topH + p(94), paneR, topH + p(224)}
-		cv.drawAlphaRoundRect(box, float64(p(12)), w.pal.paper2, w.surfaceAlpha(190), w.pal.line, w.surfaceAlpha(200), 1.0)
-		cv.drawAlphaText(w.fontBold, "还没有已配对设备", rectT{paneL, topH + p(130), paneR, topH + p(158)},
-			dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
-		cv.drawAlphaText(w.fontSm, "点击右上角「添加设备」，用手机轻渡扫码或输入 6 位配对码即可绑定。",
-			rectT{paneL + p(20), topH + p(160), paneR - p(20), topH + p(194)}, dtCenter|dtSingleLine|dtVCenter, w.pal.ink2)
-		return
-	}
-
 	rowH := p(62)
 	top := topH + p(94)
-	box := rectT{paneL, top, paneR, top + int32(len(w.devSendBtnsR))*rowH}
-	cv.drawAlphaRoundRect(box, float64(p(12)), w.pal.paper, w.surfaceAlpha(195), w.pal.line, w.surfaceAlpha(200), 1.0)
-	for i, br := range w.devSendBtnsR {
-		ry := top + int32(i)*rowH
-		peer := w.peers[i]
-		nameX := paneL + p(16)
-		nameMaxR := br.left - p(12)
-		peerName := peerLabel(peer)
+	pairedBot := top
+	if len(w.peers) == 0 {
+		pairedBot = top + p(68)
+		box := rectT{paneL, top, paneR, pairedBot}
+		cv.drawAlphaRoundRect(box, float64(p(12)), w.pal.paper2, w.surfaceAlpha(190), w.pal.line, w.surfaceAlpha(200), 1.0)
+		cv.drawAlphaText(w.fontSm, "还没有已配对设备 · 点击右上角「添加设备」绑定，或下方直接向同局域网设备临时发送。",
+			rectT{paneL + p(16), top, paneR - p(16), pairedBot}, dtCenter|dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
+	} else {
+		pairedBot = top + int32(len(w.devSendBtnsR))*rowH
+		box := rectT{paneL, top, paneR, pairedBot}
+		cv.drawAlphaRoundRect(box, float64(p(12)), w.pal.paper, w.surfaceAlpha(195), w.pal.line, w.surfaceAlpha(200), 1.0)
+		for i, br := range w.devSendBtnsR {
+			ry := top + int32(i)*rowH
+			peer := w.peers[i]
+			nameX := paneL + p(16)
+			nameMaxR := br.left - p(12)
+			peerName := peerLabel(peer)
 
-		reach := "offline"
-		if w.app != nil {
-			reach = w.app.peerReachability(peer.ID)
-		}
-		stLabel, stBg, stFg := "离线", w.pal.paper3, w.pal.ink2
-		switch reach {
-		case "lan":
-			stLabel, stBg, stFg = "局域网", w.pal.accentSoft, w.pal.accent
-		case "cloud":
-			stLabel, stBg, stFg = "云端在线", w.pal.accentSoft, w.pal.accent
-		}
-		stBadgeW := textWidth(cv.memDC, w.fontSm, stLabel) + p(14)
-		nameW := textWidth(cv.memDC, w.fontBold, peerName)
-		nameLimitR := nameMaxR - stBadgeW - p(8)
-		if nameLimitR < nameX+p(40) {
-			nameLimitR = nameX + p(40)
-		}
-		cv.drawAlphaText(w.fontBold, peerName,
-			rectT{nameX, ry + p(9), nameLimitR, ry + p(31)},
-			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink)
-
-		badgeL := nameX + nameW + p(8)
-		if badgeL+stBadgeW > nameMaxR {
-			badgeL = nameMaxR - stBadgeW
-		}
-		if badgeL > nameX+p(24) {
-			badgeR := rectT{badgeL, ry + p(10), badgeL + stBadgeW, ry + p(30)}
-			cv.drawAlphaRoundRect(badgeR, float64(p(10)), stBg, w.surfaceAlpha(240), 0, 0, 0)
-			cv.drawAlphaText(w.fontSm, stLabel, badgeR, dtCenter|dtSingleLine|dtVCenter, stFg)
-		}
-
-		cv.drawAlphaText(w.fontSm, "设备 ID "+truncID(peer.ID),
-			rectT{paneL + p(16), ry + p(31), br.left - p(12), ry + p(52)},
-			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
-
-		bFill := w.pal.paper2
-		if w.hover == hoverDevSendBtn && w.hoverIdx == i {
-			bFill = w.pal.paper3
-		}
-		cv.drawAlphaRoundRect(br, float64(p(6)), bFill, w.surfaceAlpha(210), w.pal.line, w.surfaceAlpha(200), 1.0)
-		cv.drawAlphaText(w.fontSm, "发送文件", br, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
-
-		if i < len(w.devRenameBtnsR) {
-			rr := w.devRenameBtnsR[i]
-			rFill := w.pal.paper2
-			if w.hover == hoverDevRenameBtn && w.hoverIdx == i {
-				rFill = w.pal.paper3
+			reach := "offline"
+			if w.app != nil {
+				reach = w.app.peerReachability(peer.ID)
 			}
-			cv.drawAlphaRoundRect(rr, float64(p(6)), rFill, w.surfaceAlpha(210), w.pal.line, w.surfaceAlpha(200), 1.0)
-			cv.drawAlphaText(w.fontSm, "重命名", rr, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
-		}
-		if i < len(w.devDeleteBtnsR) {
-			dr := w.devDeleteBtnsR[i]
-			dFill := w.pal.paper2
-			dEdge := w.pal.line
-			dFg := w.pal.danger
-			if w.hover == hoverDevDeleteBtn && w.hoverIdx == i {
-				dFill = w.pal.danger
-				dEdge = w.pal.danger
-				dFg = w.pal.accentInk
+			stLabel, stBg, stFg := "离线", w.pal.paper3, w.pal.ink2
+			switch reach {
+			case "lan":
+				stLabel, stBg, stFg = "局域网", w.pal.accentSoft, w.pal.accent
+			case "cloud":
+				stLabel, stBg, stFg = "云端在线", w.pal.accentSoft, w.pal.accent
 			}
-			cv.drawAlphaRoundRect(dr, float64(p(6)), dFill, w.surfaceAlpha(220), dEdge, w.surfaceAlpha(220), 1.0)
-			cv.drawAlphaText(w.fontSm, "删除", dr, dtCenter|dtSingleLine|dtVCenter, dFg)
-		}
-		if i+1 < len(w.devSendBtnsR) {
-			cv.fillColorAlpha(rectT{paneL + p(16), ry + rowH - 1, paneR - p(16), ry + rowH}, w.pal.lineSoft, w.surfaceAlpha(175))
+			stBadgeW := textWidth(cv.memDC, w.fontSm, stLabel) + p(14)
+			nameW := textWidth(cv.memDC, w.fontBold, peerName)
+			nameLimitR := nameMaxR - stBadgeW - p(8)
+			if nameLimitR < nameX+p(40) {
+				nameLimitR = nameX + p(40)
+			}
+			cv.drawAlphaText(w.fontBold, peerName,
+				rectT{nameX, ry + p(9), nameLimitR, ry + p(31)},
+				dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink)
+
+			badgeL := nameX + nameW + p(8)
+			if badgeL+stBadgeW > nameMaxR {
+				badgeL = nameMaxR - stBadgeW
+			}
+			if badgeL > nameX+p(24) {
+				badgeR := rectT{badgeL, ry + p(10), badgeL + stBadgeW, ry + p(30)}
+				cv.drawAlphaRoundRect(badgeR, float64(p(10)), stBg, w.surfaceAlpha(240), 0, 0, 0)
+				cv.drawAlphaText(w.fontSm, stLabel, badgeR, dtCenter|dtSingleLine|dtVCenter, stFg)
+			}
+
+			cv.drawAlphaText(w.fontSm, "设备 ID "+truncID(peer.ID),
+				rectT{paneL + p(16), ry + p(31), br.left - p(12), ry + p(52)},
+				dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
+
+			bFill := w.pal.paper2
+			if w.hover == hoverDevSendBtn && w.hoverIdx == i {
+				bFill = w.pal.paper3
+			}
+			cv.drawAlphaRoundRect(br, float64(p(6)), bFill, w.surfaceAlpha(210), w.pal.line, w.surfaceAlpha(200), 1.0)
+			cv.drawAlphaText(w.fontSm, "发送文件", br, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
+
+			if i < len(w.devRenameBtnsR) {
+				rr := w.devRenameBtnsR[i]
+				rFill := w.pal.paper2
+				if w.hover == hoverDevRenameBtn && w.hoverIdx == i {
+					rFill = w.pal.paper3
+				}
+				cv.drawAlphaRoundRect(rr, float64(p(6)), rFill, w.surfaceAlpha(210), w.pal.line, w.surfaceAlpha(200), 1.0)
+				cv.drawAlphaText(w.fontSm, "重命名", rr, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
+			}
+			if i < len(w.devDeleteBtnsR) {
+				dr := w.devDeleteBtnsR[i]
+				dFill := w.pal.paper2
+				dEdge := w.pal.line
+				dFg := w.pal.danger
+				if w.hover == hoverDevDeleteBtn && w.hoverIdx == i {
+					dFill = w.pal.danger
+					dEdge = w.pal.danger
+					dFg = w.pal.accentInk
+				}
+				cv.drawAlphaRoundRect(dr, float64(p(6)), dFill, w.surfaceAlpha(220), dEdge, w.surfaceAlpha(220), 1.0)
+				cv.drawAlphaText(w.fontSm, "删除", dr, dtCenter|dtSingleLine|dtVCenter, dFg)
+			}
+			if i+1 < len(w.devSendBtnsR) {
+				cv.fillColorAlpha(rectT{paneL + p(16), ry + rowH - 1, paneR - p(16), ry + rowH}, w.pal.lineSoft, w.surfaceAlpha(175))
+			}
 		}
 	}
+
+	// Section 2: Unpaired LAN peers nearby (temporary LAN transfer)
+	lanHdrY := pairedBot + p(18)
+	lanTopY := lanHdrY + p(46)
+	if lanTopY+p(52) <= cr.bottom-p(24) {
+		cv.drawAlphaText(w.fontBold, "同局域网附近设备", rectT{paneL + p(2), lanHdrY, paneR, lanHdrY + p(22)},
+			dtSingleLine|dtVCenter, w.pal.ink)
+		cv.drawAlphaText(w.fontSm, "免配对临时传输 · 需对方打开轻渡主界面并点击确认接收",
+			rectT{paneL + p(2), lanHdrY + p(22), paneR, lanHdrY + p(42)},
+			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
+
+		if len(w.lanTargets) == 0 {
+			emptyBot := lanTopY + p(62)
+			if emptyBot <= cr.bottom-p(24) {
+				cv.drawAlphaRoundRect(rectT{paneL, lanTopY, paneR, emptyBot}, float64(p(12)),
+					w.pal.paper2, w.surfaceAlpha(190), w.pal.line, w.surfaceAlpha(200), 1.0)
+				cv.drawAlphaText(w.fontSm, "暂未发现其他未配对局域网设备，点击右上角「搜索局域网」刷新",
+					rectT{paneL + p(16), lanTopY, paneR - p(16), emptyBot},
+					dtCenter|dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
+			}
+		} else if len(w.devLanSendBtnsR) > 0 {
+			lanBot := lanTopY + int32(len(w.devLanSendBtnsR))*rowH
+			cv.drawAlphaRoundRect(rectT{paneL, lanTopY, paneR, lanBot}, float64(p(12)),
+				w.pal.paper, w.surfaceAlpha(195), w.pal.line, w.surfaceAlpha(200), 1.0)
+			for i, br := range w.devLanSendBtnsR {
+				ry := lanTopY + int32(i)*rowH
+				entry := w.lanTargets[i]
+				nameX := paneL + p(16)
+				nameMaxR := br.left - p(12)
+				badge := "局域网临时"
+				badgeW := textWidth(cv.memDC, w.fontSm, badge) + p(14)
+				nameW := textWidth(cv.memDC, w.fontBold, entry.name)
+				nameLimitR := nameMaxR - badgeW - p(8)
+				if nameLimitR < nameX+p(40) {
+					nameLimitR = nameX + p(40)
+				}
+				cv.drawAlphaText(w.fontBold, entry.name,
+					rectT{nameX, ry + p(9), nameLimitR, ry + p(31)},
+					dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink)
+
+				badgeL := nameX + nameW + p(8)
+				if badgeL+badgeW > nameMaxR {
+					badgeL = nameMaxR - badgeW
+				}
+				if badgeL > nameX+p(24) {
+					badgeR := rectT{badgeL, ry + p(10), badgeL + badgeW, ry + p(30)}
+					cv.drawAlphaRoundRect(badgeR, float64(p(10)), w.pal.accentSoft, w.surfaceAlpha(240), 0, 0, 0)
+					cv.drawAlphaText(w.fontSm, badge, badgeR, dtCenter|dtSingleLine|dtVCenter, w.pal.accent)
+				}
+
+				sub := entry.addr
+				if entry.iface != "" {
+					sub += " · " + entry.iface
+				}
+				cv.drawAlphaText(w.fontSm, sub,
+					rectT{paneL + p(16), ry + p(31), br.left - p(12), ry + p(52)},
+					dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
+
+				bFill := w.pal.paper2
+				if w.hover == hoverDevLanSendBtn && w.hoverIdx == i {
+					bFill = w.pal.paper3
+				}
+				cv.drawAlphaRoundRect(br, float64(p(6)), bFill, w.surfaceAlpha(210), w.pal.line, w.surfaceAlpha(200), 1.0)
+				cv.drawAlphaText(w.fontSm, "发送文件", br, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
+
+				if i < len(w.devLanSelectBtnsR) {
+					sr := w.devLanSelectBtnsR[i]
+					sFill := w.pal.paper2
+					sEdge := w.pal.line
+					sFg := w.pal.ink
+					if w.selectedLAN.id == entry.id {
+						sFill = w.pal.accentSoft
+						sEdge = w.pal.accent
+						sFg = w.pal.accent
+					} else if w.hover == hoverDevLanSelectBtn && w.hoverIdx == i {
+						sFill = w.pal.paper3
+					}
+					sLbl := "选为目标"
+					if w.selectedLAN.id == entry.id {
+						sLbl = "已选中"
+					}
+					cv.drawAlphaRoundRect(sr, float64(p(6)), sFill, w.surfaceAlpha(210), sEdge, w.surfaceAlpha(200), 1.0)
+					cv.drawAlphaText(w.fontSm, sLbl, sr, dtCenter|dtSingleLine|dtVCenter, sFg)
+				}
+				if i+1 < len(w.devLanSendBtnsR) {
+					cv.fillColorAlpha(rectT{paneL + p(16), ry + rowH - 1, paneR - p(16), ry + rowH}, w.pal.lineSoft, w.surfaceAlpha(175))
+				}
+			}
+		}
+	}
+
 	if w.status != "" {
 		cv.drawAlphaText(w.fontSm, w.status,
 			rectT{paneL, cr.bottom - p(32), paneR, cr.bottom - p(8)},
@@ -1967,6 +2405,8 @@ func (w *mainWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
 		kind = hoverTileFolder
 	case w.page == pageHome && len(w.queued) > 0 && ptIn(w.queueClearR, x, y):
 		kind = hoverQueueClear
+	case w.page == pageHome && ptIn(w.homeScanLanR, x, y):
+		kind = hoverHomeScanLan
 	case w.page == pageHome && ptIn(w.addDevLinkR, x, y):
 		kind = hoverAddDevice
 	case w.page == pageHome && ptIn(w.peerPickerR, x, y):
@@ -1987,6 +2427,8 @@ func (w *mainWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
 		kind = hoverFltRecv
 	case w.page == pageHome && ptIn(w.openDirR, x, y):
 		kind = hoverOpenDir
+	case w.page == pageDevices && ptIn(w.devScanLanBtnR, x, y):
+		kind = hoverDevScanLanBtn
 	case w.page == pageDevices && ptIn(w.devAddBtnR, x, y):
 		kind = hoverDevAddBtn
 	case w.page == pageSettings && ptIn(w.setRecvBtnR, x, y):
@@ -2030,6 +2472,22 @@ func (w *mainWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
 				for i, dr := range w.devDeleteBtnsR {
 					if ptIn(dr, x, y) {
 						kind, idx = hoverDevDeleteBtn, i
+						break
+					}
+				}
+			}
+			if kind == hoverNone {
+				for i, br := range w.devLanSendBtnsR {
+					if ptIn(br, x, y) {
+						kind, idx = hoverDevLanSendBtn, i
+						break
+					}
+				}
+			}
+			if kind == hoverNone {
+				for i, sr := range w.devLanSelectBtnsR {
+					if ptIn(sr, x, y) {
+						kind, idx = hoverDevLanSelectBtn, i
 						break
 					}
 				}
@@ -2116,17 +2574,21 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 		case len(w.queued) > 0 && ptIn(w.queueClearR, x, y):
 			w.queued = nil
 			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+		case ptIn(w.homeScanLanR, x, y):
+			w.page = pageDevices
+			w.loadPeers()
+			w.scanLAN(hwnd)
 		case ptIn(w.addDevLinkR, x, y):
 			openPairWindow(hwnd, w.app)
 		case ptIn(w.peerPickerR, x, y):
-			if len(w.peers) == 0 {
+			if w.targetCount() == 0 {
 				openPairWindow(hwnd, w.app)
-			} else if len(w.peers) > 1 {
-				w.sel = (w.sel + 1) % len(w.peers)
+			} else if w.targetCount() > 1 {
+				w.cycleTarget()
 				procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 			}
 		case ptIn(w.sendBtnR, x, y):
-			peer, ok := w.activePeer()
+			target, ok := w.activeTarget()
 			if !ok {
 				openPairWindow(hwnd, w.app)
 				return
@@ -2134,7 +2596,7 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 			if len(w.queued) > 0 {
 				files := append([]string(nil), w.queued...)
 				w.queued = nil
-				w.sendAsync(hwnd, peer, files)
+				w.sendAsyncTarget(hwnd, target, files)
 			} else {
 				w.pickAndSend(hwnd)
 			}
@@ -2167,6 +2629,10 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 		}
 
 	case pageDevices:
+		if ptIn(w.devScanLanBtnR, x, y) {
+			w.scanLAN(hwnd)
+			return
+		}
 		if ptIn(w.devAddBtnR, x, y) {
 			openPairWindow(hwnd, w.app)
 			return
@@ -2174,6 +2640,7 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 		for i, br := range w.devSendBtnsR {
 			if ptIn(br, x, y) && i < len(w.peers) {
 				w.sel = i
+				w.selectedLAN = lanPeerEntry{}
 				w.pickAndSend(hwnd)
 				return
 			}
@@ -2187,6 +2654,23 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 		for i, dr := range w.devDeleteBtnsR {
 			if ptIn(dr, x, y) && i < len(w.peers) {
 				w.removeSavedPeer(hwnd, w.peers[i])
+				return
+			}
+		}
+		for i, br := range w.devLanSendBtnsR {
+			if ptIn(br, x, y) && i < len(w.lanTargets) {
+				entry := w.lanTargets[i]
+				w.selectedLAN = entry
+				w.pickAndSend(hwnd)
+				return
+			}
+		}
+		for i, sr := range w.devLanSelectBtnsR {
+			if ptIn(sr, x, y) && i < len(w.lanTargets) {
+				w.selectedLAN = w.lanTargets[i]
+				w.page = pageHome
+				w.status = "已选择局域网临时目标：" + w.selectedLAN.name
+				procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 				return
 			}
 		}
@@ -2240,7 +2724,7 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 }
 
 func (w *mainWin) sendClipboard(hwnd syscall.Handle) {
-	peer, ok := w.activePeer()
+	target, ok := w.activeTarget()
 	if !ok {
 		openPairWindow(hwnd, w.app)
 		return
@@ -2251,11 +2735,11 @@ func (w *mainWin) sendClipboard(hwnd syscall.Handle) {
 		procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 		return
 	}
-	w.sendTextPayload(hwnd, peer, txt, "clipboard", "剪贴板")
+	w.sendTextPayload(hwnd, target, txt, "clipboard", "剪贴板")
 }
 
 func (w *mainWin) openSendText(hwnd syscall.Handle) {
-	peer, ok := w.activePeer()
+	target, ok := w.activeTarget()
 	if !ok {
 		openPairWindow(hwnd, w.app)
 		return
@@ -2263,29 +2747,36 @@ func (w *mainWin) openSendText(hwnd syscall.Handle) {
 	openTextInputDialog(textInputOpts{
 		Owner:       hwnd,
 		Title:       "发送文字",
-		Subtitle:    "发给 " + peerLabel(peer) + "（Ctrl+Enter 快速发送）",
+		Subtitle:    "发给 " + target.label() + "（Ctrl+Enter 快速发送）",
 		ConfirmText: "发送",
 		Multiline:   true,
 		AllowEmpty:  false,
 		OnSubmit: func(text string) {
-			w.sendTextPayload(hwnd, peer, text, "text", "文字")
+			w.sendTextPayload(hwnd, target, text, "text", "文字")
 		},
 	})
 }
 
-func (w *mainWin) sendTextPayload(hwnd syscall.Handle, peer client.Peer, txt, prefix, kindLabel string) {
+func (w *mainWin) sendTextPayload(hwnd syscall.Handle, target sendTarget, txt, prefix, kindLabel string) {
 	tmp, err := writeTempTextFile(prefix, txt)
 	if err != nil {
 		w.status = "创建临时文本失败：" + err.Error()
 		procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 		return
 	}
-	w.status = fmt.Sprintf("正在将%s发往 %s…", kindLabel, peerLabel(peer))
+	label := target.label()
+	w.status = fmt.Sprintf("正在将%s发往 %s…", kindLabel, label)
 	procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 	go func() {
 		defer os.RemoveAll(filepath.Dir(tmp))
-		res, err := sendToPeer(w.app, []string{tmp}, peer)
-		msg := fmt.Sprintf("已将%s发给 %s（%d 字节）", kindLabel, peerLabel(peer), res.Bytes)
+		var res client.Result
+		var err error
+		if target.isLAN {
+			res, err = sendToLANTarget(w.app, []string{tmp}, label, target.lan.addr)
+		} else {
+			res, err = sendToPeer(w.app, []string{tmp}, target.peer)
+		}
+		msg := fmt.Sprintf("已将%s发给 %s（%d 字节）", kindLabel, label, res.Bytes)
 		if err != nil {
 			msg = "发送失败：" + err.Error()
 		}
@@ -2398,7 +2889,7 @@ func (w *mainWin) removeSavedPeer(hwnd syscall.Handle, peer client.Peer) {
 }
 
 func (w *mainWin) pickAndSend(hwnd syscall.Handle) {
-	peer, ok := w.activePeer()
+	target, ok := w.activeTarget()
 	if !ok {
 		openPairWindow(hwnd, w.app)
 		return
@@ -2407,7 +2898,7 @@ func (w *mainWin) pickAndSend(hwnd syscall.Handle) {
 	if len(files) == 0 {
 		return
 	}
-	w.sendAsync(hwnd, peer, files)
+	w.sendAsyncTarget(hwnd, target, files)
 }
 
 func (w *mainWin) onDrop(hwnd syscall.Handle, hdrop syscall.Handle) {
@@ -2421,24 +2912,31 @@ func (w *mainWin) onDrop(hwnd syscall.Handle, hdrop syscall.Handle) {
 			files = append(files, syscall.UTF16ToString(buf[:n]))
 		}
 	}
-	peer, ok := w.activePeer()
+	target, ok := w.activeTarget()
 	if !ok {
 		w.queued = expandSendPaths(files)
 		openPairWindow(hwnd, w.app)
 		return
 	}
-	w.sendAsync(hwnd, peer, files)
+	w.sendAsyncTarget(hwnd, target, files)
 }
 
-func (w *mainWin) sendAsync(hwnd syscall.Handle, peer client.Peer, files []string) {
+func (w *mainWin) sendAsyncTarget(hwnd syscall.Handle, target sendTarget, files []string) {
 	if len(files) == 0 || w.app == nil {
 		return
 	}
-	w.status = fmt.Sprintf("正在发送给 %s…", peerLabel(peer))
+	label := target.label()
+	w.status = fmt.Sprintf("正在发送给 %s…", label)
 	procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 	go func() {
-		res, err := sendToPeer(w.app, files, peer)
-		msg := fmt.Sprintf("已发送给 %s（%s）", peerLabel(peer), summarizeFiles(res.Files))
+		var res client.Result
+		var err error
+		if target.isLAN {
+			res, err = sendToLANTarget(w.app, files, label, target.lan.addr)
+		} else {
+			res, err = sendToPeer(w.app, files, target.peer)
+		}
+		msg := fmt.Sprintf("已发送给 %s（%s）", label, summarizeFiles(res.Files))
 		if err != nil {
 			msg = "发送失败：" + err.Error()
 		}

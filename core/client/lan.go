@@ -96,7 +96,7 @@ func SendLAN(ctx context.Context, o Options, addr string, files []string) (Resul
 		identity.UpdatePeerName(o.PairedPath, peerIDHex, peerName)
 	}
 	emitStatus(Status{
-		Stage:      "transferring",
+		Stage:      "waiting",
 		Channel:    "lan",
 		FileIndex:  1,
 		FileCount:  len(infos),
@@ -110,7 +110,7 @@ func SendLAN(ctx context.Context, o Options, addr string, files []string) (Resul
 	}
 	start := time.Now()
 	res, err := transfer.Send(s, files, transfer.Config{
-		ChunkSize: uint32(o.Chunk), Timeout: o.Timeout, Log: o.Log,
+		ChunkSize: uint32(o.Chunk), Timeout: o.Timeout, StartTimeout: 65 * time.Second, Log: o.Log,
 		TransferID: hex16(tid),
 		OnDetailProgress: func(snap transfer.ProgressSnapshot) {
 			emitStatus(Status{

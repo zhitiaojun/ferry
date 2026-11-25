@@ -164,17 +164,25 @@ func (d *daemonState) handleLANConn(nc net.Conn) {
 		DeviceID:     d.key.ID(),
 		Name:         d.name,
 		Capabilities: proto.CapResume,
+		VerifyAuth:   true,
 	})
 	if err != nil {
 		return
 	}
 	defer s.Close()
 
+	paired := client.IsVerifiedPaired(d.pairedPath, s.Peer)
 	peerClean := pairing.SanitizeName(s.Peer.Name)
-	if peerClean != "" {
+	if paired && peerClean != "" {
 		identity.UpdatePeerName(d.pairedPath, hex.EncodeToString(s.Peer.DeviceID[:]), peerClean)
 	}
-	res, err := transfer.Receive(s, d.outDir, transfer.Config{Log: d.log})
+	cfg := transfer.Config{Log: d.log}
+	if !paired {
+		cfg.Confirm = func(_ *proto.Manifest) error {
+			return proto.NewError(proto.CodeUnauthorized, "对方为后台守护模式，不接收未配对局域网临时文件")
+		}
+	}
+	res, err := transfer.Receive(s, d.outDir, cfg)
 	if err != nil {
 		d.log.Event("daemon.lan_recv_error", map[string]any{"error": err.Error()})
 		return

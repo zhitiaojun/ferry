@@ -4,6 +4,7 @@
 package session
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -26,6 +27,9 @@ type Params struct {
 	DeviceID     [32]byte
 	Name         string
 	Capabilities uint32
+	PubKey       ed25519.PublicKey
+	Sign         func([]byte) []byte
+	VerifyAuth   bool
 }
 
 // Peer describes the remote end after a successful handshake.
@@ -34,6 +38,8 @@ type Peer struct {
 	DeviceID     [32]byte
 	Name         string
 	Capabilities uint32
+	PubKey       ed25519.PublicKey
+	AuthVerified bool
 }
 
 // Session is a framed connection after (or during) the handshake.

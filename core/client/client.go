@@ -282,6 +282,8 @@ func sessionParams(key *identity.Key, name string) session.Params {
 		DeviceID:     key.ID(),
 		Name:         name,
 		Capabilities: proto.CapResume | proto.CapRelayFallback | proto.CapHotUpgrade,
+		PubKey:       key.Public(),
+		Sign:         key.Sign,
 	}
 }
 

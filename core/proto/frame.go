@@ -33,6 +33,7 @@ const (
 	TypeError    Type = 0x08
 	TypePing     Type = 0x09
 	TypePong     Type = 0x0A
+	TypeAuth     Type = 0x0B
 )
 
 var typeNames = map[Type]string{
@@ -46,6 +47,7 @@ var typeNames = map[Type]string{
 	TypeError:    "ERROR",
 	TypePing:     "PING",
 	TypePong:     "PONG",
+	TypeAuth:     "AUTH",
 }
 
 // String returns the protocol name of the message type.

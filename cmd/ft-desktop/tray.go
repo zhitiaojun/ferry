@@ -15,6 +15,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/cwlindean/filetransfer/core/client"
 	"github.com/cwlindean/filetransfer/core/discovery"
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/ipc"
@@ -328,19 +329,31 @@ func (t *tray) acceptLoop() {
 
 func (t *tray) handle(nc net.Conn) {
 	start := time.Now()
-	params := session.Params{DeviceID: t.devID, Name: t.app.deviceName(), Capabilities: proto.CapResume}
+	params := session.Params{
+		DeviceID:     t.devID,
+		Name:         t.app.deviceName(),
+		Capabilities: proto.CapResume,
+		VerifyAuth:   true,
+	}
 	sess, err := session.Accept(nc, params)
 	if err != nil {
 		nc.Close()
 		t.app.event("desktop.session_error", map[string]any{"error": err.Error()})
 		return
 	}
+	defer sess.Close()
+
+	paired := client.IsVerifiedPaired(t.app.pairedPath, sess.Peer)
 	peer := fmt.Sprintf("%x", sess.Peer.DeviceID[:4])
 	peerClean := pairing.SanitizeName(sess.Peer.Name)
 	peerName := peerClean
 	if peerName == "" {
-		peerName = peer
-	} else if identity.UpdatePeerName(t.app.pairedPath, hex.EncodeToString(sess.Peer.DeviceID[:]), peerClean) {
+		if paired {
+			peerName = peer
+		} else {
+			peerName = "局域网陌生设备"
+		}
+	} else if paired && identity.UpdatePeerName(t.app.pairedPath, hex.EncodeToString(sess.Peer.DeviceID[:]), peerClean) {
 		if thePanel != nil {
 			thePanel.reloadPeers()
 		}
@@ -348,22 +361,65 @@ func (t *tray) handle(nc net.Conn) {
 			procPostMessageW.Call(uintptr(h), wmAppReload, 0, 0)
 		}
 	}
-	t.app.event("desktop.session_ready", map[string]any{"peer": peer, "name": sess.Peer.Name})
+	t.app.event("desktop.session_ready", map[string]any{"peer": peer, "name": sess.Peer.Name, "paired": paired})
 
 	if !recvEnabled.Load() {
-		nc.Close()
 		return
 	}
-	txID := t.app.beginTransfer("recv", peerName, "等待发送清单…", 0, 0)
-	defer t.app.endTransfer(txID)
+	var txID uint64
+	defer func() {
+		if txID != 0 {
+			t.app.endTransfer(txID)
+		}
+	}()
+	if paired {
+		txID = t.app.beginTransfer("recv", peerName, "等待发送清单…", 0, 0)
+	}
 
+	confirmRejected := false
 	outDir := t.app.receiveDir()
-	res, err := transfer.Receive(sess, outDir, transfer.Config{
+	cfg := transfer.Config{
 		OnDetailProgress: func(s transfer.ProgressSnapshot) {
-			t.app.updateTransfer(txID, s.Stage, "LAN", "", s.FileName, s.FileIndex, s.FileCount, s.BytesDone, s.BytesTotal)
+			if txID != 0 {
+				t.app.updateTransfer(txID, s.Stage, "LAN", "", s.FileName, s.FileIndex, s.FileCount, s.BytesDone, s.BytesTotal)
+			}
 		},
-	})
+	}
+	if !paired {
+		remoteAddr := ""
+		if nc.RemoteAddr() != nil {
+			remoteAddr = nc.RemoteAddr().String()
+			if host, _, serr := net.SplitHostPort(remoteAddr); serr == nil {
+				remoteAddr = host
+			}
+		}
+		cfg.Confirm = func(m *proto.Manifest) error {
+			if !recvEnabled.Load() {
+				confirmRejected = true
+				return proto.NewError(proto.CodeCancelled, "对方已暂停接收")
+			}
+			if cerr := requestIncomingConfirm(peerName, remoteAddr, m); cerr != nil {
+				confirmRejected = true
+				return cerr
+			}
+			var total int64
+			for _, f := range m.Files {
+				total += int64(f.Size)
+			}
+			firstName := ""
+			if len(m.Files) > 0 {
+				firstName = m.Files[0].Name
+			}
+			txID = t.app.beginTransfer("recv", peerName, firstName, len(m.Files), total)
+			return nil
+		}
+	}
+	res, err := transfer.Receive(sess, outDir, cfg)
 	if err != nil {
+		if confirmRejected {
+			t.app.event("desktop.lan_unpaired_rejected", map[string]any{"peer": peer, "name": peerName, "reason": err.Error()})
+			return
+		}
 		t.app.event("desktop.transfer_error", map[string]any{"peer": peer, "error": err.Error()})
 		t.app.note(fmt.Sprintf("%s  ← %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerName)))
 		if h := existingMainWindow(); h != 0 {

@@ -29,6 +29,8 @@ func DecodePayload(t Type, p []byte) (any, error) {
 		return ParseError(p)
 	case TypePing, TypePong:
 		return ParsePing(p)
+	case TypeAuth:
+		return ParseAuth(p)
 	default:
 		return nil, NewError(CodeUnknownType, fmt.Sprintf("unknown message type 0x%02X", uint8(t)))
 	}

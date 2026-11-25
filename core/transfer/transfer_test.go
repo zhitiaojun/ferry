@@ -698,3 +698,76 @@ func TestPathUpgradeIgnoredWhenRemainingSmall(t *testing.T) {
 		t.Fatalf("bytes = %d, want %d", recvRes.Bytes, 512<<10)
 	}
 }
+
+func TestConfirmRejectLeavesOutDirClean(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "secret.txt")
+	writePattern(t, src, 4096)
+	outDir := filepath.Join(dir, "nonexistent-out")
+
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+
+	recvErrCh := make(chan error, 1)
+	go func() {
+		sb, err := session.Accept(b, testParams("recv"))
+		if err != nil {
+			recvErrCh <- err
+			return
+		}
+		defer sb.Close()
+		_, rerr := Receive(sb, outDir, Config{
+			Timeout: 5 * time.Second,
+			Confirm: func(m *proto.Manifest) error {
+				if len(m.Files) != 1 || m.Files[0].Name != "secret.txt" {
+					return fmt.Errorf("unexpected manifest in Confirm: %+v", m)
+				}
+				return proto.NewError(proto.CodeUnauthorized, "rejected by user")
+			},
+		})
+		recvErrCh <- rerr
+	}()
+
+	sa, err := session.Dial(a, testParams("send"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sa.Close()
+
+	_, sendErr := Send(sa, []string{src}, Config{Timeout: 5 * time.Second})
+	if sendErr == nil {
+		t.Fatal("expected Send error when receiver rejects")
+	}
+	var remote *session.RemoteError
+	if !errors.As(sendErr, &remote) || remote.Code != proto.CodeUnauthorized {
+		t.Fatalf("expected RemoteError CodeUnauthorized, got %v", sendErr)
+	}
+	if recvErr := <-recvErrCh; recvErr == nil {
+		t.Fatal("expected Receive error")
+	}
+	if _, serr := os.Stat(outDir); !os.IsNotExist(serr) {
+		t.Fatalf("outDir should not be created when Confirm rejects, stat=%v", serr)
+	}
+}
+
+func TestConfirmAcceptCompletesTransfer(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "ok.bin")
+	writePattern(t, src, 8192)
+	outDir := filepath.Join(dir, "out")
+
+	called := false
+	_, recvRes := roundTrip(t, []string{src}, outDir, 0, Config{
+		Confirm: func(m *proto.Manifest) error {
+			called = true
+			return nil
+		},
+	})
+	if !called {
+		t.Fatal("Confirm was not called")
+	}
+	if recvRes.Bytes != 8192 {
+		t.Fatalf("bytes = %d, want 8192", recvRes.Bytes)
+	}
+}

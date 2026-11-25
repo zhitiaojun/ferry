@@ -7,18 +7,120 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/cwlindean/filetransfer/core/client"
 	"github.com/cwlindean/filetransfer/core/discovery"
 	"github.com/cwlindean/filetransfer/core/identity"
+	"github.com/cwlindean/filetransfer/core/pairing"
 	"github.com/cwlindean/filetransfer/core/signaling"
 )
 
 type lanPeerEntry struct {
+	id       string
+	name     string
 	addr     string
+	iface    string
 	lastSeen time.Time
+}
+
+func (a *app) isLANScanning() bool {
+	if a == nil {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.lanScanning
+}
+
+func (a *app) snapshotLANPeers() []lanPeerEntry {
+	if a == nil {
+		return nil
+	}
+	now := time.Now()
+	a.mu.Lock()
+	out := make([]lanPeerEntry, 0, len(a.lanPeers))
+	for _, e := range a.lanPeers {
+		if e.addr != "" && now.Sub(e.lastSeen) <= discovery.DeviceTTL {
+			out = append(out, e)
+		}
+	}
+	a.mu.Unlock()
+	sort.Slice(out, func(i, j int) bool {
+		ni := strings.ToLower(out[i].name)
+		nj := strings.ToLower(out[j].name)
+		if ni != nj {
+			return ni < nj
+		}
+		return out[i].id < out[j].id
+	})
+	return out
+}
+
+func (a *app) unpairedLANPeers(paired []client.Peer) []lanPeerEntry {
+	all := a.snapshotLANPeers()
+	if len(all) == 0 {
+		return nil
+	}
+	known := make(map[string]struct{}, len(paired))
+	for _, p := range paired {
+		known[p.ID] = struct{}{}
+	}
+	out := make([]lanPeerEntry, 0, len(all))
+	for _, e := range all {
+		if _, ok := known[e.id]; !ok {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func (a *app) triggerLANScan(onDone func(found int)) bool {
+	if a == nil {
+		return false
+	}
+	a.mu.Lock()
+	if a.lanScanning {
+		a.mu.Unlock()
+		return false
+	}
+	a.lanScanning = true
+	keyPath := a.keyPath
+	port := a.port
+	devName := a.deviceName()
+	a.mu.Unlock()
+	a.notifyMainPaint()
+
+	go func() {
+		defer func() {
+			a.mu.Lock()
+			a.lanScanning = false
+			a.mu.Unlock()
+			a.notifyMainPaint()
+			if onDone != nil {
+				onDone(len(a.snapshotLANPeers()))
+			}
+		}()
+
+		var devID [32]byte
+		if k, err := identity.LoadOrCreateKey(keyPath); err == nil {
+			devID = k.ID()
+		} else {
+			devID = identity.DeviceID(devName)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2600*time.Millisecond)
+		defer cancel()
+		_ = discovery.Announce(ctx, discovery.Config{
+			DeviceID: devID,
+			Name:     devName,
+			Port:     port,
+			Interval: 450 * time.Millisecond,
+		})
+	}()
+	return true
 }
 
 func (a *app) notifyMainPaint() {
@@ -243,13 +345,22 @@ func (a *app) runLANDiscovery(ctx context.Context, key *identity.Key) {
 		}
 	}()
 
-	lst, err := discovery.Listen(discovery.Config{
-		DeviceID: key.ID(),
-		Name:     a.deviceName(),
-	})
-	if err != nil {
+	var lst *discovery.Listener
+	for {
+		var err error
+		lst, err = discovery.Listen(discovery.Config{
+			DeviceID: key.ID(),
+			Name:     a.deviceName(),
+		})
+		if err == nil {
+			break
+		}
 		a.event("desktop.discovery.listen_error", map[string]any{"error": err.Error()})
-		return
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Second):
+		}
 	}
 	defer lst.Close()
 
@@ -281,11 +392,21 @@ func (a *app) runLANDiscovery(ctx context.Context, key *identity.Key) {
 				continue
 			}
 			idHex := hex.EncodeToString(d.DeviceID[:])
+			cleanName := pairing.SanitizeName(d.Name)
+			if cleanName == "" {
+				cleanName = "局域网设备"
+			}
 			prev, ok := a.lanPeers[idHex]
-			if !ok || prev.addr != d.TCPAddr {
+			if !ok || prev.addr != d.TCPAddr || prev.name != cleanName {
 				changed = true
 			}
-			a.lanPeers[idHex] = lanPeerEntry{addr: d.TCPAddr, lastSeen: d.LastSeen}
+			a.lanPeers[idHex] = lanPeerEntry{
+				id:       idHex,
+				name:     cleanName,
+				addr:     d.TCPAddr,
+				iface:    d.Iface,
+				lastSeen: d.LastSeen,
+			}
 		}
 		a.mu.Unlock()
 		if changed {

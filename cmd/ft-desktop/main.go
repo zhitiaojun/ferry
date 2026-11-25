@@ -287,6 +287,7 @@ type app struct {
 	sigStopCur   context.CancelFunc
 	cloudPeers   map[string]bool
 	lanPeers     map[string]lanPeerEntry
+	lanScanning  bool
 	candRoutes   map[string]chan *signaling.Envelope
 	readyRoute   chan signaling.RelayReady
 }

@@ -1,21 +1,37 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"time"
 
 	"github.com/cwlindean/filetransfer/core/identity"
 	"github.com/cwlindean/filetransfer/core/relay"
+	"github.com/cwlindean/filetransfer/core/session"
 	"github.com/cwlindean/filetransfer/core/signaling"
 )
 
 // PairedPeer returns the pinned public key of a peer from the trusted table.
 func PairedPeer(path, id string) (ed25519.PublicKey, error) {
 	return pairedPeer(path, id)
+}
+
+// IsVerifiedPaired reports whether a session peer proved possession of an
+// Ed25519 key present in the trusted table at pairedPath.
+func IsVerifiedPaired(pairedPath string, peer session.Peer) bool {
+	if pairedPath == "" || !peer.AuthVerified || len(peer.PubKey) != ed25519.PublicKeySize {
+		return false
+	}
+	stored, err := pairedPeer(pairedPath, hex.EncodeToString(peer.DeviceID[:]))
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(stored, peer.PubKey)
 }
 
 // pairedPeer returns the pinned public key of a peer from the trusted table.

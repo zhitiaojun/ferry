@@ -2,13 +2,17 @@ package mobile
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cwlindean/filetransfer/core/logging"
+	"github.com/cwlindean/filetransfer/core/proto"
 )
 
 // EventListener receives push notifications from the Go transfer core so Android
@@ -17,12 +21,145 @@ type EventListener interface {
 	OnReceived(eventJSON string)
 	OnTransferProgress(statusJSON string)
 	OnConnectionChanged(statusJSON string)
+	OnConfirmIncoming(reqJSON string)
 }
 
 var (
 	evtListenerMu sync.RWMutex
 	evtListener   EventListener
+
+	mainUIOpen atomic.Bool
+
+	confirmMu  sync.Mutex
+	confirmSeq atomic.Uint64
+	confirmMap = map[string]chan bool{}
 )
+
+// SetMainUIOpen records whether the Android MainActivity is currently open in the
+// foreground. Temporary (unpaired) LAN incoming transfers are only accepted
+// while the main UI is open; transitioning to false cancels pending prompts.
+func SetMainUIOpen(open bool) {
+	mainUIOpen.Store(open)
+	if !open {
+		confirmMu.Lock()
+		for id, ch := range confirmMap {
+			select {
+			case ch <- false:
+			default:
+			}
+			delete(confirmMap, id)
+		}
+		confirmMu.Unlock()
+	}
+}
+
+// IsMainUIOpen reports whether the Android MainActivity is currently open.
+func IsMainUIOpen() bool {
+	return mainUIOpen.Load()
+}
+
+// RespondIncoming resolves a pending unpaired LAN confirmation prompt started
+// by OnConfirmIncoming.
+func RespondIncoming(reqID string, accept bool) {
+	confirmMu.Lock()
+	ch, ok := confirmMap[reqID]
+	if ok {
+		delete(confirmMap, reqID)
+	}
+	confirmMu.Unlock()
+	if ok {
+		select {
+		case ch <- accept:
+		default:
+		}
+	}
+}
+
+type incomingConfirmReq struct {
+	ID         string   `json:"id"`
+	Peer       string   `json:"peer"`
+	Addr       string   `json:"addr,omitempty"`
+	FileCount  int      `json:"file_count"`
+	TotalBytes int64    `json:"total_bytes"`
+	Files      []string `json:"files,omitempty"`
+}
+
+func remoteHost(nc net.Conn) string {
+	if nc == nil || nc.RemoteAddr() == nil {
+		return ""
+	}
+	raw := nc.RemoteAddr().String()
+	if host, _, err := net.SplitHostPort(raw); err == nil {
+		return host
+	}
+	return raw
+}
+
+func requestIncomingConfirm(peerName, remoteAddr string, m *proto.Manifest) error {
+	if !IsMainUIOpen() {
+		return proto.NewError(proto.CodeUnauthorized, "对方未打开轻渡主界面，无法接收局域网临时文件")
+	}
+	l := currentListener()
+	if l == nil {
+		return proto.NewError(proto.CodeUnauthorized, "对方未打开轻渡主界面，无法接收局域网临时文件")
+	}
+
+	reqID := fmt.Sprintf("lan-%d", confirmSeq.Add(1))
+	ch := make(chan bool, 1)
+	confirmMu.Lock()
+	confirmMap[reqID] = ch
+	confirmMu.Unlock()
+	defer func() {
+		confirmMu.Lock()
+		delete(confirmMap, reqID)
+		confirmMu.Unlock()
+	}()
+
+	// Re-check after registration in case SetMainUIOpen(false) raced.
+	if !IsMainUIOpen() {
+		return proto.NewError(proto.CodeUnauthorized, "对方未打开轻渡主界面，无法接收局域网临时文件")
+	}
+
+	var total int64
+	limit := len(m.Files)
+	if limit > 5 {
+		limit = 5
+	}
+	names := make([]string, 0, limit)
+	for i, f := range m.Files {
+		total += int64(f.Size)
+		if i < limit {
+			names = append(names, f.Name)
+		}
+	}
+	payload, err := json.Marshal(incomingConfirmReq{
+		ID:         reqID,
+		Peer:       peerName,
+		Addr:       remoteAddr,
+		FileCount:  len(m.Files),
+		TotalBytes: total,
+		Files:      names,
+	})
+	if err != nil {
+		return err
+	}
+	go l.OnConfirmIncoming(string(payload))
+
+	timer := time.NewTimer(60 * time.Second)
+	defer timer.Stop()
+	select {
+	case accept := <-ch:
+		if !accept {
+			if !IsMainUIOpen() {
+				return proto.NewError(proto.CodeCancelled, "对方已关闭主界面")
+			}
+			return proto.NewError(proto.CodeCancelled, "对方拒绝接收")
+		}
+		return nil
+	case <-timer.C:
+		return proto.NewError(proto.CodeTimeout, "等待对方确认超时")
+	}
+}
 
 // SetEventListener registers (or clears with nil) the active EventListener.
 func SetEventListener(l EventListener) {

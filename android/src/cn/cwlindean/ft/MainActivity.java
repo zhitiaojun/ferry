@@ -223,6 +223,8 @@ public class MainActivity extends Activity {
     private LinearLayout sendResultCard;
     private TextView sendResultBadge;
     private TextView sendResultText;
+    private AlertDialog incomingConfirmDialog;
+    private String incomingConfirmId;
 
     // Recent list views
     private final TextView[] filterTabs = new TextView[3];
@@ -343,6 +345,11 @@ public class MainActivity extends Activity {
                 }
             });
         }
+
+        @Override
+        public void onConfirmIncoming(String reqJson) {
+            ui.post(() -> showIncomingConfirmDialog(reqJson));
+        }
     };
 
     private final Runnable progressPollTask = new Runnable() {
@@ -426,9 +433,102 @@ public class MainActivity extends Activity {
     @Override
     protected void onStop() {
         TransferService.setUiBridge(null);
+        dismissIncomingConfirmDialog(false);
         stopProgressPolling();
         releaseMulticastLock();
         super.onStop();
+    }
+
+    private void showIncomingConfirmDialog(String reqJson) {
+        String reqId = "";
+        String peer = "局域网未知设备";
+        String addr = "";
+        int fileCount = 0;
+        long totalBytes = 0;
+        JSONArray files = null;
+        try {
+            JSONObject o = new JSONObject(reqJson);
+            reqId = o.optString("id", "");
+            String p = o.optString("peer", "").trim();
+            if (!p.isEmpty()) {
+                peer = p;
+            }
+            addr = o.optString("addr", "");
+            fileCount = o.optInt("file_count", 0);
+            totalBytes = o.optLong("total_bytes", 0);
+            files = o.optJSONArray("files");
+        } catch (Exception ignored) {
+        }
+        if (reqId.isEmpty()) {
+            return;
+        }
+        if (isFinishing() || isDestroyed()) {
+            Mobile.respondIncoming(reqId, false);
+            return;
+        }
+        dismissIncomingConfirmDialog(false);
+        incomingConfirmId = reqId;
+
+        StringBuilder body = new StringBuilder();
+        body.append("来自：").append(peer);
+        if (!addr.isEmpty()) {
+            body.append(" (").append(addr).append(")");
+        }
+        body.append("\n共 ").append(fileCount).append(" 个文件（").append(fmtBytes(totalBytes)).append("）");
+        if (files != null && files.length() > 0) {
+            int limit = Math.min(files.length(), 3);
+            for (int i = 0; i < limit; i++) {
+                body.append("\n• ").append(files.optString(i, ""));
+            }
+            if (fileCount > limit) {
+                body.append("\n• 等共 ").append(fileCount).append(" 个文件");
+            }
+        }
+        body.append("\n\n该设备未配对，仅本次临时接收");
+
+        final String curId = reqId;
+        AlertDialog dlg = new AlertDialog.Builder(this)
+                .setTitle("收到局域网临时文件")
+                .setMessage(body.toString())
+                .setPositiveButton("接收", (d, w) -> {
+                    if (curId.equals(incomingConfirmId)) {
+                        incomingConfirmId = null;
+                    }
+                    incomingConfirmDialog = null;
+                    Mobile.respondIncoming(curId, true);
+                })
+                .setNegativeButton("拒绝", (d, w) -> {
+                    if (curId.equals(incomingConfirmId)) {
+                        incomingConfirmId = null;
+                    }
+                    incomingConfirmDialog = null;
+                    Mobile.respondIncoming(curId, false);
+                })
+                .setOnCancelListener(d -> {
+                    if (curId.equals(incomingConfirmId)) {
+                        incomingConfirmId = null;
+                    }
+                    incomingConfirmDialog = null;
+                    Mobile.respondIncoming(curId, false);
+                })
+                .create();
+        incomingConfirmDialog = dlg;
+        dlg.show();
+    }
+
+    private void dismissIncomingConfirmDialog(boolean accept) {
+        if (incomingConfirmDialog != null) {
+            try {
+                incomingConfirmDialog.dismiss();
+            } catch (Exception ignored) {
+            }
+            incomingConfirmDialog = null;
+        }
+        if (incomingConfirmId != null && !incomingConfirmId.isEmpty()) {
+            String id = incomingConfirmId;
+            incomingConfirmId = null;
+            Mobile.respondIncoming(id, accept);
+        }
     }
 
     @Override
@@ -4287,7 +4387,7 @@ public class MainActivity extends Activity {
             final String summary = auto
                     ? Mobile.sendAuto(SIGNAL_URL, keyFile().getAbsolutePath(),
                             pairedFile().getAbsolutePath(), target, name, paths.toString(), lanHint(), "")
-                    : Mobile.sendFiles(target, name, paths.toString());
+                    : Mobile.sendFilesWithKey(target, name, keyFile().getAbsolutePath(), paths.toString());
             onSendSucceeded(summary, targetName);
         } catch (Exception e) {
             Log.e(TAG, auto ? "sendAuto" : "sendLan", e);

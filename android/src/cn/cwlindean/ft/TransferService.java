@@ -78,6 +78,7 @@ public class TransferService extends Service implements EventListener {
         void onConnectionSnapshot(String connJson);
         void onTransferProgressSnapshot(String progressJson);
         void onFilesReceived(List<JSONObject> entries, boolean refreshPeers);
+        void onConfirmIncoming(String reqJson);
     }
 
     private static final Object BRIDGE_LOCK = new Object();
@@ -101,6 +102,10 @@ public class TransferService extends Service implements EventListener {
     public static void setUiBridge(UiBridge bridge) {
         synchronized (BRIDGE_LOCK) {
             sUiBridge = bridge;
+        }
+        try {
+            Mobile.setMainUIOpen(bridge != null);
+        } catch (Throwable ignored) {
         }
     }
 
@@ -227,10 +232,10 @@ public class TransferService extends Service implements EventListener {
             String errMsg = "";
             if (screenAwake) {
                 try {
-                    lanAddr = Mobile.startReceiverWithKey(name, inboxDir(this).getAbsolutePath(),
-                            keyFile(this).getAbsolutePath(), hint);
+                    lanAddr = Mobile.startReceiverWithAuth(name, inboxDir(this).getAbsolutePath(),
+                            keyFile(this).getAbsolutePath(), pairedFile(this).getAbsolutePath(), hint);
                 } catch (Exception e) {
-                    Log.w(TAG, "startReceiverWithKey", e);
+                    Log.w(TAG, "startReceiverWithAuth", e);
                 }
             }
             try {
@@ -358,6 +363,22 @@ public class TransferService extends Service implements EventListener {
         }
     }
 
+    @Override
+    public void onConfirmIncoming(String reqJSON) {
+        UiBridge b = sUiBridge;
+        if (b != null) {
+            b.onConfirmIncoming(reqJSON);
+            return;
+        }
+        try {
+            String id = new JSONObject(reqJSON).optString("id", "");
+            if (!id.isEmpty()) {
+                Mobile.respondIncoming(id, false);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
     private void refreshIdleNotif() {
         if (!sRecvRunning) {
             return;
@@ -471,9 +492,10 @@ public class TransferService extends Service implements EventListener {
                             Mobile.updateNetworkHint(hint);
                             if (wasAsleep || sLanPort.isEmpty()) {
                                 try {
-                                    String addr = Mobile.startReceiverWithKey(loadDeviceName(TransferService.this),
+                                    String addr = Mobile.startReceiverWithAuth(loadDeviceName(TransferService.this),
                                             inboxDir(TransferService.this).getAbsolutePath(),
-                                            keyFile(TransferService.this).getAbsolutePath(), hint);
+                                            keyFile(TransferService.this).getAbsolutePath(),
+                                            pairedFile(TransferService.this).getAbsolutePath(), hint);
                                     sLanPort = extractPort(addr);
                                 } catch (Exception ignored) {
                                 }

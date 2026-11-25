@@ -9,6 +9,7 @@ const (
 	CapTLSPin        uint32 = 1 << 2
 	CapRelayFallback uint32 = 1 << 3
 	CapHotUpgrade    uint32 = 1 << 4
+	CapAuth          uint32 = 1 << 5
 )
 
 // FIN status values (§3.8).
@@ -399,5 +400,59 @@ func ParsePing(p []byte) (*Ping, error) {
 	}
 	m := &Ping{}
 	copy(m.Token[:], p)
+	return m, nil
+}
+
+// AuthMsg kind values for challenge-response session authentication.
+const (
+	AuthKindChallenge uint8 = 1
+	AuthKindProof     uint8 = 2
+)
+
+// AuthMsg is the AUTH payload used when both peers negotiate CapAuth.
+type AuthMsg struct {
+	Kind   uint8
+	Nonce  [16]byte
+	PubKey [32]byte
+	Sig    [64]byte
+}
+
+// Encode serializes an AUTH challenge or proof payload.
+func (m *AuthMsg) Encode() ([]byte, error) {
+	w := &writer{}
+	w.u8(m.Kind)
+	switch m.Kind {
+	case AuthKindChallenge:
+		w.raw(m.Nonce[:])
+	case AuthKindProof:
+		w.raw(m.PubKey[:])
+		w.raw(m.Sig[:])
+	default:
+		return nil, NewError(CodePayloadInvalid, fmt.Sprintf("invalid AUTH kind %d", m.Kind))
+	}
+	return w.b, nil
+}
+
+// ParseAuth decodes an AUTH challenge or proof payload.
+func ParseAuth(p []byte) (*AuthMsg, error) {
+	if len(p) < 1 {
+		return nil, NewError(CodePayloadInvalid, "empty AUTH payload")
+	}
+	m := &AuthMsg{Kind: p[0]}
+	switch m.Kind {
+	case AuthKindChallenge:
+		if len(p) != 1+16 {
+			return nil, NewError(CodePayloadInvalid, fmt.Sprintf("AUTH challenge must be 17 bytes, got %d", len(p)))
+		}
+		copy(m.Nonce[:], p[1:17])
+	case AuthKindProof:
+		if len(p) != 1+32+64 {
+			return nil, NewError(CodePayloadInvalid, fmt.Sprintf("AUTH proof must be 97 bytes, got %d", len(p)))
+		}
+		copy(m.PubKey[:], p[1:33])
+		copy(m.Sig[:], p[33:97])
+	default:
+		return nil, NewError(CodePayloadInvalid, fmt.Sprintf("invalid AUTH kind %d", m.Kind))
+	}
 	return m, nil
 }

@@ -36,6 +36,7 @@ type confirmOpts struct {
 	Danger      bool
 	HideCancel  bool
 	OnConfirm   func()
+	OnCancel    func()
 }
 
 type confirmWin struct {
@@ -47,6 +48,7 @@ type confirmWin struct {
 	dpi      int32
 	hover    int
 	tracking bool
+	decided  bool
 
 	fontTitle syscall.Handle
 	fontBody  syscall.Handle
@@ -59,7 +61,7 @@ type confirmWin struct {
 
 // openConfirmDialog opens a borderless Win11 Acrylic confirmation or info dialog
 // matching the main desktop UI.
-func openConfirmDialog(opts confirmOpts) {
+func openConfirmDialog(opts confirmOpts) syscall.Handle {
 	confirmMu.Lock()
 	prev := confirmWinH
 	confirmMu.Unlock()
@@ -73,7 +75,10 @@ func openConfirmDialog(opts confirmOpts) {
 		dpi = windowDPI(opts.Owner)
 	}
 	dw, dh := int32(396), int32(188)
-	if strings.Count(opts.Body, "\n") >= 3 || len(opts.Body) > 120 {
+	lines := strings.Count(opts.Body, "\n")
+	if lines >= 5 {
+		dw, dh = 444, 290
+	} else if lines >= 3 || len(opts.Body) > 120 {
 		dw, dh = 432, 256
 	}
 	ww := scalePx(dpi, dw)
@@ -133,11 +138,12 @@ func openConfirmDialog(opts confirmOpts) {
 		confirmMu.Lock()
 		pendingConfOpts = nil
 		confirmMu.Unlock()
-		return
+		return 0
 	}
 	procShowWindow.Call(uintptr(hwnd), swShow)
 	procUpdateWindow.Call(uintptr(hwnd))
 	procSetFocus.Call(uintptr(hwnd))
+	return hwnd
 }
 
 func currentConfirmWin(hwnd syscall.Handle) *confirmWin {
@@ -245,7 +251,12 @@ func confirmWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uin
 		return 0
 
 	case wmDestroy:
+		var cancelCB func()
 		if cw != nil {
+			if !cw.decided {
+				cw.decided = true
+				cancelCB = cw.opts.OnCancel
+			}
 			cw.freeResources()
 		}
 		confirmMu.Lock()
@@ -254,6 +265,9 @@ func confirmWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uin
 			confirmWinH = 0
 		}
 		confirmMu.Unlock()
+		if cancelCB != nil {
+			cancelCB()
+		}
 		return 0
 	}
 	r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(msg), wParam, lParam)
@@ -418,6 +432,10 @@ func (w *confirmWin) onClick(hwnd syscall.Handle, x, y int32) {
 }
 
 func (w *confirmWin) confirm() {
+	if w.decided {
+		return
+	}
+	w.decided = true
 	cb := w.opts.OnConfirm
 	hwnd := w.hwnd
 	procDestroyWindow.Call(uintptr(hwnd))
