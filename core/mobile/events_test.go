@@ -168,3 +168,29 @@ func TestActiveTransferPauseReconcileAndOwnerRule(t *testing.T) {
 		t.Fatalf("expected transferring after peer resume, got %+v", stResumed)
 	}
 }
+
+func TestRecordReceiveOutcome(t *testing.T) {
+	_ = PollReceived()
+
+	recordReceiveOutcome("relay", "HyperX", "big.apk", 2048, "cancelled", "已取消接收")
+	recordReceiveOutcome("punch", "HyperX", "a.txt 等 2 个文件", 4096, "peer_cancelled", "对方已取消传输")
+	recordReceiveOutcome("lan", "WorkPC", "doc.pdf", 1024, "failed", "io error")
+
+	raw := PollReceived()
+	var evts []ReceivedEvent
+	if err := json.Unmarshal([]byte(raw), &evts); err != nil {
+		t.Fatalf("unmarshal: %v (%s)", err, raw)
+	}
+	if len(evts) != 3 {
+		t.Fatalf("want 3 outcome events, got %d: %s", len(evts), raw)
+	}
+	if evts[0].Status != "cancelled" || evts[0].FullPath != "" || evts[0].File != "big.apk" || evts[0].Via != "relay" {
+		t.Fatalf("unexpected first outcome: %+v", evts[0])
+	}
+	if evts[1].Status != "peer_cancelled" || evts[1].Peer != "HyperX" || evts[1].Error != "对方已取消传输" {
+		t.Fatalf("unexpected second outcome: %+v", evts[1])
+	}
+	if evts[2].Status != "failed" || evts[2].Error != "io error" || evts[2].Bytes != 1024 {
+		t.Fatalf("unexpected third outcome: %+v", evts[2])
+	}
+}

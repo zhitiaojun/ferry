@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -210,14 +211,16 @@ func notifyReceived(evts []ReceivedEvent) {
 }
 
 // ReceivedEvent describes one completed incoming file waiting for Android UI
-// export into public Downloads.
+// export into public Downloads, or a cancelled/failed incoming transfer outcome.
 type ReceivedEvent struct {
 	File     string `json:"file"`
-	FullPath string `json:"full_path"`
+	FullPath string `json:"full_path,omitempty"`
 	Via      string `json:"via"`
 	Peer     string `json:"peer,omitempty"`
 	Bytes    int64  `json:"bytes"`
 	Ts       int64  `json:"ts"`
+	Status   string `json:"status,omitempty"` // "" / "ok" | "cancelled" | "peer_cancelled" | "failed"
+	Error    string `json:"error,omitempty"`
 }
 
 var (
@@ -258,6 +261,26 @@ func recordReceivedFrom(outDir, via, peer string, files []string, totalBytes int
 	}
 	recvEvtMu.Unlock()
 	notifyReceived(added)
+}
+
+func recordReceiveOutcome(via, peer, title string, totalBytes int64, status, errMsg string) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		title = "接收文件"
+	}
+	ev := ReceivedEvent{
+		File:   title,
+		Via:    via,
+		Peer:   peer,
+		Bytes:  totalBytes,
+		Ts:     time.Now().UnixMilli(),
+		Status: status,
+		Error:  errMsg,
+	}
+	recvEvtMu.Lock()
+	recvEvts = append(recvEvts, ev)
+	recvEvtMu.Unlock()
+	notifyReceived([]ReceivedEvent{ev})
 }
 
 // PollReceived drains pending received-file events as a JSON array ("[]").
@@ -422,7 +445,14 @@ func CancelActiveTransfer() bool {
 		return false
 	}
 	ctrl := activeTxCtrl
+	activeTx.Stage = "cancelling"
+	activeTx.SpeedBPS = 0
+	activeTx.Paused = false
+	activeTx.PeerPaused = false
+	lastProgressT = time.Now()
+	snap := activeTx
 	activeTxMu.Unlock()
+	notifyProgress(snap)
 	ctrl.Cancel()
 	return true
 }

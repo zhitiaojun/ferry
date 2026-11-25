@@ -89,9 +89,7 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 	if err != nil {
 		if errors.Is(err, ErrCancelled) || (cfg.Control != nil && cfg.Control.IsCancelled()) {
 			if errors.Is(err, ErrCancelled) {
-				_ = s.Conn().SetWriteDeadline(time.Now().Add(300 * time.Millisecond))
-				_ = s.SendError(proto.CodeCancelled, "发送方已取消传输")
-				_ = s.Conn().SetWriteDeadline(time.Time{})
+				sendCancelAndWait(s, "发送方已取消传输")
 			}
 			return nil, ErrCancelled
 		}
@@ -197,6 +195,7 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 		for {
 			stateCh := cfg.Control.StateCh()
 			if cfg.Control.IsCancelled() {
+				sendCancelAndWait(s, "发送方已取消传输")
 				return nil, ErrCancelled
 			}
 			if !cfg.Control.IsAnyPaused() {
@@ -262,6 +261,7 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 	fin := &proto.Fin{Status: proto.FinOK, TransferID: tid, Hashes: hashes}
 	if err := s.SendMsg(proto.TypeFin, fin); err != nil {
 		if cfg.Control != nil && cfg.Control.IsCancelled() {
+			sendCancelAndWait(s, "发送方已取消传输")
 			return nil, ErrCancelled
 		}
 		return nil, err
@@ -269,6 +269,9 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 	peerFin, err := waitFin(s, cfg.timeout()*3, cfg.Control)
 	if err != nil {
 		if errors.Is(err, ErrCancelled) || (cfg.Control != nil && cfg.Control.IsCancelled()) {
+			if errors.Is(err, ErrCancelled) {
+				sendCancelAndWait(s, "发送方已取消传输")
+			}
 			return nil, ErrCancelled
 		}
 		return nil, fmt.Errorf("final FIN: %w", err)
@@ -348,6 +351,12 @@ func sendFile(
 	}
 	fileDone := make(chan struct{})
 	defer close(fileDone)
+	sendLoopDone := make(chan struct{})
+	var sendLoopOnce sync.Once
+	markSendLoopDone := func() {
+		sendLoopOnce.Do(func() { close(sendLoopDone) })
+	}
+	defer markSendLoopDone()
 	if cfg.Control != nil {
 		unregFile := cfg.Control.OnCancel(func() {
 			mu.Lock()
@@ -355,8 +364,8 @@ func sendFile(
 			mu.Unlock()
 			go func() {
 				select {
-				case <-fileDone:
-				case <-time.After(500 * time.Millisecond):
+				case <-sendLoopDone:
+				case <-time.After(cancelWriteTimeout):
 					_ = s.Conn().SetDeadline(time.Now())
 				}
 			}()
@@ -597,8 +606,8 @@ func sendFile(
 					writeErr = ErrCancelled
 				} else {
 					writeErr = err
+					_ = s.Conn().SetReadDeadline(time.Now())
 				}
-				_ = s.Conn().SetReadDeadline(time.Now())
 				break
 			}
 			_, _ = h.Write(chunk)
@@ -652,11 +661,19 @@ func sendFile(
 	}
 
 	if errors.Is(writeErr, ErrCancelled) || (cfg.Control != nil && cfg.Control.IsCancelled()) {
-		_ = s.Conn().SetWriteDeadline(time.Now().Add(300 * time.Millisecond))
+		markSendLoopDone()
+		_ = s.Conn().SetWriteDeadline(time.Now().Add(cancelWriteTimeout))
 		_ = s.SendError(proto.CodeCancelled, "发送方已取消传输")
 		_ = s.Conn().SetWriteDeadline(time.Time{})
-		_ = s.Conn().SetReadDeadline(time.Now().Add(250 * time.Millisecond))
-		<-ackDone
+		_ = s.Conn().SetReadDeadline(time.Now().Add(cancelDrainGrace))
+		fuse := time.AfterFunc(cancelDrainGrace, func() {
+			_ = s.Conn().SetReadDeadline(time.Now())
+		})
+		ackErr := <-ackDone
+		fuse.Stop()
+		if ackErr == nil {
+			graceWaitPeerClose(s, cancelDrainGrace)
+		}
 		return zero, 0, 0, ErrCancelled
 	}
 
@@ -729,7 +746,7 @@ func readFileAcks(
 		timeout := cfg.timeout()
 		if cfg.Control != nil && cfg.Control.IsCancelled() {
 			if cancelDeadline.IsZero() {
-				cancelDeadline = time.Now().Add(250 * time.Millisecond)
+				cancelDeadline = time.Now().Add(cancelDrainGrace)
 			}
 			rem := time.Until(cancelDeadline)
 			if rem <= 0 {
@@ -747,6 +764,9 @@ func readFileAcks(
 			return fail(err)
 		}
 		if cfg.Control != nil && cfg.Control.IsCancelled() {
+			if fr.Type == proto.TypeError {
+				return fail(ErrCancelled)
+			}
 			continue
 		}
 		switch fr.Type {

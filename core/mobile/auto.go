@@ -660,8 +660,14 @@ func receiveOneMobileAuto(
 
 	var initTotal int64
 	firstFile := ""
+	fileTitle := "接收文件"
 	if len(req.Files) > 0 {
 		firstFile = req.Files[0].Name
+		if len(req.Files) == 1 {
+			fileTitle = firstFile
+		} else {
+			fileTitle = fmt.Sprintf("%s 等 %d 个文件", firstFile, len(req.Files))
+		}
 		for _, f := range req.Files {
 			initTotal += f.Size
 		}
@@ -674,6 +680,8 @@ func receiveOneMobileAuto(
 	rctx, cancel := context.WithTimeout(rootCtx, 10*time.Minute)
 	defer cancel()
 
+	var viaMu sync.Mutex
+	lastVia := ""
 	res, err := client.ReceiveAuto(rctx, client.ReceiveOptions{
 		Key:         key,
 		SignalURL:   signalURL,
@@ -686,12 +694,34 @@ func receiveOneMobileAuto(
 		Control:     ctrl,
 		Log:         logger,
 		OnStatus: func(st client.Status) {
+			if st.Channel != "" {
+				viaMu.Lock()
+				lastVia = st.Channel
+				viaMu.Unlock()
+			}
 			updateActiveTransfer(txSeq, st.Stage, st.Channel, "", st.FileName, st.FileIndex, st.FileCount, st.BytesDone, st.BytesTotal)
 		},
 	}, cl, req, peerPub, candCh, readyCh)
 	if err != nil {
-		if logger != nil {
-			logger.Event("auto.recv_transfer_error", map[string]any{"peer": truncID(req.FromDevice), "error": err.Error()})
+		viaMu.Lock()
+		via := lastVia
+		viaMu.Unlock()
+		switch {
+		case ctrl.IsCancelled():
+			if logger != nil {
+				logger.Event("auto.recv_cancelled", map[string]any{"peer": truncID(req.FromDevice)})
+			}
+			recordReceiveOutcome(via, peerName, fileTitle, initTotal, "cancelled", "已取消接收")
+		case transfer.IsCancelled(err):
+			if logger != nil {
+				logger.Event("auto.recv_peer_cancelled", map[string]any{"peer": truncID(req.FromDevice)})
+			}
+			recordReceiveOutcome(via, peerName, fileTitle, initTotal, "peer_cancelled", "对方已取消传输")
+		default:
+			if logger != nil {
+				logger.Event("auto.recv_transfer_error", map[string]any{"peer": truncID(req.FromDevice), "error": err.Error()})
+			}
+			recordReceiveOutcome(via, peerName, fileTitle, initTotal, "failed", err.Error())
 		}
 		return
 	}

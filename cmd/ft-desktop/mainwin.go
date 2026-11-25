@@ -1714,7 +1714,7 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 			sub := strings.Join(subParts, " · ")
 
 			rightLimit := rr.right - p(4)
-			if hovered {
+			if hovered && r.path != "失败" && r.path != "已取消" && r.path != "对方已取消" {
 				openW := p(66)
 				cv.drawAlphaText(w.fontSm, "打开位置",
 					rectT{rr.right - openW, rr.top, rr.right - p(4), rr.bottom},
@@ -1893,6 +1893,8 @@ func stageDisplayLabel(stage string) string {
 		return "已暂停"
 	case "peer_paused":
 		return "对方已暂停"
+	case "cancelling":
+		return "正在取消"
 	case "verifying":
 		return "校验写入中"
 	default:
@@ -1913,6 +1915,16 @@ func channelDisplayLabel(ch string, pal palette, dark bool) (string, uint32, uin
 		return "UDP 打洞", col(0xFE, 0xF3, 0xC7), pal.amber
 	case "中继", "relay", "服务器中继":
 		return "服务器中继", pal.paper3, pal.ink2
+	case "已取消", "cancelled", "canceled":
+		if dark {
+			return "已取消", col(0x45, 0x1A, 0x03), pal.amber
+		}
+		return "已取消", col(0xFE, 0xF3, 0xC7), pal.amber
+	case "对方已取消":
+		if dark {
+			return "对方已取消", col(0x45, 0x1A, 0x03), pal.amber
+		}
+		return "对方已取消", col(0xFE, 0xF3, 0xC7), pal.amber
 	case "失败", "failed", "error":
 		if dark {
 			return "失败", col(0x7F, 0x1D, 0x1D), pal.danger
@@ -2503,7 +2515,7 @@ func isDurationToken(s string) bool {
 
 func isPathToken(s string) bool {
 	switch strings.ToLower(s) {
-	case "lan", "lan 直连", "打洞", "punch", "udp 打洞", "中继", "relay", "服务器中继", "失败", "failed", "error", "未配对":
+	case "lan", "lan 直连", "打洞", "punch", "udp 打洞", "中继", "relay", "服务器中继", "已取消", "对方已取消", "cancelled", "canceled", "失败", "failed", "error", "未配对":
 		return true
 	}
 	return false
@@ -2935,7 +2947,14 @@ func (w *mainWin) sendTextPayload(hwnd syscall.Handle, target sendTarget, txt, p
 		}
 		msg := fmt.Sprintf("已将%s发给 %s（%s）", kindLabel, label, humanBytes(res.Bytes))
 		if err != nil {
-			msg = "发送失败：" + err.Error()
+			switch {
+			case strings.Contains(err.Error(), "对方已取消"):
+				msg = "对方已取消传输"
+			case strings.Contains(err.Error(), "已取消"):
+				msg = "已取消发送"
+			default:
+				msg = "发送失败：" + err.Error()
+			}
 		}
 		mainMu.Lock()
 		if mw := mainWins[hwnd]; mw != nil {
@@ -3095,7 +3114,14 @@ func (w *mainWin) sendAsyncTarget(hwnd syscall.Handle, target sendTarget, files 
 		}
 		msg := fmt.Sprintf("已发送给 %s（%s）", label, summarizeFiles(res.Files))
 		if err != nil {
-			msg = "发送失败：" + err.Error()
+			switch {
+			case strings.Contains(err.Error(), "对方已取消"):
+				msg = "对方已取消传输"
+			case strings.Contains(err.Error(), "已取消"):
+				msg = "已取消发送"
+			default:
+				msg = "发送失败：" + err.Error()
+			}
 		}
 		mainMu.Lock()
 		if mw := mainWins[hwnd]; mw != nil {

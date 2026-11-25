@@ -337,6 +337,8 @@ public class MainActivity extends Activity {
         @Override
         public void onFilesReceived(List<JSONObject> entries, boolean refreshPeers) {
             ui.post(() -> {
+                String firstOkName = "";
+                JSONObject firstOutcome = null;
                 for (int i = entries.size() - 1; i >= 0; i--) {
                     JSONObject o = entries.get(i);
                     ReceivedEntry re = new ReceivedEntry(
@@ -347,15 +349,37 @@ public class MainActivity extends Activity {
                             o.optLong("bytes", 0),
                             o.optLong("ts", System.currentTimeMillis()),
                             o.optString("dir", "recv"),
-                            o.optString("peer", ""));
+                            o.optString("peer", ""),
+                            o.optString("status", ""),
+                            o.optString("error", ""));
                     recentEntries.add(0, re);
+                    if (re.status.isEmpty() || "ok".equals(re.status)) {
+                        if (firstOkName.isEmpty() && !re.name.isEmpty()) {
+                            firstOkName = re.name;
+                        }
+                    } else if (firstOutcome == null) {
+                        firstOutcome = o;
+                    }
                 }
                 while (recentEntries.size() > 30) {
                     recentEntries.remove(recentEntries.size() - 1);
                 }
                 renderRecentList();
-                if (!entries.isEmpty()) {
-                    toast("已保存到「" + currentDownloadShortLabel() + "」：" + entries.get(0).optString("name", ""));
+                if (!firstOkName.isEmpty()) {
+                    toast("已保存到「" + currentDownloadShortLabel() + "」：" + firstOkName);
+                } else if (firstOutcome != null) {
+                    String st = firstOutcome.optString("status", "");
+                    String nm = firstOutcome.optString("name", "接收文件");
+                    String errMsg = firstOutcome.optString("error", "");
+                    if ("peer_cancelled".equals(st)) {
+                        showSendBanner("peer_cancelled", "对方已取消发送 · " + nm, false);
+                        toast("对方已取消传输");
+                    } else if ("cancelled".equals(st)) {
+                        showSendBanner("cancelled", "已取消接收 · " + nm, false);
+                        toast("已取消接收");
+                    } else {
+                        showSendBanner("fail", "接收失败：" + (errMsg.isEmpty() ? nm : errMsg), true);
+                    }
                 }
                 if (refreshPeers) {
                     loadPairedPeers();
@@ -3895,7 +3919,8 @@ public class MainActivity extends Activity {
             recentEntries.remove(recentEntries.size() - 1);
         }
         final JSONObject rec = TransferService.makeRecentJson(
-                entry.name, entry.uri, entry.mime, entry.via, entry.bytes, entry.ts, entry.dir, entry.peer);
+                entry.name, entry.uri, entry.mime, entry.via, entry.bytes, entry.ts,
+                entry.dir, entry.peer, entry.status, entry.error);
         ioPool.execute(() -> TransferService.appendRecentRecord(this, rec));
         renderRecentList();
     }
@@ -3921,7 +3946,9 @@ public class MainActivity extends Activity {
                             o.optLong("bytes", 0),
                             o.optLong("ts", 0),
                             o.optString("dir", "recv"),
-                            o.optString("peer", "")));
+                            o.optString("peer", ""),
+                            o.optString("status", ""),
+                            o.optString("error", "")));
                 }
                 ui.post(() -> {
                     recentEntries.clear();
@@ -3949,6 +3976,12 @@ public class MainActivity extends Activity {
                     o.put("ts", r.ts);
                     o.put("dir", r.dir);
                     o.put("peer", r.peer);
+                    if (!r.status.isEmpty()) {
+                        o.put("status", r.status);
+                    }
+                    if (!r.error.isEmpty()) {
+                        o.put("error", r.error);
+                    }
                     arr.put(o);
                 }
                 TransferService.saveRecentList(this, arr);
@@ -3994,13 +4027,26 @@ public class MainActivity extends Activity {
         for (int i = 0; i < visible.size(); i++) {
             final ReceivedEntry r = visible.get(i);
             final boolean isSend = "send".equals(r.dir);
+            final boolean isCancelledSt = "cancelled".equals(r.status) || "peer_cancelled".equals(r.status);
+            final boolean isFailedSt = "failed".equals(r.status);
+            final boolean isSpecialOutcome = isCancelledSt || isFailedSt;
 
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
             row.setPadding(dp(2), dp(12), dp(2), dp(12));
             row.setBackground(ripple(roundBox(Color.TRANSPARENT, 0, 10), 10));
-            if (!isSend && r.uri != null && !r.uri.isEmpty()) {
+            if (isSpecialOutcome) {
+                final String clickMsg;
+                if ("peer_cancelled".equals(r.status)) {
+                    clickMsg = "对方已取消：" + r.name;
+                } else if ("cancelled".equals(r.status)) {
+                    clickMsg = "已取消：" + r.name;
+                } else {
+                    clickMsg = !r.error.isEmpty() ? ("传输失败：" + r.error) : ("传输失败：" + r.name);
+                }
+                row.setOnClickListener(v -> toast(clickMsg));
+            } else if (!isSend && r.uri != null && !r.uri.isEmpty()) {
                 row.setOnClickListener(v -> openReceivedEntry(r));
             } else if (isSend) {
                 row.setOnClickListener(v -> toast("已发送：" + r.name));
@@ -4017,20 +4063,22 @@ public class MainActivity extends Activity {
             String dirPrefix = isSend
                     ? (r.peer == null || r.peer.isEmpty() ? "已发出" : "发往 " + displayPeerLabel(r.peer))
                     : (r.peer == null || r.peer.isEmpty() ? "已收到" : "来自 " + displayPeerLabel(r.peer));
+            String sizePart = r.bytes > 0 ? (" · " + fmtBytes(r.bytes)) : "";
             String timeStr = r.ts > 0 ? " · " + sdf.format(new Date(r.ts)) : "";
 
             LinearLayout metaRow = new LinearLayout(this);
             metaRow.setOrientation(LinearLayout.HORIZONTAL);
             metaRow.setGravity(Gravity.CENTER_VERTICAL);
-            if (r.via != null && !r.via.trim().isEmpty()) {
+            String badgeKey = isSpecialOutcome ? r.status : (r.via != null ? r.via.trim() : "");
+            if (!badgeKey.isEmpty()) {
                 TextView chanBadge = label("", 10, cOnSurface, true);
                 chanBadge.setPadding(dp(6), dp(2), dp(6), dp(2));
-                stylePathBadge(chanBadge, r.via.trim());
+                stylePathBadge(chanBadge, badgeKey);
                 LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(WRAP, WRAP);
                 bLp.rightMargin = dp(6);
                 metaRow.addView(chanBadge, bLp);
             }
-            TextView mt = label(dirPrefix + " · " + fmtBytes(r.bytes) + timeStr, 12, cOnSurfaceVariant, false);
+            TextView mt = label(dirPrefix + sizePart + timeStr, 12, cOnSurfaceVariant, false);
             mt.setSingleLine(true);
             mt.setEllipsize(TextUtils.TruncateAt.END);
             metaRow.addView(mt, new LinearLayout.LayoutParams(0, WRAP, 1f));
@@ -4040,7 +4088,22 @@ public class MainActivity extends Activity {
             col.addView(metaRow, mtLp);
             row.addView(col, new LinearLayout.LayoutParams(0, WRAP, 1f));
 
-            TextView actionHint = label(isSend ? "已发" : "打开", 12, isSend ? cOnSurfaceVariant : cPrimary, false);
+            String hintText;
+            int hintColor;
+            if ("peer_cancelled".equals(r.status)) {
+                hintText = "对方已取消";
+                hintColor = cWarn;
+            } else if ("cancelled".equals(r.status)) {
+                hintText = "已取消";
+                hintColor = cWarn;
+            } else if ("failed".equals(r.status)) {
+                hintText = "失败";
+                hintColor = cError;
+            } else {
+                hintText = isSend ? "已发" : "打开";
+                hintColor = isSend ? cOnSurfaceVariant : cPrimary;
+            }
+            TextView actionHint = label(hintText, 12, hintColor, false);
             LinearLayout.LayoutParams ahLp = new LinearLayout.LayoutParams(WRAP, WRAP);
             ahLp.leftMargin = dp(12);
             row.addView(actionHint, ahLp);
@@ -4563,6 +4626,17 @@ public class MainActivity extends Activity {
 
     private void sendPreparedFiles(List<File> files, File rootTmp, String name, String target,
                                    String targetName, boolean auto) {
+        String recTitle = "";
+        long totalBytes = 0;
+        if (files != null && !files.isEmpty()) {
+            String firstName = files.get(0).getName();
+            recTitle = files.size() > 1 ? (firstName + " 等 " + files.size() + " 个文件") : firstName;
+            for (File f : files) {
+                if (f != null) {
+                    totalBytes += f.length();
+                }
+            }
+        }
         try {
             JSONArray paths = new JSONArray();
             for (File f : files) {
@@ -4572,10 +4646,10 @@ public class MainActivity extends Activity {
                     ? Mobile.sendAuto(SIGNAL_URL, keyFile().getAbsolutePath(),
                             pairedFile().getAbsolutePath(), target, name, paths.toString(), lanHint(), "")
                     : Mobile.sendFilesWithKey(target, name, keyFile().getAbsolutePath(), paths.toString());
-            onSendSucceeded(summary, targetName);
+            onSendSucceeded(summary, targetName, recTitle, totalBytes);
         } catch (Exception e) {
             Log.e(TAG, auto ? "sendAuto" : "sendLan", e);
-            onSendFailed(e.getMessage());
+            onSendFailed(e.getMessage(), recTitle, totalBytes, targetName);
         } finally {
             for (File f : files) {
                 if (f != null) {
@@ -4852,6 +4926,9 @@ public class MainActivity extends Activity {
         if ("peer_paused".equals(stage)) {
             return "对方已暂停";
         }
+        if ("cancelling".equals(stage)) {
+            return "正在取消";
+        }
         return "处理中";
     }
 
@@ -4864,7 +4941,8 @@ public class MainActivity extends Activity {
         return String.format(Locale.US, "%02d:%02d", m, s);
     }
 
-    private void onSendSucceeded(final String raw, final String targetName) {
+    private void onSendSucceeded(final String raw, final String targetName,
+                                 final String recTitle, final long totalBytes) {
         ui.post(() -> {
             setSendBusy(false, "");
             if (recvRunning || webRunning) {
@@ -4877,13 +4955,7 @@ public class MainActivity extends Activity {
                 JSONObject o = new JSONObject(raw);
                 if (!o.optBoolean("ok", false)) {
                     String errMsg = o.optString("error", raw);
-                    if (errMsg.contains("对方已取消")) {
-                        showSendBanner("", "对方已取消传输", false);
-                    } else if (errMsg.contains("已取消")) {
-                        showSendBanner("", "已取消发送", false);
-                    } else {
-                        showSendBanner("fail", "发送失败：" + errMsg, true);
-                    }
+                    recordSendOutcome(errMsg, recTitle, totalBytes, targetName);
                     return;
                 }
                 String path = o.optString("path", "");
@@ -4892,11 +4964,11 @@ public class MainActivity extends Activity {
                 long bytes = o.optLong("bytes", 0);
                 long durMs = o.optLong("duration_ms", 0);
                 String first = n > 0 ? files.optString(0, "已发送文件") : "已发送文件";
-                String recTitle = n > 1 ? first + " 等 " + n + " 个文件" : first;
-                addRecentEntry(new ReceivedEntry(recTitle, "", "", path, bytes,
+                String finalTitle = n > 1 ? first + " 等 " + n + " 个文件" : first;
+                addRecentEntry(new ReceivedEntry(finalTitle, "", "", path, bytes,
                         System.currentTimeMillis(), "send", targetName));
                 String spd = (durMs >= 200L && bytes > 0L) ? (" · " + fmtSpeed((bytes * 1000L) / durMs)) : "";
-                showSendBanner(path, "已发送 · " + recTitle + " (" + fmtBytes(bytes) + spd + ")", false);
+                showSendBanner(path, "已发送 · " + finalTitle + " (" + fmtBytes(bytes) + spd + ")", false);
             } catch (Exception e) {
                 showSendBanner("", raw, false);
             }
@@ -4904,6 +4976,10 @@ public class MainActivity extends Activity {
     }
 
     private void onSendFailed(final String err) {
+        onSendFailed(err, "", 0, "");
+    }
+
+    private void onSendFailed(final String err, final String recTitle, final long totalBytes, final String targetName) {
         ui.post(() -> {
             setSendBusy(false, "");
             if (recvRunning || webRunning) {
@@ -4911,14 +4987,26 @@ public class MainActivity extends Activity {
             } else {
                 stopKeepAlive();
             }
-            if (err != null && err.contains("对方已取消")) {
-                showSendBanner("", "对方已取消传输", false);
-            } else if (err != null && err.contains("已取消")) {
-                showSendBanner("", "已取消发送", false);
-            } else {
-                showSendBanner("fail", "发送失败：" + err, true);
-            }
+            recordSendOutcome(err, recTitle, totalBytes, targetName);
         });
+    }
+
+    private void recordSendOutcome(String err, String recTitle, long totalBytes, String targetName) {
+        String errText = err == null ? "" : err;
+        String status;
+        if (errText.contains("对方已取消")) {
+            status = "peer_cancelled";
+            showSendBanner("peer_cancelled", "对方已取消传输", false);
+        } else if (errText.contains("已取消")) {
+            status = "cancelled";
+            showSendBanner("cancelled", "已取消发送", false);
+        } else {
+            status = "failed";
+            showSendBanner("fail", "发送失败：" + errText, true);
+        }
+        String entryTitle = (recTitle != null && !recTitle.isEmpty()) ? recTitle : "发送文件";
+        addRecentEntry(new ReceivedEntry(entryTitle, "", "", "", totalBytes,
+                System.currentTimeMillis(), "send", targetName, status, errText));
     }
 
     private void showSendBanner(String path, String msg, boolean isError) {
@@ -5460,9 +5548,16 @@ public class MainActivity extends Activity {
         final long ts;
         final String dir;  // "recv" | "send"
         final String peer;
+        final String status; // "" | "ok" | "cancelled" | "peer_cancelled" | "failed"
+        final String error;
 
         ReceivedEntry(String name, String uri, String mime, String via, long bytes, long ts,
                       String dir, String peer) {
+            this(name, uri, mime, via, bytes, ts, dir, peer, "", "");
+        }
+
+        ReceivedEntry(String name, String uri, String mime, String via, long bytes, long ts,
+                      String dir, String peer, String status, String error) {
             this.name = name;
             this.uri = uri;
             this.mime = mime;
@@ -5471,6 +5566,8 @@ public class MainActivity extends Activity {
             this.ts = ts;
             this.dir = (dir == null || dir.isEmpty()) ? "recv" : dir;
             this.peer = peer == null ? "" : peer;
+            this.status = status == null ? "" : status;
+            this.error = error == null ? "" : error;
         }
     }
 
@@ -5759,10 +5856,12 @@ public class MainActivity extends Activity {
         if ("lan".equalsIgnoreCase(via)) {
             t.setTextColor(cOnPrimaryContainer);
             t.setBackground(roundBox(cPrimaryContainer, 0, 99));
-        } else if ("punch".equalsIgnoreCase(via)) {
+        } else if ("punch".equalsIgnoreCase(via)
+                || "cancelled".equalsIgnoreCase(via)
+                || "peer_cancelled".equalsIgnoreCase(via)) {
             t.setTextColor(cWarn);
             t.setBackground(roundBox(cWarnContainer, 0, 99));
-        } else if ("fail".equalsIgnoreCase(via)) {
+        } else if ("fail".equalsIgnoreCase(via) || "failed".equalsIgnoreCase(via)) {
             t.setTextColor(cOnErrorContainer);
             t.setBackground(roundBox(cErrorContainer, 0, 99));
         } else {
@@ -5784,7 +5883,13 @@ public class MainActivity extends Activity {
         if ("web".equalsIgnoreCase(path)) {
             return "网页快传";
         }
-        if ("fail".equalsIgnoreCase(path)) {
+        if ("cancelled".equalsIgnoreCase(path)) {
+            return "已取消";
+        }
+        if ("peer_cancelled".equalsIgnoreCase(path)) {
+            return "对方已取消";
+        }
+        if ("fail".equalsIgnoreCase(path) || "failed".equalsIgnoreCase(path)) {
             return "失败";
         }
         return path == null ? "" : path;

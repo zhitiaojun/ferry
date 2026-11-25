@@ -337,10 +337,22 @@ func (r *receiver) handle(ctx context.Context, nc net.Conn) {
 
 	r.logger.Event("session.ready", map[string]any{"peer": s.Peer.Name, "path": "lan", "paired": paired})
 	confirmRejected := false
+	var lastFileName string
+	var lastFileCount int
+	var lastTotalBytes int64
 	cfg := transfer.Config{
 		Control: ctrl,
 		Log:     r.logger,
 		OnDetailProgress: func(snap transfer.ProgressSnapshot) {
+			if snap.FileName != "" && lastFileName == "" {
+				lastFileName = snap.FileName
+			}
+			if snap.FileCount > 0 {
+				lastFileCount = snap.FileCount
+			}
+			if snap.BytesTotal > 0 {
+				lastTotalBytes = snap.BytesTotal
+			}
 			if txSeq != 0 {
 				updateActiveTransfer(txSeq, snap.Stage, "lan", "", snap.FileName, snap.FileIndex, snap.FileCount, snap.BytesDone, snap.BytesTotal)
 			}
@@ -360,7 +372,10 @@ func (r *receiver) handle(ctx context.Context, nc net.Conn) {
 			firstName := ""
 			if len(m.Files) > 0 {
 				firstName = m.Files[0].Name
+				lastFileName = firstName
 			}
+			lastFileCount = len(m.Files)
+			lastTotalBytes = total
 			txSeq = beginActiveTransfer("recv", peerName, firstName, len(m.Files), total)
 			attachActiveTransferController(txSeq, ctrl, true, true)
 			updateActiveTransfer(txSeq, "transferring", "lan", "", firstName, 1, len(m.Files), 0, total)
@@ -374,7 +389,25 @@ func (r *receiver) handle(ctx context.Context, nc net.Conn) {
 			r.logger.Event("lan.unpaired_rejected", map[string]any{"peer": peerName, "reason": err.Error()})
 			return
 		}
-		r.logger.Event("transfer.error", map[string]any{"error": err.Error()})
+		fileTitle := strings.TrimSpace(lastFileName)
+		if lastFileCount > 1 && fileTitle != "" {
+			fileTitle = fmt.Sprintf("%s 等 %d 个文件", fileTitle, lastFileCount)
+		} else if lastFileCount > 1 {
+			fileTitle = fmt.Sprintf("%d 个文件", lastFileCount)
+		} else if fileTitle == "" {
+			fileTitle = "接收文件"
+		}
+		switch {
+		case ctrl.IsCancelled():
+			r.logger.Event("transfer.cancelled", map[string]any{"peer": peerName})
+			recordReceiveOutcome("lan", peerName, fileTitle, lastTotalBytes, "cancelled", "已取消接收")
+		case transfer.IsCancelled(err):
+			r.logger.Event("transfer.peer_cancelled", map[string]any{"peer": peerName})
+			recordReceiveOutcome("lan", peerName, fileTitle, lastTotalBytes, "peer_cancelled", "对方已取消传输")
+		default:
+			r.logger.Event("transfer.error", map[string]any{"error": err.Error()})
+			recordReceiveOutcome("lan", peerName, fileTitle, lastTotalBytes, "failed", err.Error())
+		}
 		return
 	}
 	recordReceivedFrom(r.outDir, "lan", pairing.SanitizeName(s.Peer.Name), res.Files, res.Bytes)

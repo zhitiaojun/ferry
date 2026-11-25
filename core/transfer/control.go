@@ -24,6 +24,48 @@ func IsCancelled(err error) bool {
 	return errors.As(err, &rem) && rem.Code == proto.CodeCancelled
 }
 
+const (
+	cancelWriteTimeout = 2 * time.Second
+	cancelDrainGrace   = 3 * time.Second
+)
+
+// graceWaitPeerClose drains incoming frames after sending CodeCancelled until
+// the peer closes its side (having received CodeCancelled) or grace expires.
+// Using an AfterFunc read-deadline fuse guarantees buffered transports such as
+// relay.Conn unblock even if the peer never closes.
+func graceWaitPeerClose(s *session.Session, grace time.Duration) {
+	if s == nil {
+		return
+	}
+	if grace <= 0 {
+		grace = cancelDrainGrace
+	}
+	deadline := time.Now().Add(grace)
+	fuse := time.AfterFunc(grace, func() {
+		_ = s.Conn().SetReadDeadline(time.Now())
+	})
+	defer fuse.Stop()
+	for {
+		rem := time.Until(deadline)
+		if rem <= 0 {
+			return
+		}
+		if _, err := s.Recv(rem); err != nil {
+			return
+		}
+	}
+}
+
+func sendCancelAndWait(s *session.Session, msg string) {
+	if s == nil {
+		return
+	}
+	_ = s.Conn().SetWriteDeadline(time.Now().Add(cancelWriteTimeout))
+	_ = s.SendError(proto.CodeCancelled, "%s", msg)
+	_ = s.Conn().SetWriteDeadline(time.Time{})
+	graceWaitPeerClose(s, cancelDrainGrace)
+}
+
 var (
 	pingTokenKeepalive   = [8]byte{}
 	pingTokenPeerPaused  = [8]byte{'F', 'T', 'P', 'A', 'U', 'S', 'E', 1}

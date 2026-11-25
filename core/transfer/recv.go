@@ -211,16 +211,8 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 	emitProgress("transferring", cur)
 
 	if cfg.Control != nil && cfg.Control.IsCancelled() {
-		_ = s.Conn().SetWriteDeadline(time.Now().Add(300 * time.Millisecond))
-		_ = s.SendError(proto.CodeCancelled, "接收方已取消传输")
-		_ = s.Conn().SetWriteDeadline(time.Time{})
 		removeParts()
-		_ = s.Conn().SetReadDeadline(time.Now().Add(250 * time.Millisecond))
-		for {
-			if _, rerr := s.Recv(250 * time.Millisecond); rerr != nil {
-				break
-			}
-		}
+		sendCancelAndWait(s, "接收方已取消传输")
 		return nil, ErrCancelled
 	}
 
@@ -256,7 +248,11 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 		if readerDone {
 			return nil
 		}
-		_ = s.Conn().SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		_ = s.Conn().SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		fuse := time.AfterFunc(500*time.Millisecond, func() {
+			_ = s.Conn().SetReadDeadline(time.Now())
+		})
+		defer fuse.Stop()
 		for next := range frameCh {
 			if next.err != nil {
 				break
@@ -278,7 +274,11 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 		if readerDone {
 			return
 		}
-		_ = s.Conn().SetReadDeadline(time.Now().Add(250 * time.Millisecond))
+		_ = s.Conn().SetReadDeadline(time.Now().Add(cancelDrainGrace))
+		fuse := time.AfterFunc(cancelDrainGrace, func() {
+			_ = s.Conn().SetReadDeadline(time.Now())
+		})
+		defer fuse.Stop()
 		for range frameCh {
 		}
 		readerDone = true
@@ -326,7 +326,7 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 		if cfg.Control != nil {
 			stateCh = cfg.Control.StateCh()
 			if cfg.Control.IsCancelled() {
-				_ = s.Conn().SetWriteDeadline(time.Now().Add(300 * time.Millisecond))
+				_ = s.Conn().SetWriteDeadline(time.Now().Add(cancelWriteTimeout))
 				_ = s.SendError(proto.CodeCancelled, "接收方已取消传输")
 				_ = s.Conn().SetWriteDeadline(time.Time{})
 				removeParts()

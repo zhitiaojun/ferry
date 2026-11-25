@@ -48,6 +48,18 @@ func TestParseLedgerLine(t *testing.T) {
 			line: "15:07  ← Phone · 失败",
 			want: ledgerRow{time: "15:07", dir: "收", peer: "Phone", path: "失败"},
 		},
+		{
+			line: "15:08  → Laptop · 3 个文件 · 已取消",
+			want: ledgerRow{time: "15:08", dir: "发", peer: "Laptop", files: "3 个文件", path: "已取消"},
+		},
+		{
+			line: "15:09  ← Phone · note.txt · 对方已取消",
+			want: ledgerRow{time: "15:09", dir: "收", peer: "Phone", files: "note.txt", path: "对方已取消"},
+		},
+		{
+			line: "15:10  ← Phone · 已取消",
+			want: ledgerRow{time: "15:10", dir: "收", peer: "Phone", path: "已取消"},
+		},
 	}
 	for _, tc := range cases {
 		got := parseLedgerLine(tc.line)
@@ -65,6 +77,8 @@ func TestChannelDisplayLabelAndETA(t *testing.T) {
 		{"LAN", "LAN 直连"},
 		{"打洞", "UDP 打洞"},
 		{"中继", "服务器中继"},
+		{"已取消", "已取消"},
+		{"对方已取消", "对方已取消"},
 		{"失败", "失败"},
 		{"", ""},
 	}

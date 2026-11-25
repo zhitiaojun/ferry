@@ -618,8 +618,14 @@ func (a *app) receiveOneAuto(
 	start := time.Now()
 	var totalBytes int64
 	firstFile := ""
+	fileSummary := ""
 	if len(req.Files) > 0 {
 		firstFile = req.Files[0].Name
+		if len(req.Files) == 1 {
+			fileSummary = sanitizeLedgerText(req.Files[0].Name)
+		} else {
+			fileSummary = fmt.Sprintf("%d 个文件", len(req.Files))
+		}
 		for _, f := range req.Files {
 			totalBytes += f.Size
 		}
@@ -653,21 +659,29 @@ func (a *app) receiveOneAuto(
 		},
 	}, cl, req, peerPub, candCh, readyCh)
 	if err != nil {
+		noteOutcome := func(status string) {
+			if fileSummary != "" {
+				a.note(fmt.Sprintf("%s  ← %s · %s · %s", time.Now().Format("15:04"), sanitizeLedgerText(peerName), fileSummary, status))
+			} else {
+				a.note(fmt.Sprintf("%s  ← %s · %s", time.Now().Format("15:04"), sanitizeLedgerText(peerName), status))
+			}
+			a.notifyMainPaint()
+		}
 		if ctrl.IsCancelled() {
 			a.event("desktop.auto_recv_cancelled", map[string]any{"peer": truncID(req.FromDevice)})
-			a.note(fmt.Sprintf("%s  ← %s · 已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerName)))
-			a.notifyMainPaint()
+			noteOutcome("已取消")
 			return
 		}
 		if transfer.IsCancelled(err) {
 			a.event("desktop.auto_recv_peer_cancelled", map[string]any{"peer": truncID(req.FromDevice)})
-			a.note(fmt.Sprintf("%s  ← %s · 对方已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerName)))
-			a.notifyMainPaint()
+			noteOutcome("对方已取消")
+			if trayHandle != nil {
+				trayHandle.balloon("传输已取消", fmt.Sprintf("对方（%s）已取消发送", peerName))
+			}
 			return
 		}
 		a.event("desktop.auto_recv_error", map[string]any{"peer": truncID(req.FromDevice), "error": err.Error()})
-		a.note(fmt.Sprintf("%s  ← %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerName)))
-		a.notifyMainPaint()
+		noteOutcome("失败")
 		if trayHandle != nil {
 			trayHandle.balloon("接收失败", err.Error())
 		}

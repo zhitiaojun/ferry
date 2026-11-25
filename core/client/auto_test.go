@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"math/rand/v2"
 	"net/http/httptest"
@@ -546,4 +547,119 @@ func TestRelayFirstHotUpgradeToPunchResumesPartFile(t *testing.T) {
 	if got := fileSHA256(t, filepath.Join(outDir, "hot_upgrade.bin")); got != wantSum {
 		t.Fatalf("sha256 mismatch: got %s want %s", got, wantSum)
 	}
+}
+
+func TestRelayCancelDeliversCodeCancelled(t *testing.T) {
+	lim := server.DefaultLimits()
+	lim.RelayRate = 2 << 20 // 2 MiB/s paced relay so in-flight buffers queue up realistically
+	srv := server.NewWithLimits(lim, nil)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	sigURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/signal"
+
+	dir := t.TempDir()
+	sendKeyPath, _, sendPairedPath, recvPairedPath, _, recvKey := setupPairedKeys(t, dir)
+	src := filepath.Join(dir, "cancel_payload.bin")
+	writeTestPayload(t, src, 8<<20)
+
+	runOne := func(name string, cancelSender bool) {
+		t.Helper()
+		outDir := filepath.Join(dir, name)
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+
+		recvCl, err := signaling.Dial(ctx, sigURL, recvKey, nil)
+		if err != nil {
+			t.Fatalf("%s: recv signaling: %v", name, err)
+		}
+		defer recvCl.Close()
+
+		reqCh := make(chan signaling.SendRequest, 1)
+		candCh := make(chan *signaling.Envelope, 8)
+		readyCh := make(chan signaling.RelayReady, 2)
+		recvCl.On(signaling.TypeSendRequest, func(e *signaling.Envelope) {
+			if r, rerr := signaling.Decode[signaling.SendRequest](e); rerr == nil {
+				reqCh <- r
+			}
+		})
+		recvCl.On(signaling.TypeCandidates, func(e *signaling.Envelope) {
+			candCh <- e
+		})
+		recvCl.On(signaling.TypeRelayReady, func(e *signaling.Envelope) {
+			if rr, rerr := signaling.Decode[signaling.RelayReady](e); rerr == nil {
+				readyCh <- rr
+			}
+		})
+
+		sendCtrl := transfer.NewController()
+		recvCtrl := transfer.NewController()
+
+		recvDone := make(chan error, 1)
+		go func() {
+			req := <-reqCh
+			peerPub, perr := PairedPeer(recvPairedPath, req.FromDevice)
+			if perr != nil {
+				recvDone <- perr
+				return
+			}
+			recvCancelTriggered := false
+			_, rerr := ReceiveAuto(ctx, ReceiveOptions{
+				Key:               recvKey,
+				SignalURL:         sigURL,
+				OutDir:            outDir,
+				PairedPath:        recvPairedPath,
+				Name:              "recv-pc",
+				DisablePunch:      true,
+				DisableHotUpgrade: true,
+				Control:           recvCtrl,
+				OnStatus: func(st Status) {
+					if !cancelSender && !recvCancelTriggered && st.BytesDone >= 1<<20 {
+						recvCancelTriggered = true
+						recvCtrl.Cancel()
+					}
+				},
+			}, recvCl, req, peerPub, candCh, readyCh)
+			recvDone <- rerr
+		}()
+
+		sendCancelTriggered := false
+		_, sendErr := SendAuto(ctx, Options{
+			SignalURL:         sigURL,
+			KeyPath:           sendKeyPath,
+			PairedPath:        sendPairedPath,
+			Name:              "send-pc",
+			DisablePunch:      true,
+			DisableHotUpgrade: true,
+			Control:           sendCtrl,
+			OnStatus: func(st Status) {
+				if cancelSender && !sendCancelTriggered && st.BytesDone >= 1<<20 {
+					sendCancelTriggered = true
+					sendCtrl.Cancel()
+				}
+			},
+		}, recvKey.IDHex(), []string{src})
+		recvErr := <-recvDone
+
+		if cancelSender {
+			if !errors.Is(sendErr, transfer.ErrCancelled) {
+				t.Fatalf("%s: expected sender ErrCancelled, got %v", name, sendErr)
+			}
+			if !transfer.IsCancelled(recvErr) {
+				t.Fatalf("%s: expected receiver transfer.IsCancelled(err)=true (CodeCancelled), got %v", name, recvErr)
+			}
+		} else {
+			if !errors.Is(recvErr, transfer.ErrCancelled) {
+				t.Fatalf("%s: expected receiver ErrCancelled, got %v", name, recvErr)
+			}
+			if !transfer.IsCancelled(sendErr) {
+				t.Fatalf("%s: expected sender transfer.IsCancelled(err)=true (CodeCancelled), got %v", name, sendErr)
+			}
+		}
+		if _, statErr := os.Stat(filepath.Join(outDir, "cancel_payload.bin.ftpart")); !os.IsNotExist(statErr) {
+			t.Fatalf("%s: expected .ftpart removed after cancel, stat=%v", name, statErr)
+		}
+	}
+
+	runOne("sender_cancel", true)
+	runOne("receiver_cancel", false)
 }

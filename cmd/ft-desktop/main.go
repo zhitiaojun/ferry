@@ -571,6 +571,11 @@ func (a *app) cancelTransfer() bool {
 	allowed := a.tx != nil && a.tx.ctrl != nil && a.tx.canCancel
 	if allowed {
 		ctrl = a.tx.ctrl
+		a.tx.stage = "cancelling"
+		a.tx.speedBPS = 0
+		a.tx.paused = false
+		a.tx.peerPaused = false
+		a.lastPaint = time.Now()
 	}
 	a.mu.Unlock()
 	if !allowed {

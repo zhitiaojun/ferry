@@ -380,9 +380,17 @@ func (t *tray) handle(nc net.Conn) {
 
 	confirmRejected := false
 	outDir := t.app.receiveDir()
+	var lastFileName string
+	var lastFileCount int
 	cfg := transfer.Config{
 		Control: ctrl,
 		OnDetailProgress: func(s transfer.ProgressSnapshot) {
+			if s.FileName != "" {
+				lastFileName = s.FileName
+			}
+			if s.FileCount > 0 {
+				lastFileCount = s.FileCount
+			}
 			if txID != 0 {
 				t.app.updateTransfer(txID, s.Stage, "LAN", "", s.FileName, s.FileIndex, s.FileCount, s.BytesDone, s.BytesTotal)
 			}
@@ -412,7 +420,9 @@ func (t *tray) handle(nc net.Conn) {
 			firstName := ""
 			if len(m.Files) > 0 {
 				firstName = m.Files[0].Name
+				lastFileName = firstName
 			}
+			lastFileCount = len(m.Files)
 			txID = t.app.beginTransfer("recv", peerName, firstName, len(m.Files), total)
 			t.app.attachTransferControl(txID, ctrl, true, true)
 			return nil
@@ -424,27 +434,31 @@ func (t *tray) handle(nc net.Conn) {
 			t.app.event("desktop.lan_unpaired_rejected", map[string]any{"peer": peer, "name": peerName, "reason": err.Error()})
 			return
 		}
+		fileSummary := sanitizeLedgerText(lastFileName)
+		if lastFileCount > 1 {
+			fileSummary = fmt.Sprintf("%d 个文件", lastFileCount)
+		}
+		noteOutcome := func(status string) {
+			if fileSummary != "" {
+				t.app.note(fmt.Sprintf("%s  ← %s · %s · %s", time.Now().Format("15:04"), sanitizeLedgerText(peerName), fileSummary, status))
+			} else {
+				t.app.note(fmt.Sprintf("%s  ← %s · %s", time.Now().Format("15:04"), sanitizeLedgerText(peerName), status))
+			}
+			t.app.notifyMainPaint()
+		}
 		if ctrl.IsCancelled() {
 			t.app.event("desktop.transfer_cancelled", map[string]any{"peer": peer})
-			t.app.note(fmt.Sprintf("%s  ← %s · 已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerName)))
-			if h := existingMainWindow(); h != 0 {
-				procPostMessageW.Call(uintptr(h), wmAppPaint, 0, 0)
-			}
+			noteOutcome("已取消")
 			return
 		}
 		if transfer.IsCancelled(err) {
 			t.app.event("desktop.transfer_peer_cancelled", map[string]any{"peer": peer})
-			t.app.note(fmt.Sprintf("%s  ← %s · 对方已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerName)))
-			if h := existingMainWindow(); h != 0 {
-				procPostMessageW.Call(uintptr(h), wmAppPaint, 0, 0)
-			}
+			noteOutcome("对方已取消")
+			t.balloon("传输已取消", fmt.Sprintf("对方（%s）已取消发送", peerName))
 			return
 		}
 		t.app.event("desktop.transfer_error", map[string]any{"peer": peer, "error": err.Error()})
-		t.app.note(fmt.Sprintf("%s  ← %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerName)))
-		if h := existingMainWindow(); h != 0 {
-			procPostMessageW.Call(uintptr(h), wmAppPaint, 0, 0)
-		}
+		noteOutcome("失败")
 		t.balloon("接收失败", err.Error())
 		return
 	}

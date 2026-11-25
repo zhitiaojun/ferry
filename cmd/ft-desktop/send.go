@@ -186,15 +186,18 @@ func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error)
 		if ctrl.IsCancelled() {
 			a.event("desktop.send_cancelled", map[string]any{"to": truncID(peer.ID)})
 			a.note(fmt.Sprintf("%s  → %s · %s · 已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeFiles(files)))
+			a.notifyMainPaint()
 			return client.Result{}, fmt.Errorf("已取消传输")
 		}
 		if transfer.IsCancelled(err) {
 			a.event("desktop.send_peer_cancelled", map[string]any{"to": truncID(peer.ID)})
 			a.note(fmt.Sprintf("%s  → %s · %s · 对方已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeFiles(files)))
+			a.notifyMainPaint()
 			return client.Result{}, fmt.Errorf("对方已取消传输")
 		}
 		a.event("desktop.send_error", map[string]any{"to": truncID(peer.ID), "error": err.Error()})
 		a.note(fmt.Sprintf("%s  → %s · %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeFiles(files)))
+		a.notifyMainPaint()
 		return client.Result{}, err
 	}
 	if res.PeerName != "" && res.PeerName != peer.Name {
@@ -217,6 +220,7 @@ func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error)
 	})
 	a.note(fmt.Sprintf("%s  → %s · %s · %s · %s · %s",
 		time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeFiles(files), humanBytes(res.Bytes), fmtDur(res.Duration), chLabel))
+	a.notifyMainPaint()
 	return res, nil
 }
 
@@ -257,15 +261,18 @@ func sendToLANTarget(a *app, files []string, targetName, addr string) (client.Re
 		if ctrl.IsCancelled() {
 			a.event("desktop.lan_send_cancelled", map[string]any{"addr": addr})
 			a.note(fmt.Sprintf("%s  → %s · %s · 已取消", time.Now().Format("15:04"), sanitizeLedgerText(label), summarizeFiles(files)))
+			a.notifyMainPaint()
 			return client.Result{}, fmt.Errorf("已取消传输")
 		}
 		if transfer.IsCancelled(err) {
 			a.event("desktop.lan_send_peer_cancelled", map[string]any{"addr": addr})
 			a.note(fmt.Sprintf("%s  → %s · %s · 对方已取消", time.Now().Format("15:04"), sanitizeLedgerText(label), summarizeFiles(files)))
+			a.notifyMainPaint()
 			return client.Result{}, fmt.Errorf("对方已取消传输")
 		}
 		a.event("desktop.lan_send_error", map[string]any{"addr": addr, "error": err.Error()})
 		a.note(fmt.Sprintf("%s  → %s · %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(label), summarizeFiles(files)))
+		a.notifyMainPaint()
 		return client.Result{}, err
 	}
 	if res.PeerName != "" {
@@ -277,6 +284,7 @@ func sendToLANTarget(a *app, files []string, targetName, addr string) (client.Re
 	})
 	a.note(fmt.Sprintf("%s  → %s · %s · %s · %s · LAN",
 		time.Now().Format("15:04"), sanitizeLedgerText(label), summarizeFiles(files), humanBytes(res.Bytes), fmtDur(res.Duration)))
+	a.notifyMainPaint()
 	return res, nil
 }
 

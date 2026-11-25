@@ -427,6 +427,17 @@ public class TransferService extends Service implements EventListener {
                     String peer = o.optString("peer", "");
                     long bytes = o.optLong("bytes", 0);
                     long ts = o.optLong("ts", System.currentTimeMillis());
+                    String status = o.optString("status", "");
+                    String errMsg = o.optString("error", "");
+                    if (!status.isEmpty() && !"ok".equals(status)) {
+                        if (fileName.isEmpty()) {
+                            fileName = "接收文件";
+                        }
+                        JSONObject rec = makeRecentJson(fileName, "", "", via, bytes, ts, "recv", peer, status, errMsg);
+                        appendRecentRecord(this, rec);
+                        exported.add(rec);
+                        continue;
+                    }
                     if (fileName.isEmpty() || fullPath.isEmpty()) {
                         continue;
                     }
@@ -734,20 +745,63 @@ public class TransferService extends Service implements EventListener {
         if (nm == null || entries.isEmpty()) {
             return;
         }
-        String first = entries.get(0).optString("name", "文件");
-        String peer = entries.get(0).optString("peer", "");
-        String title = entries.size() > 1 ? ("已收到 " + entries.size() + " 个文件") : ("已收到文件：" + first);
-        String body = peer.isEmpty() ? "已存入下载目录" : ("来自 " + peer + "，已存入下载目录");
+        List<JSONObject> okFiles = new ArrayList<>();
+        List<JSONObject> outcomes = new ArrayList<>();
+        for (JSONObject o : entries) {
+            String st = o.optString("status", "");
+            if (st.isEmpty() || "ok".equals(st)) {
+                okFiles.add(o);
+            } else {
+                outcomes.add(o);
+            }
+        }
+        if (!okFiles.isEmpty()) {
+            String first = okFiles.get(0).optString("name", "文件");
+            String peer = okFiles.get(0).optString("peer", "");
+            String title = okFiles.size() > 1 ? ("已收到 " + okFiles.size() + " 个文件") : ("已收到文件：" + first);
+            String body = peer.isEmpty() ? "已存入下载目录" : ("来自 " + peer + "，已存入下载目录");
 
-        Notification.Builder b = Build.VERSION.SDK_INT >= 26
-                ? new Notification.Builder(this, CHANNEL_RECEIVED)
-                : new Notification.Builder(this);
-        b.setContentTitle(title)
-                .setContentText(body)
-                .setSmallIcon(android.R.drawable.stat_sys_download_done)
-                .setAutoCancel(true)
-                .setContentIntent(openAppIntent());
-        nm.notify(RECV_NOTIF_BASE + (sNotifSeq++ % 20), b.build());
+            Notification.Builder b = Build.VERSION.SDK_INT >= 26
+                    ? new Notification.Builder(this, CHANNEL_RECEIVED)
+                    : new Notification.Builder(this);
+            b.setContentTitle(title)
+                    .setContentText(body)
+                    .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                    .setAutoCancel(true)
+                    .setContentIntent(openAppIntent());
+            nm.notify(RECV_NOTIF_BASE + (sNotifSeq++ % 20), b.build());
+        }
+        if (!outcomes.isEmpty()) {
+            JSONObject firstOut = outcomes.get(0);
+            String st = firstOut.optString("status", "");
+            String name = firstOut.optString("name", "文件");
+            String peer = firstOut.optString("peer", "");
+            String errMsg = firstOut.optString("error", "");
+            String title;
+            String body;
+            int icon = android.R.drawable.stat_notify_error;
+            if ("peer_cancelled".equals(st)) {
+                title = "传输已取消";
+                body = peer.isEmpty() ? ("对方已取消发送：" + name) : ("对方（" + peer + "）已取消发送：" + name);
+                icon = android.R.drawable.stat_sys_warning;
+            } else if ("cancelled".equals(st)) {
+                title = "传输已取消";
+                body = "已取消接收：" + name;
+                icon = android.R.drawable.stat_sys_warning;
+            } else {
+                title = "接收失败";
+                body = !errMsg.isEmpty() ? errMsg : ("接收失败：" + name);
+            }
+            Notification.Builder b = Build.VERSION.SDK_INT >= 26
+                    ? new Notification.Builder(this, CHANNEL_RECEIVED)
+                    : new Notification.Builder(this);
+            b.setContentTitle(title)
+                    .setContentText(body)
+                    .setSmallIcon(icon)
+                    .setAutoCancel(true)
+                    .setContentIntent(openAppIntent());
+            nm.notify(RECV_NOTIF_BASE + (sNotifSeq++ % 20), b.build());
+        }
     }
 
     private void notifyUiServiceState(String error) {
@@ -760,6 +814,10 @@ public class TransferService extends Service implements EventListener {
     // ================= Shared Storage, Export & Network Helpers =================
 
     public static JSONObject makeRecentJson(String name, String uri, String mime, String via, long bytes, long ts, String dir, String peer) {
+        return makeRecentJson(name, uri, mime, via, bytes, ts, dir, peer, "", "");
+    }
+
+    public static JSONObject makeRecentJson(String name, String uri, String mime, String via, long bytes, long ts, String dir, String peer, String status, String error) {
         JSONObject o = new JSONObject();
         try {
             o.put("name", name);
@@ -770,6 +828,12 @@ public class TransferService extends Service implements EventListener {
             o.put("ts", ts);
             o.put("dir", dir);
             o.put("peer", peer);
+            if (status != null && !status.isEmpty()) {
+                o.put("status", status);
+            }
+            if (error != null && !error.isEmpty()) {
+                o.put("error", error);
+            }
         } catch (Exception ignored) {
         }
         return o;

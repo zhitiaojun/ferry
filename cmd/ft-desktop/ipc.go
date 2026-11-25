@@ -280,11 +280,17 @@ func (d *desktopIPC) sendDirectLAN(ctx context.Context, addr string, files []str
 	}, addr, files)
 	if err != nil {
 		if ctrl.IsCancelled() {
+			a.note(fmt.Sprintf("%s  → %s · %s · 已取消", time.Now().Format("15:04"), sanitizeLedgerText(addr), summarizeFiles(files)))
+			a.notifyMainPaint()
 			return ipc.SendResponse{OK: false, Error: "已取消传输"}
 		}
 		if transfer.IsCancelled(err) {
+			a.note(fmt.Sprintf("%s  → %s · %s · 对方已取消", time.Now().Format("15:04"), sanitizeLedgerText(addr), summarizeFiles(files)))
+			a.notifyMainPaint()
 			return ipc.SendResponse{OK: false, Error: "对方已取消传输"}
 		}
+		a.note(fmt.Sprintf("%s  → %s · %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(addr), summarizeFiles(files)))
+		a.notifyMainPaint()
 		return ipc.SendResponse{OK: false, Error: err.Error()}
 	}
 	peerLabel := res.PeerName
@@ -370,11 +376,17 @@ func (d *desktopIPC) sendToSelectedPeer(ctx context.Context, peer client.Peer, f
 		}
 		if err != nil {
 			if ctrl.IsCancelled() {
+				a.note(fmt.Sprintf("%s  → %s · %s · 已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeFiles(files)))
+				a.notifyMainPaint()
 				return ipc.SendResponse{OK: false, Error: "已取消传输"}
 			}
 			if transfer.IsCancelled(err) {
+				a.note(fmt.Sprintf("%s  → %s · %s · 对方已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeFiles(files)))
+				a.notifyMainPaint()
 				return ipc.SendResponse{OK: false, Error: "对方已取消传输"}
 			}
+			a.note(fmt.Sprintf("%s  → %s · %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeFiles(files)))
+			a.notifyMainPaint()
 			return ipc.SendResponse{OK: false, Error: err.Error()}
 		}
 		return ipcResultFromClient(peerLabel(peer), res)
