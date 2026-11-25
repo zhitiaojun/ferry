@@ -985,3 +985,172 @@ func TestReceivePauseResumeAndCancel(t *testing.T) {
 		t.Fatalf("expected .ftpart removed on receiver cancel, stat=%v", statErr)
 	}
 }
+
+func TestPauseSyncAndOwnerOnlyResume(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "sync.bin")
+	writePattern(t, src, 2<<20)
+
+	// 1. Sender pauses -> receiver sees peer_paused and cannot resume -> sender resumes & completes.
+	out1 := filepath.Join(dir, "out1")
+	sendCtrl1 := NewController()
+	recvCtrl1 := NewController()
+	a, b := net.Pipe()
+	type resErr struct {
+		err error
+	}
+	recvCh1 := make(chan resErr, 1)
+	recvPeerPausedSeen := make(chan struct{}, 1)
+	go func() {
+		defer b.Close()
+		sb, err := session.Accept(b, testParams("recv"))
+		if err != nil {
+			recvCh1 <- resErr{err}
+			return
+		}
+		defer sb.Close()
+		_, rerr := Receive(sb, out1, Config{
+			Timeout: 2 * time.Second,
+			Control: recvCtrl1,
+			OnDetailProgress: func(s ProgressSnapshot) {
+				if s.Stage == "peer_paused" {
+					select {
+					case recvPeerPausedSeen <- struct{}{}:
+					default:
+					}
+				}
+			},
+		})
+		recvCh1 <- resErr{rerr}
+	}()
+
+	sa, err := session.Dial(a, testParams("send"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pausedOnce := false
+	sendDone1 := make(chan error, 1)
+	go func() {
+		defer sa.Close()
+		_, serr := Send(sa, []string{src}, Config{
+			ChunkSize:   64 << 10,
+			WindowBytes: 128 << 10,
+			Timeout:     2 * time.Second,
+			Control:     sendCtrl1,
+			OnDetailProgress: func(s ProgressSnapshot) {
+				if pausedOnce && s.Stage == "transferring" && sendCtrl1.IsPaused() {
+					t.Errorf("emitted transferring while locally paused: %+v", s)
+				}
+				if !pausedOnce && s.BytesDone >= 256<<10 {
+					pausedOnce = true
+					sendCtrl1.Pause()
+				}
+			},
+		})
+		sendDone1 <- serr
+	}()
+
+	select {
+	case <-recvPeerPausedSeen:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for receiver to observe peer_paused")
+	}
+	if !recvCtrl1.IsPeerPaused() {
+		t.Fatal("expected receiver controller IsPeerPaused() = true")
+	}
+	// Owner-only resume: receiver must not be able to resume a sender-initiated pause.
+	if recvCtrl1.TogglePause() {
+		t.Fatal("receiver TogglePause should return false while paused by peer")
+	}
+	if !recvCtrl1.IsPeerPaused() {
+		t.Fatal("receiver pause state changed despite owner-only rule")
+	}
+	sendCtrl1.Resume()
+
+	if serr := <-sendDone1; serr != nil {
+		t.Fatalf("Send failed after synced pause/resume: %v", serr)
+	}
+	if rr := <-recvCh1; rr.err != nil {
+		t.Fatalf("Receive failed after synced pause/resume: %v", rr.err)
+	}
+	if fileHash(t, src) != fileHash(t, filepath.Join(out1, "sync.bin")) {
+		t.Fatal("hash mismatch after sender pause sync")
+	}
+
+	// 2. Receiver pauses -> sender sees peer_paused and cannot resume -> receiver resumes & completes.
+	out2 := filepath.Join(dir, "out2")
+	sendCtrl2 := NewController()
+	recvCtrl2 := NewController()
+	c1, c2 := net.Pipe()
+	recvCh2 := make(chan resErr, 1)
+	go func() {
+		defer c2.Close()
+		sb, err := session.Accept(c2, testParams("recv"))
+		if err != nil {
+			recvCh2 <- resErr{err}
+			return
+		}
+		defer sb.Close()
+		pausedRecv := false
+		_, rerr := Receive(sb, out2, Config{
+			Timeout: 2 * time.Second,
+			Control: recvCtrl2,
+			OnDetailProgress: func(s ProgressSnapshot) {
+				if !pausedRecv && s.BytesDone >= 256<<10 {
+					pausedRecv = true
+					recvCtrl2.Pause()
+				}
+			},
+		})
+		recvCh2 <- resErr{rerr}
+	}()
+
+	sa2, err := session.Dial(c1, testParams("send"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sendPeerPausedSeen := make(chan struct{}, 1)
+	sendDone2 := make(chan error, 1)
+	go func() {
+		defer sa2.Close()
+		_, serr := Send(sa2, []string{src}, Config{
+			ChunkSize:   64 << 10,
+			WindowBytes: 128 << 10,
+			Timeout:     2 * time.Second,
+			Control:     sendCtrl2,
+			OnDetailProgress: func(s ProgressSnapshot) {
+				if s.Stage == "peer_paused" {
+					select {
+					case sendPeerPausedSeen <- struct{}{}:
+					default:
+					}
+				}
+			},
+		})
+		sendDone2 <- serr
+	}()
+
+	select {
+	case <-sendPeerPausedSeen:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for sender to observe peer_paused")
+	}
+	if !sendCtrl2.IsPeerPaused() {
+		t.Fatal("expected sender controller IsPeerPaused() = true")
+	}
+	// Owner-only resume: sender must not be able to resume a receiver-initiated pause.
+	if sendCtrl2.TogglePause() {
+		t.Fatal("sender TogglePause should return false while paused by peer")
+	}
+	recvCtrl2.Resume()
+
+	if serr := <-sendDone2; serr != nil {
+		t.Fatalf("Send failed after receiver pause sync: %v", serr)
+	}
+	if rr := <-recvCh2; rr.err != nil {
+		t.Fatalf("Receive failed after receiver pause sync: %v", rr.err)
+	}
+	if fileHash(t, src) != fileHash(t, filepath.Join(out2, "sync.bin")) {
+		t.Fatal("hash mismatch after receiver pause sync")
+	}
+}

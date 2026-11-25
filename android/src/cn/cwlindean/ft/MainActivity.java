@@ -4664,7 +4664,9 @@ public class MainActivity extends Activity {
             long total = o.optLong("bytes_total", 0);
             long speedBps = o.optLong("speed_bps", 0);
             long startedAt = o.optLong("started_at", 0);
-            boolean paused = o.optBoolean("paused", false) || "paused".equals(stage);
+            boolean localPaused = o.optBoolean("paused", false) || "paused".equals(stage);
+            boolean peerPaused = o.optBoolean("peer_paused", false) || "peer_paused".equals(stage);
+            boolean anyPaused = localPaused || peerPaused;
             boolean canPause = o.optBoolean("can_pause", false);
             boolean canCancel = o.optBoolean("can_cancel", false);
 
@@ -4690,7 +4692,8 @@ public class MainActivity extends Activity {
             }
             txSubTv.setText(sb.toString());
 
-            boolean determinate = total > 0 && ("transferring".equals(stage) || "verifying".equals(stage) || "paused".equals(stage) || done > 0);
+            boolean determinate = total > 0 && ("transferring".equals(stage) || "verifying".equals(stage)
+                    || "paused".equals(stage) || "peer_paused".equals(stage) || done > 0);
             int progressPromille = 0;
             if (determinate) {
                 progressPromille = (int) Math.max(0, Math.min(1000, (done * 1000L) / total));
@@ -4699,13 +4702,13 @@ public class MainActivity extends Activity {
             } else {
                 txProgressBar.setIndeterminate(true);
             }
-            int barTint = paused ? cWarn : cPrimary;
+            int barTint = anyPaused ? cWarn : cPrimary;
             txProgressBar.setProgressTintList(ColorStateList.valueOf(barTint));
             txProgressBar.setIndeterminateTintList(ColorStateList.valueOf(barTint));
 
             long nowMs = System.currentTimeMillis();
             long elapsedMs = startedAt > 0 && nowMs > startedAt ? nowMs - startedAt : 0L;
-            if (speedBps <= 0L && done > 0L && elapsedMs >= 500L && !"verifying".equals(stage) && !paused) {
+            if (speedBps <= 0L && done > 0L && elapsedMs >= 500L && !"verifying".equals(stage) && !anyPaused) {
                 speedBps = (done * 1000L) / elapsedMs;
             }
             StringBuilder mb = new StringBuilder();
@@ -4717,15 +4720,17 @@ public class MainActivity extends Activity {
             } else {
                 mb.append("正在建立传输通道…");
             }
-            if (paused) {
+            if (localPaused) {
                 mb.append(" · 已暂停");
+            } else if (peerPaused) {
+                mb.append(" · 对方已暂停");
             } else if (speedBps > 0L && !"verifying".equals(stage)) {
                 mb.append(" · ").append(fmtSpeed(speedBps));
             }
             if (elapsedMs >= 1000L) {
                 mb.append(" · 已用 ").append(formatDurationSec(elapsedMs / 1000L));
             }
-            if (total > 0 && done > 0 && done < total && !"verifying".equals(stage) && !paused) {
+            if (total > 0 && done > 0 && done < total && !"verifying".equals(stage) && !anyPaused) {
                 long remSec = -1L;
                 if (speedBps > 0L) {
                     remSec = (total - done) / speedBps;
@@ -4740,11 +4745,15 @@ public class MainActivity extends Activity {
             txMetricsTv.setText(metricsText);
 
             boolean showPause = canPause && !"verifying".equals(stage);
+            String pauseBtnText = localPaused ? "继续" : (peerPaused ? "对方已暂停" : "暂停");
+            boolean pauseBtnEnabled = localPaused || !peerPaused;
             if (txActionRow != null) {
                 txActionRow.setVisibility((showPause || canCancel) ? View.VISIBLE : View.GONE);
                 if (txPauseBtn != null) {
                     txPauseBtn.setVisibility(showPause ? View.VISIBLE : View.GONE);
-                    txPauseBtn.setText(paused ? "继续" : "暂停");
+                    txPauseBtn.setText(pauseBtnText);
+                    txPauseBtn.setEnabled(pauseBtnEnabled);
+                    txPauseBtn.setAlpha(pauseBtnEnabled ? 1.0f : 0.55f);
                 }
                 if (txCancelBtn != null) {
                     txCancelBtn.setVisibility(canCancel ? View.VISIBLE : View.GONE);
@@ -4752,7 +4761,7 @@ public class MainActivity extends Activity {
             }
             activeTransferCard.setVisibility(View.VISIBLE);
 
-            String dialogTitle = (paused ? "已暂停" : ("recv".equals(dir) ? "接收中" : "发送中"))
+            String dialogTitle = (localPaused ? "已暂停" : (peerPaused ? "对方已暂停" : ("recv".equals(dir) ? "接收中" : "发送中")))
                     + (channel.isEmpty() ? "" : "（" + pathLabel(channel) + "）")
                     + (fName.isEmpty() ? "" : " · " + fName);
             updateTempDialogProgress(tempTxBox, tempTxTitleTv, tempTxBar, tempTxMetaTv,
@@ -4763,7 +4772,9 @@ public class MainActivity extends Activity {
                 tempJoinActionRow.setVisibility((showPause || canCancel) ? View.VISIBLE : View.GONE);
                 if (tempJoinPauseBtn != null) {
                     tempJoinPauseBtn.setVisibility(showPause ? View.VISIBLE : View.GONE);
-                    tempJoinPauseBtn.setText(paused ? "继续" : "暂停");
+                    tempJoinPauseBtn.setText(pauseBtnText);
+                    tempJoinPauseBtn.setEnabled(pauseBtnEnabled);
+                    tempJoinPauseBtn.setAlpha(pauseBtnEnabled ? 1.0f : 0.55f);
                 }
                 if (tempJoinCancelBtn != null) {
                     tempJoinCancelBtn.setVisibility(canCancel ? View.VISIBLE : View.GONE);
@@ -4830,6 +4841,9 @@ public class MainActivity extends Activity {
         }
         if ("paused".equals(stage)) {
             return "已暂停";
+        }
+        if ("peer_paused".equals(stage)) {
+            return "对方已暂停";
         }
         return "处理中";
     }

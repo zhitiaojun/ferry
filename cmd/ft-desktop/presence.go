@@ -691,6 +691,6 @@ func (a *app) receiveOneAuto(
 	a.notifyMainPaint()
 	if trayHandle != nil {
 		trayHandle.balloon(fmt.Sprintf("已接收 %d 个文件", len(res.Files)),
-			fmt.Sprintf("来自 %s（%s），共 %d 字节，已存入 %s", peerName, chLabel, res.Bytes, outDir))
+			fmt.Sprintf("来自 %s（%s），共 %s，已存入 %s", peerName, chLabel, humanBytes(res.Bytes), outDir))
 	}
 }

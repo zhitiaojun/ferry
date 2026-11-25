@@ -172,3 +172,32 @@ func TestAppTransferPauseAndCancelControl(t *testing.T) {
 		t.Fatal("controller should be cancelled")
 	}
 }
+
+func TestAppPeerPauseOwnerOnlyAndHumanBytes(t *testing.T) {
+	if got := humanBytes(429599); got != "419.5 KB" {
+		t.Fatalf("humanBytes(429599) = %q, want 419.5 KB", got)
+	}
+	if got := stageDisplayLabel("peer_paused"); got != "对方已暂停" {
+		t.Fatalf("stageDisplayLabel(peer_paused) = %q, want 对方已暂停", got)
+	}
+
+	a := newApp(defaultReceiveDir(), 18800)
+	id := a.beginTransfer("recv", "REDMI K90 Ultra", "a.bin", 1, 10*1024*1024)
+	ctrl := transfer.NewController()
+	a.attachTransferControl(id, ctrl, true, true)
+
+	ctrl.SetPeerPaused(true)
+	a.updateTransfer(id, "transferring", "中继", "", "a.bin", 1, 1, 2*1024*1024, 10*1024*1024)
+	cur := a.currentTransfer()
+	if cur == nil || !cur.peerPaused || cur.paused || cur.stage != "peer_paused" || cur.speedBPS != 0 {
+		t.Fatalf("expected peer_paused state after updateTransfer, got %+v", cur)
+	}
+	if a.togglePauseTransfer() {
+		t.Fatal("desktop should not be allowed to resume peer-paused transfer")
+	}
+	ctrl.SetPeerPaused(false)
+	cur = a.currentTransfer()
+	if cur == nil || cur.peerPaused || cur.stage != "transferring" {
+		t.Fatalf("expected transferring after peer resume, got %+v", cur)
+	}
+}

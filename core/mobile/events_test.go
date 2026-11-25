@@ -126,3 +126,45 @@ func TestActiveTransferPauseAndCancelControl(t *testing.T) {
 		t.Fatal("expected CancelActiveTransfer to cancel controller")
 	}
 }
+
+func TestActiveTransferPauseReconcileAndOwnerRule(t *testing.T) {
+	seq := beginActiveTransfer("recv", "HyperX", "a.apk", 1, 2048)
+	ctrl := transfer.NewController()
+	attachActiveTransferController(seq, ctrl, true, true)
+	defer endActiveTransfer(seq)
+
+	// 1. Local pause must survive stale "transferring" progress updates (no flicker).
+	if !TogglePauseActiveTransfer() {
+		t.Fatal("expected local pause to succeed")
+	}
+	updateActiveTransfer(seq, "transferring", "relay", "", "a.apk", 1, 1, 512, 2048)
+	var st ActiveTransfer
+	if err := json.Unmarshal([]byte(ActiveTransferStatus()), &st); err != nil {
+		t.Fatal(err)
+	}
+	if !st.Paused || st.Stage != "paused" || st.SpeedBPS != 0 {
+		t.Fatalf("local pause flickered after updateActiveTransfer: %+v", st)
+	}
+	TogglePauseActiveTransfer() // resume local
+
+	// 2. Peer pause syncs peer_paused + speed 0, and local TogglePauseActiveTransfer refuses resume.
+	ctrl.SetPeerPaused(true)
+	var stPeer ActiveTransfer
+	if err := json.Unmarshal([]byte(ActiveTransferStatus()), &stPeer); err != nil {
+		t.Fatal(err)
+	}
+	if !stPeer.PeerPaused || stPeer.Paused || stPeer.Stage != "peer_paused" || stPeer.SpeedBPS != 0 {
+		t.Fatalf("unexpected peer_paused state: %+v", stPeer)
+	}
+	if TogglePauseActiveTransfer() {
+		t.Fatal("local TogglePauseActiveTransfer should return false when paused by peer")
+	}
+	ctrl.SetPeerPaused(false)
+	var stResumed ActiveTransfer
+	if err := json.Unmarshal([]byte(ActiveTransferStatus()), &stResumed); err != nil {
+		t.Fatal(err)
+	}
+	if stResumed.PeerPaused || stResumed.Stage != "transferring" {
+		t.Fatalf("expected transferring after peer resume, got %+v", stResumed)
+	}
+}

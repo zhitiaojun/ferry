@@ -537,6 +537,19 @@ func openMainWindow(a *app) {
 	}
 	procShowWindow.Call(uintptr(hwnd), swShow)
 	procUpdateWindow.Call(uintptr(hwnd))
+	procSetForegroundWindow.Call(uintptr(hwnd))
+}
+
+func openMainWindowOnHome(a *app) {
+	openMainWindow(a)
+	if h := existingMainWindow(); h != 0 {
+		if mw := currentWin(h); mw != nil {
+			mw.page = pageHome
+			mw.syncTimer(h)
+		}
+		procSetForegroundWindow.Call(uintptr(h))
+		procInvalidateRect.Call(uintptr(h), 0, 1)
+	}
 }
 
 var mainWins = map[syscall.Handle]*mainWin{}
@@ -1158,6 +1171,9 @@ func (w *mainWin) layout(cw, ch int32) {
 				}
 				if showPause {
 					pwBtn := p(66)
+					if !tx.paused && (tx.peerPaused || tx.stage == "peer_paused") {
+						pwBtn = p(86)
+					}
 					w.txPauseBtnR = rectT{curR - pwBtn, btnY, curR, btnB}
 				}
 				ry = w.activeTxR.bottom + p(10)
@@ -1735,8 +1751,11 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 
 func (w *mainWin) drawActiveTransferCard(cv *glassCanvas, r rectT, tx *activeTransfer) {
 	p := w.px
+	localPaused := tx.paused || tx.stage == "paused"
+	peerPaused := (tx.peerPaused || tx.stage == "peer_paused") && !localPaused
+	anyPaused := localPaused || peerPaused
 	accentCol := w.pal.accent
-	if tx.paused || tx.stage == "paused" {
+	if anyPaused {
 		accentCol = w.pal.amber
 	}
 	cv.drawAlphaRoundRect(r, float64(p(12)), w.pal.paper, w.surfaceAlpha(215), accentCol, w.surfaceAlpha(160), 1.0)
@@ -1791,7 +1810,7 @@ func (w *mainWin) drawActiveTransferCard(cv *glassCanvas, r rectT, tx *activeTra
 	barR := rectT{inL, r.top + p(42), inR, r.top + p(48)}
 	cv.drawAlphaRoundRect(barR, float64(p(3)), w.pal.paper3, w.surfaceAlpha(235), 0, 0, 0)
 	fillW := int32(float64(barR.right-barR.left) * pctRatio)
-	if tx.bytesTotal == 0 && (tx.stage == "connecting" || tx.stage == "waiting" || tx.stage == "transferring" || tx.stage == "paused") {
+	if tx.bytesTotal == 0 && (tx.stage == "connecting" || tx.stage == "waiting" || tx.stage == "transferring" || anyPaused) {
 		fillW = (barR.right - barR.left) * 28 / 100
 	}
 	if fillW > 0 {
@@ -1812,7 +1831,13 @@ func (w *mainWin) drawActiveTransferCard(cv *glassCanvas, r rectT, tx *activeTra
 	if fileInfo == "" {
 		fileInfo = "准备文件信息…"
 	}
-	rightInfo := formatTransferMetricsState(tx.startedAt, tx.bytesDone, tx.bytesTotal, tx.speedBPS, tx.paused || tx.stage == "paused")
+	pauseLabel := ""
+	if localPaused {
+		pauseLabel = "已暂停"
+	} else if peerPaused {
+		pauseLabel = "对方已暂停"
+	}
+	rightInfo := formatTransferMetricsWithLabel(tx.startedAt, tx.bytesDone, tx.bytesTotal, tx.speedBPS, pauseLabel)
 	rw := textWidth(cv.memDC, w.fontSm, rightInfo) + p(8)
 	maxRW := (inR - inL) * 62 / 100
 	if rw > maxRW {
@@ -1827,15 +1852,22 @@ func (w *mainWin) drawActiveTransferCard(cv *glassCanvas, r rectT, tx *activeTra
 
 	if w.txPauseBtnR.right > w.txPauseBtnR.left {
 		pLabel := "暂停"
-		if tx.paused || tx.stage == "paused" {
-			pLabel = "继续"
-		}
 		pBg := w.pal.paper2
-		if w.hover == hoverTxPause {
+		pFg := w.pal.ink
+		if localPaused {
+			pLabel = "继续"
+			if w.hover == hoverTxPause {
+				pBg = w.pal.accentSoft
+			}
+		} else if peerPaused {
+			pLabel = "对方已暂停"
+			pBg = w.pal.paper3
+			pFg = w.pal.ink3
+		} else if w.hover == hoverTxPause {
 			pBg = w.pal.accentSoft
 		}
 		cv.drawAlphaRoundRect(w.txPauseBtnR, float64(p(6)), pBg, w.surfaceAlpha(235), w.pal.line, w.surfaceAlpha(200), 1.0)
-		cv.drawAlphaText(w.fontSm, pLabel, w.txPauseBtnR, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
+		cv.drawAlphaText(w.fontSm, pLabel, w.txPauseBtnR, dtCenter|dtSingleLine|dtVCenter, pFg)
 	}
 	if w.txCancelBtnR.right > w.txCancelBtnR.left {
 		cBg := w.pal.paper2
@@ -1859,6 +1891,8 @@ func stageDisplayLabel(stage string) string {
 		return "传输中"
 	case "paused":
 		return "已暂停"
+	case "peer_paused":
+		return "对方已暂停"
 	case "verifying":
 		return "校验写入中"
 	default:
@@ -1909,6 +1943,15 @@ func formatTransferMetrics(startedAt time.Time, done, total, speedBPS int64) str
 }
 
 func formatTransferMetricsState(startedAt time.Time, done, total, speedBPS int64, paused bool) string {
+	pauseLabel := ""
+	if paused {
+		pauseLabel = "已暂停"
+	}
+	return formatTransferMetricsWithLabel(startedAt, done, total, speedBPS, pauseLabel)
+}
+
+func formatTransferMetricsWithLabel(startedAt time.Time, done, total, speedBPS int64, pauseLabel string) string {
+	paused := pauseLabel != ""
 	var parts []string
 	if total > 0 {
 		parts = append(parts, humanBytes(done)+" / "+humanBytes(total))
@@ -1923,7 +1966,7 @@ func formatTransferMetricsState(startedAt time.Time, done, total, speedBPS int64
 		}
 	}
 	if paused {
-		parts = append(parts, "已暂停")
+		parts = append(parts, pauseLabel)
 	} else if speedBPS > 0 {
 		parts = append(parts, formatSpeed(speedBPS))
 	}
@@ -2526,7 +2569,11 @@ func (w *mainWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
 	case w.page == pageHome && ptIn(w.openDirR, x, y):
 		kind = hoverOpenDir
 	case w.page == pageHome && ptIn(w.txPauseBtnR, x, y):
-		kind = hoverTxPause
+		if w.app != nil {
+			if tx := w.app.currentTransfer(); tx != nil && (tx.paused || !tx.peerPaused) {
+				kind = hoverTxPause
+			}
+		}
 	case w.page == pageHome && ptIn(w.txCancelBtnR, x, y):
 		kind = hoverTxCancel
 	case w.page == pageDevices && ptIn(w.devScanLanBtnR, x, y):
@@ -2886,7 +2933,7 @@ func (w *mainWin) sendTextPayload(hwnd syscall.Handle, target sendTarget, txt, p
 		} else {
 			res, err = sendToPeer(w.app, []string{tmp}, target.peer)
 		}
-		msg := fmt.Sprintf("已将%s发给 %s（%d 字节）", kindLabel, label, res.Bytes)
+		msg := fmt.Sprintf("已将%s发给 %s（%s）", kindLabel, label, humanBytes(res.Bytes))
 		if err != nil {
 			msg = "发送失败：" + err.Error()
 		}

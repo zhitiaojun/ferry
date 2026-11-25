@@ -9,6 +9,12 @@ import (
 // ErrCancelled is returned when a transfer is cancelled locally or by the peer.
 var ErrCancelled = errors.New("transfer: cancelled")
 
+var (
+	pingTokenKeepalive   = [8]byte{}
+	pingTokenPeerPaused  = [8]byte{'F', 'T', 'P', 'A', 'U', 'S', 'E', 1}
+	pingTokenPeerResumed = [8]byte{'F', 'T', 'P', 'A', 'U', 'S', 'E', 0}
+)
+
 type cancelEntry struct {
 	id uint64
 	fn func()
@@ -16,13 +22,15 @@ type cancelEntry struct {
 
 // Controller allows callers to pause, resume, or cancel an in-flight transfer.
 type Controller struct {
-	mu        sync.Mutex
-	paused    bool
-	cancelled bool
-	sig       chan struct{}
-	nextID    uint64
-	cancels   []cancelEntry
-	onState   func(paused bool)
+	mu           sync.Mutex
+	paused       bool
+	peerPaused   bool
+	cancelled    bool
+	sig          chan struct{}
+	nextID       uint64
+	cancels      []cancelEntry
+	onState      func(paused bool)
+	onPauseState func(localPaused, peerPaused bool)
 }
 
 // NewController creates an active transfer controller.
@@ -39,7 +47,7 @@ func (c *Controller) notifyLocked() {
 	c.sig = make(chan struct{})
 }
 
-// Pause pauses the transfer until Resume or Cancel is called.
+// Pause pauses the transfer locally until Resume or Cancel is called.
 func (c *Controller) Pause() {
 	if c == nil {
 		return
@@ -52,13 +60,18 @@ func (c *Controller) Pause() {
 	c.paused = true
 	c.notifyLocked()
 	cb := c.onState
+	cbBoth := c.onPauseState
+	peerPaused := c.peerPaused
 	c.mu.Unlock()
 	if cb != nil {
 		cb(true)
 	}
+	if cbBoth != nil {
+		cbBoth(true, peerPaused)
+	}
 }
 
-// Resume unpauses a paused transfer.
+// Resume unpauses a locally paused transfer.
 func (c *Controller) Resume() {
 	if c == nil {
 		return
@@ -71,34 +84,66 @@ func (c *Controller) Resume() {
 	c.paused = false
 	c.notifyLocked()
 	cb := c.onState
+	cbBoth := c.onPauseState
+	peerPaused := c.peerPaused
 	c.mu.Unlock()
 	if cb != nil {
 		cb(false)
 	}
+	if cbBoth != nil {
+		cbBoth(false, peerPaused)
+	}
 }
 
-// TogglePause toggles pause state and returns whether the transfer is now paused.
+// TogglePause toggles local pause state and returns whether the transfer is now
+// locally paused. If the transfer is currently paused only by the peer ("谁暂停谁恢复"),
+// TogglePause refuses to resume or change state and returns false.
 func (c *Controller) TogglePause() bool {
 	if c == nil {
 		return false
 	}
 	c.mu.Lock()
-	if c.cancelled {
+	if c.cancelled || (!c.paused && c.peerPaused) {
 		c.mu.Unlock()
 		return false
 	}
 	c.paused = !c.paused
 	paused := c.paused
+	peerPaused := c.peerPaused
 	c.notifyLocked()
 	cb := c.onState
+	cbBoth := c.onPauseState
 	c.mu.Unlock()
 	if cb != nil {
 		cb(paused)
 	}
+	if cbBoth != nil {
+		cbBoth(paused, peerPaused)
+	}
 	return paused
 }
 
-// IsPaused reports whether the transfer is currently paused (and not cancelled).
+// SetPeerPaused updates whether the remote peer has paused the transfer.
+func (c *Controller) SetPeerPaused(paused bool) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	if c.cancelled || c.peerPaused == paused {
+		c.mu.Unlock()
+		return
+	}
+	c.peerPaused = paused
+	localPaused := c.paused
+	c.notifyLocked()
+	cbBoth := c.onPauseState
+	c.mu.Unlock()
+	if cbBoth != nil {
+		cbBoth(localPaused, paused)
+	}
+}
+
+// IsPaused reports whether the transfer is locally paused (and not cancelled).
 func (c *Controller) IsPaused() bool {
 	if c == nil {
 		return false
@@ -107,6 +152,47 @@ func (c *Controller) IsPaused() bool {
 	p := c.paused && !c.cancelled
 	c.mu.Unlock()
 	return p
+}
+
+// IsPeerPaused reports whether the transfer is currently paused by the peer.
+func (c *Controller) IsPeerPaused() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	p := c.peerPaused && !c.cancelled
+	c.mu.Unlock()
+	return p
+}
+
+// IsAnyPaused reports whether either side has paused the transfer.
+func (c *Controller) IsAnyPaused() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	p := (c.paused || c.peerPaused) && !c.cancelled
+	c.mu.Unlock()
+	return p
+}
+
+// PauseStage returns "paused" (local), "peer_paused" (remote), or "transferring".
+func (c *Controller) PauseStage() string {
+	if c == nil {
+		return "transferring"
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cancelled {
+		return "transferring"
+	}
+	if c.paused {
+		return "paused"
+	}
+	if c.peerPaused {
+		return "peer_paused"
+	}
+	return "transferring"
 }
 
 // Cancel marks the transfer as cancelled, wakes any paused waiters, and invokes
@@ -122,6 +208,7 @@ func (c *Controller) Cancel() {
 	}
 	c.cancelled = true
 	c.paused = false
+	c.peerPaused = false
 	c.notifyLocked()
 	cbs := make([]func(), len(c.cancels))
 	for i, e := range c.cancels {
@@ -147,13 +234,23 @@ func (c *Controller) IsCancelled() bool {
 	return v
 }
 
-// SetOnState registers a callback invoked when Pause/Resume changes state.
+// SetOnState registers a callback invoked when local Pause/Resume changes state.
 func (c *Controller) SetOnState(fn func(paused bool)) {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
 	c.onState = fn
+	c.mu.Unlock()
+}
+
+// SetOnPauseState registers a callback invoked whenever local or peer pause state changes.
+func (c *Controller) SetOnPauseState(fn func(localPaused, peerPaused bool)) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.onPauseState = fn
 	c.mu.Unlock()
 }
 
@@ -206,8 +303,8 @@ func (c *Controller) WaitResumeOrCancel(d time.Duration) (paused bool, cancelled
 		return false, false
 	}
 	c.mu.Lock()
-	if !c.paused || c.cancelled {
-		p, x := c.paused, c.cancelled
+	if !(c.paused || c.peerPaused) || c.cancelled {
+		p, x := (c.paused || c.peerPaused), c.cancelled
 		c.mu.Unlock()
 		return p, x
 	}
@@ -229,7 +326,7 @@ func (c *Controller) WaitResumeOrCancel(d time.Duration) (paused bool, cancelled
 	}
 
 	c.mu.Lock()
-	p, x := c.paused && !c.cancelled, c.cancelled
+	p, x := (c.paused || c.peerPaused) && !c.cancelled, c.cancelled
 	c.mu.Unlock()
 	return p, x
 }

@@ -252,7 +252,7 @@ type activeTransfer struct {
 	id         uint64
 	dir        string // "send" | "recv"
 	peer       string
-	stage      string // "connecting" | "waiting" | "transferring" | "paused" | "verifying"
+	stage      string // "connecting" | "waiting" | "transferring" | "paused" | "peer_paused" | "verifying"
 	channel    string // "" | "LAN" | "打洞" | "中继"
 	fileName   string
 	fileIndex  int
@@ -263,6 +263,7 @@ type activeTransfer struct {
 	startedAt  time.Time
 	samples    []txSpeedSample
 	paused     bool
+	peerPaused bool
 	canPause   bool
 	canCancel  bool
 	ctrl       *transfer.Controller
@@ -353,19 +354,32 @@ func (a *app) updateTransfer(id uint64, stage, channel, peer, fileName string, f
 		return
 	}
 	changedMajor := false
+	if a.tx.ctrl != nil {
+		localP := a.tx.ctrl.IsPaused()
+		peerP := a.tx.ctrl.IsPeerPaused()
+		if a.tx.paused != localP || a.tx.peerPaused != peerP {
+			changedMajor = true
+		}
+		a.tx.paused = localP
+		a.tx.peerPaused = peerP
+		if stage != "verifying" && a.tx.stage != "verifying" {
+			switch {
+			case localP:
+				stage = "paused"
+			case peerP:
+				stage = "peer_paused"
+			}
+		}
+	} else if stage != "" {
+		a.tx.paused = stage == "paused"
+		a.tx.peerPaused = stage == "peer_paused"
+	}
 	if stage != "" && stage != a.tx.stage {
-		if a.tx.paused && stage == "transferring" {
+		if (a.tx.stage == "paused" || a.tx.stage == "peer_paused") && stage == "transferring" {
 			a.tx.samples = []txSpeedSample{{t: now, bytes: a.tx.bytesDone}}
 		}
 		a.tx.stage = stage
-		a.tx.paused = stage == "paused"
 		changedMajor = true
-	}
-	if a.tx.ctrl != nil && a.tx.ctrl.IsPaused() {
-		a.tx.paused = true
-		if a.tx.stage == "transferring" {
-			a.tx.stage = "paused"
-		}
 	}
 	if channel != "" && channel != a.tx.channel {
 		a.tx.channel = channel
@@ -399,7 +413,7 @@ func (a *app) updateTransfer(id uint64, stage, channel, peer, fileName string, f
 	if total > 0 {
 		a.tx.bytesTotal = total
 	}
-	if a.tx.stage == "verifying" || a.tx.paused {
+	if a.tx.stage == "verifying" || a.tx.stage == "paused" || a.tx.stage == "peer_paused" || a.tx.paused || a.tx.peerPaused {
 		a.tx.speedBPS = 0
 	} else {
 		var spd int64
@@ -465,18 +479,23 @@ func (a *app) attachTransferControl(id uint64, ctrl *transfer.Controller, canPau
 	if a == nil || id == 0 || ctrl == nil {
 		return
 	}
-	pausedNow := ctrl.IsPaused()
+	localNow, peerNow := ctrl.IsPaused(), ctrl.IsPeerPaused()
 	a.mu.Lock()
 	matched := a.tx != nil && a.tx.id == id
 	if matched {
 		a.tx.ctrl = ctrl
 		a.tx.canPause = canPause
 		a.tx.canCancel = canCancel
-		if pausedNow {
-			a.tx.paused = true
+		a.tx.paused = localNow
+		a.tx.peerPaused = peerNow
+		if localNow || peerNow {
 			a.tx.speedBPS = 0
-			if a.tx.stage == "transferring" {
-				a.tx.stage = "paused"
+			if a.tx.stage != "verifying" {
+				if localNow {
+					a.tx.stage = "paused"
+				} else {
+					a.tx.stage = "peer_paused"
+				}
 			}
 		}
 	}
@@ -484,20 +503,28 @@ func (a *app) attachTransferControl(id uint64, ctrl *transfer.Controller, canPau
 	if !matched {
 		return
 	}
-	ctrl.SetOnState(func(paused bool) {
+	ctrl.SetOnPauseState(func(localPaused, peerPaused bool) {
 		a.mu.Lock()
 		changed := a.tx != nil && a.tx.id == id
 		if changed {
-			a.tx.paused = paused
-			if paused {
-				a.tx.speedBPS = 0
-				if a.tx.stage == "transferring" || a.tx.stage == "connecting" || a.tx.stage == "waiting" {
+			wasAnyPaused := a.tx.paused || a.tx.peerPaused
+			a.tx.paused = localPaused
+			a.tx.peerPaused = peerPaused
+			if a.tx.stage != "verifying" {
+				switch {
+				case localPaused:
 					a.tx.stage = "paused"
+				case peerPaused:
+					a.tx.stage = "peer_paused"
+				default:
+					if a.tx.stage == "paused" || a.tx.stage == "peer_paused" {
+						a.tx.stage = "transferring"
+					}
 				}
-			} else {
-				if a.tx.stage == "paused" {
-					a.tx.stage = "transferring"
-				}
+			}
+			if localPaused || peerPaused {
+				a.tx.speedBPS = 0
+			} else if wasAnyPaused {
 				a.tx.samples = []txSpeedSample{{t: time.Now(), bytes: a.tx.bytesDone}}
 			}
 			a.lastPaint = time.Now()
@@ -526,6 +553,9 @@ func (a *app) togglePauseTransfer() bool {
 	}
 	a.mu.Unlock()
 	if !allowed {
+		return false
+	}
+	if !ctrl.IsPaused() && ctrl.IsPeerPaused() {
 		return false
 	}
 	ctrl.TogglePause()

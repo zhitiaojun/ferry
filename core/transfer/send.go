@@ -192,6 +192,63 @@ func Send(s *session.Session, paths []string, cfg Config) (*Result, error) {
 		upg.stop()
 	}
 
+	if cfg.Control != nil {
+		sentPreFinPause := false
+		for {
+			stateCh := cfg.Control.StateCh()
+			if cfg.Control.IsCancelled() {
+				return nil, ErrCancelled
+			}
+			if !cfg.Control.IsAnyPaused() {
+				break
+			}
+			localP := cfg.Control.IsPaused()
+			if localP && !sentPreFinPause {
+				if perr := s.SendMsg(proto.TypePing, &proto.Ping{Token: pingTokenPeerPaused}); perr != nil {
+					return nil, perr
+				}
+				sentPreFinPause = true
+			} else if !localP && sentPreFinPause {
+				if perr := s.SendMsg(proto.TypePing, &proto.Ping{Token: pingTokenPeerResumed}); perr != nil {
+					return nil, perr
+				}
+				sentPreFinPause = false
+			}
+			if cfg.OnDetailProgress != nil && len(entries) > 0 {
+				cfg.OnDetailProgress(ProgressSnapshot{
+					Stage:      cfg.Control.PauseStage(),
+					FileIndex:  len(entries),
+					FileCount:  len(entries),
+					FileName:   entries[len(entries)-1].Name,
+					BytesDone:  batchTotal,
+					BytesTotal: batchTotal,
+				})
+			}
+			timer := time.NewTimer(keepaliveInterval(cfg.timeout()))
+			var kaErr error
+			select {
+			case <-stateCh:
+				timer.Stop()
+			case <-timer.C:
+				tok := pingTokenKeepalive
+				if cfg.Control.IsPaused() {
+					tok = pingTokenPeerPaused
+				}
+				if perr := s.SendMsg(proto.TypePing, &proto.Ping{Token: tok}); perr != nil {
+					kaErr = perr
+				}
+			}
+			if kaErr != nil {
+				return nil, kaErr
+			}
+		}
+		if sentPreFinPause {
+			if perr := s.SendMsg(proto.TypePing, &proto.Ping{Token: pingTokenPeerResumed}); perr != nil {
+				return nil, perr
+			}
+		}
+	}
+
 	if cfg.OnDetailProgress != nil && len(entries) > 0 {
 		cfg.OnDetailProgress(ProgressSnapshot{
 			Stage:      "verifying",
@@ -305,6 +362,23 @@ func sendFile(
 			}()
 		})
 		defer unregFile()
+
+		go func() {
+			for {
+				ch := cfg.Control.StateCh()
+				if ch == nil {
+					return
+				}
+				select {
+				case <-fileDone:
+					return
+				case <-ch:
+					mu.Lock()
+					cond.Broadcast()
+					mu.Unlock()
+				}
+			}
+		}()
 	}
 
 	sentOff := startOffset
@@ -316,30 +390,63 @@ func sendFile(
 		failOnce.Do(func() { close(failSig) })
 	}
 
+	pongCh := make(chan *proto.Ping, 4)
+	flushPong := func() error {
+		for {
+			select {
+			case p := <-pongCh:
+				if err := s.SendMsg(proto.TypePong, p); err != nil {
+					return err
+				}
+			default:
+				return nil
+			}
+		}
+	}
+
 	ackDone := make(chan error, 1)
 	go func() {
-		ackDone <- readFileAcks(s, tid, index, fileCount, fileName, fileSize, startOffset, completedBefore, sessionBase, batchTotal, cfg, slow, upg, &mu, cond, &sentOff, &ackedOff, &recvErr, signalAckFail)
+		ackDone <- readFileAcks(s, tid, index, fileCount, fileName, fileSize, startOffset, completedBefore, sessionBase, batchTotal, cfg, slow, upg, &mu, cond, &sentOff, &ackedOff, &recvErr, signalAckFail, pongCh)
 	}()
 
-	chunks := 0
-	var writeErr error
-	for {
-		if cfg.Control != nil && cfg.Control.IsCancelled() {
-			writeErr = ErrCancelled
-			break
+	waitSendPause := func() error {
+		if cfg.Control == nil || !cfg.Control.IsAnyPaused() {
+			return nil
 		}
-		if cfg.Control != nil && cfg.Control.IsPaused() {
+		sentPeerPause := false
+		for {
+			stateCh := cfg.Control.StateCh()
+			if cfg.Control.IsCancelled() {
+				return ErrCancelled
+			}
+			if !cfg.Control.IsAnyPaused() {
+				break
+			}
 			mu.Lock()
 			curAck := ackedOff
 			rerr := recvErr
 			mu.Unlock()
 			if rerr != nil {
-				writeErr = rerr
-				break
+				return rerr
+			}
+			if upg != nil && upg.isTriggered() {
+				return ErrPathUpgrade
+			}
+			localP := cfg.Control.IsPaused()
+			if localP && !sentPeerPause {
+				if perr := s.SendMsg(proto.TypePing, &proto.Ping{Token: pingTokenPeerPaused}); perr != nil {
+					return perr
+				}
+				sentPeerPause = true
+			} else if !localP && sentPeerPause {
+				if perr := s.SendMsg(proto.TypePing, &proto.Ping{Token: pingTokenPeerResumed}); perr != nil {
+					return perr
+				}
+				sentPeerPause = false
 			}
 			if cfg.OnDetailProgress != nil {
 				cfg.OnDetailProgress(ProgressSnapshot{
-					Stage:      "paused",
+					Stage:      cfg.Control.PauseStage(),
 					FileIndex:  int(index) + 1,
 					FileCount:  fileCount,
 					FileName:   fileName,
@@ -348,53 +455,71 @@ func sendFile(
 				})
 			}
 			ka := keepaliveInterval(cfg.timeout())
-			resumed := false
-			for cfg.Control.IsPaused() && !cfg.Control.IsCancelled() {
-				if upg != nil && upg.isTriggered() {
-					writeErr = ErrPathUpgrade
-					break
-				}
-				stateCh := cfg.Control.StateCh()
-				timer := time.NewTimer(ka)
-				select {
-				case <-failSig:
-					timer.Stop()
-					mu.Lock()
-					rerr = recvErr
-					mu.Unlock()
-					writeErr = rerr
-				case <-stateCh:
-					timer.Stop()
-				case <-timer.C:
-					var tok [8]byte
-					if perr := s.SendMsg(proto.TypePing, &proto.Ping{Token: tok}); perr != nil {
-						writeErr = perr
-					}
-				}
-				if writeErr != nil {
-					break
-				}
-			}
-			if writeErr != nil {
-				break
-			}
-			if cfg.Control.IsCancelled() {
-				writeErr = ErrCancelled
-				break
-			}
-			resumed = true
-			if resumed && cfg.OnDetailProgress != nil {
+			timer := time.NewTimer(ka)
+			var loopErr error
+			select {
+			case <-failSig:
+				timer.Stop()
 				mu.Lock()
-				curAck = ackedOff
+				rerr = recvErr
 				mu.Unlock()
-				cfg.OnDetailProgress(ProgressSnapshot{
-					Stage:      "transferring",
-					FileIndex:  int(index) + 1,
-					FileCount:  fileCount,
-					FileName:   fileName,
-					BytesDone:  completedBefore + int64(curAck),
-					BytesTotal: batchTotal,
-				})
+				loopErr = rerr
+			case p := <-pongCh:
+				timer.Stop()
+				if perr := s.SendMsg(proto.TypePong, p); perr != nil {
+					loopErr = perr
+				}
+			case <-stateCh:
+				timer.Stop()
+			case <-timer.C:
+				tok := pingTokenKeepalive
+				if cfg.Control.IsPaused() {
+					tok = pingTokenPeerPaused
+				}
+				if perr := s.SendMsg(proto.TypePing, &proto.Ping{Token: tok}); perr != nil {
+					loopErr = perr
+				}
+			}
+			if loopErr != nil {
+				return loopErr
+			}
+		}
+		if sentPeerPause {
+			if perr := s.SendMsg(proto.TypePing, &proto.Ping{Token: pingTokenPeerResumed}); perr != nil {
+				return perr
+			}
+		}
+		if cfg.OnDetailProgress != nil {
+			mu.Lock()
+			curAck := ackedOff
+			mu.Unlock()
+			cfg.OnDetailProgress(ProgressSnapshot{
+				Stage:      "transferring",
+				FileIndex:  int(index) + 1,
+				FileCount:  fileCount,
+				FileName:   fileName,
+				BytesDone:  completedBefore + int64(curAck),
+				BytesTotal: batchTotal,
+			})
+		}
+		return nil
+	}
+
+	chunks := 0
+	var writeErr error
+	for {
+		if perr := flushPong(); perr != nil {
+			writeErr = perr
+			break
+		}
+		if cfg.Control != nil && cfg.Control.IsCancelled() {
+			writeErr = ErrCancelled
+			break
+		}
+		if cfg.Control != nil && cfg.Control.IsAnyPaused() {
+			if perr := waitSendPause(); perr != nil {
+				writeErr = perr
+				break
 			}
 		}
 		if upg != nil && upg.isTriggered() {
@@ -406,9 +531,35 @@ func sendFile(
 			chunk := buf[:n]
 			sum := sha256.Sum256(chunk)
 
+			var pausedErr error
 			mu.Lock()
-			for (sentOff-ackedOff) >= windowBytes && recvErr == nil && (slow == nil || !slow.isTriggered()) && (upg == nil || !upg.isTriggered()) && (cfg.Control == nil || !cfg.Control.IsCancelled()) {
-				cond.Wait()
+			for {
+				for (sentOff-ackedOff) >= windowBytes && recvErr == nil && len(pongCh) == 0 && (slow == nil || !slow.isTriggered()) && (upg == nil || !upg.isTriggered()) && (cfg.Control == nil || (!cfg.Control.IsCancelled() && !cfg.Control.IsAnyPaused())) {
+					cond.Wait()
+				}
+				if len(pongCh) > 0 && recvErr == nil {
+					mu.Unlock()
+					if perr := flushPong(); perr != nil {
+						pausedErr = perr
+						break
+					}
+					mu.Lock()
+					continue
+				}
+				if cfg.Control != nil && !cfg.Control.IsCancelled() && cfg.Control.IsAnyPaused() && recvErr == nil && (slow == nil || !slow.isTriggered()) && (upg == nil || !upg.isTriggered()) {
+					mu.Unlock()
+					if perr := waitSendPause(); perr != nil {
+						pausedErr = perr
+						break
+					}
+					mu.Lock()
+					continue
+				}
+				break
+			}
+			if pausedErr != nil {
+				writeErr = pausedErr
+				break
 			}
 			if cfg.Control != nil && cfg.Control.IsCancelled() {
 				mu.Unlock()
@@ -464,14 +615,40 @@ func sendFile(
 	}
 
 	if writeErr == nil {
+		var pausedErr error
 		mu.Lock()
-		for ackedOff < fileSize && recvErr == nil && (slow == nil || !slow.isTriggered()) && (upg == nil || !upg.isTriggered()) && (cfg.Control == nil || !cfg.Control.IsCancelled()) {
-			cond.Wait()
+		for {
+			for ackedOff < fileSize && recvErr == nil && len(pongCh) == 0 && (slow == nil || !slow.isTriggered()) && (upg == nil || !upg.isTriggered()) && (cfg.Control == nil || (!cfg.Control.IsCancelled() && !cfg.Control.IsAnyPaused())) {
+				cond.Wait()
+			}
+			if len(pongCh) > 0 && recvErr == nil {
+				mu.Unlock()
+				if perr := flushPong(); perr != nil {
+					pausedErr = perr
+					break
+				}
+				mu.Lock()
+				continue
+			}
+			if cfg.Control != nil && !cfg.Control.IsCancelled() && cfg.Control.IsAnyPaused() && recvErr == nil && (slow == nil || !slow.isTriggered()) && (upg == nil || !upg.isTriggered()) {
+				mu.Unlock()
+				if perr := waitSendPause(); perr != nil {
+					pausedErr = perr
+					break
+				}
+				mu.Lock()
+				continue
+			}
+			break
 		}
-		if cfg.Control != nil && cfg.Control.IsCancelled() {
-			writeErr = ErrCancelled
+		if pausedErr != nil {
+			writeErr = pausedErr
+		} else {
+			if cfg.Control != nil && cfg.Control.IsCancelled() {
+				writeErr = ErrCancelled
+			}
+			mu.Unlock()
 		}
-		mu.Unlock()
 	}
 
 	if errors.Is(writeErr, ErrCancelled) || (cfg.Control != nil && cfg.Control.IsCancelled()) {
@@ -534,6 +711,7 @@ func readFileAcks(
 	ackedOff *uint64,
 	recvErr *error,
 	signalFail func(),
+	pongCh chan<- *proto.Ping,
 ) error {
 	fail := func(err error) error {
 		mu.Lock()
@@ -557,9 +735,59 @@ func readFileAcks(
 		switch fr.Type {
 		case proto.TypePing:
 			if p, perr := proto.ParsePing(fr.Payload); perr == nil {
-				_ = s.SendMsg(proto.TypePong, p)
-			}
-			if slow != nil {
+				if pongCh != nil {
+					select {
+					case pongCh <- p:
+					default:
+					}
+					mu.Lock()
+					cond.Broadcast()
+					mu.Unlock()
+				}
+				switch p.Token {
+				case pingTokenPeerPaused:
+					if cfg.Control != nil {
+						cfg.Control.SetPeerPaused(true)
+					}
+					if slow != nil {
+						slow.notePeerPaused()
+					}
+					if cfg.OnDetailProgress != nil {
+						mu.Lock()
+						curAck := *ackedOff
+						mu.Unlock()
+						cfg.OnDetailProgress(ProgressSnapshot{
+							Stage:      cfg.Control.PauseStage(),
+							FileIndex:  int(index) + 1,
+							FileCount:  fileCount,
+							FileName:   fileName,
+							BytesDone:  completedBefore + int64(curAck),
+							BytesTotal: batchTotal,
+						})
+					}
+				case pingTokenPeerResumed:
+					if cfg.Control != nil {
+						cfg.Control.SetPeerPaused(false)
+					}
+					if cfg.OnDetailProgress != nil {
+						mu.Lock()
+						curAck := *ackedOff
+						mu.Unlock()
+						cfg.OnDetailProgress(ProgressSnapshot{
+							Stage:      cfg.Control.PauseStage(),
+							FileIndex:  int(index) + 1,
+							FileCount:  fileCount,
+							FileName:   fileName,
+							BytesDone:  completedBefore + int64(curAck),
+							BytesTotal: batchTotal,
+						})
+					}
+				default:
+					if slow != nil {
+						slow.notePeerPaused()
+					}
+				}
+			} else if slow != nil {
 				slow.notePeerPaused()
 			}
 			continue
@@ -610,8 +838,12 @@ func readFileAcks(
 			cfg.OnProgress(int64(curAck))
 		}
 		if cfg.OnDetailProgress != nil {
+			stage := "transferring"
+			if cfg.Control != nil {
+				stage = cfg.Control.PauseStage()
+			}
 			cfg.OnDetailProgress(ProgressSnapshot{
-				Stage:      "transferring",
+				Stage:      stage,
 				FileIndex:  int(index) + 1,
 				FileCount:  fileCount,
 				FileName:   fileName,
@@ -738,7 +970,7 @@ func (w *slowWatchdog) run() {
 			cond := w.cond
 			w.mu.Unlock()
 
-			if (w.ctrl != nil && w.ctrl.IsPaused()) || peerPaused {
+			if (w.ctrl != nil && w.ctrl.IsAnyPaused()) || peerPaused {
 				samples = []speedSample{{t: now, bytes: sessDone}}
 				continue
 			}

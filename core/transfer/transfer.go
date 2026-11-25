@@ -38,7 +38,7 @@ const (
 
 // ProgressSnapshot reports detailed batch transfer state and byte counts.
 type ProgressSnapshot struct {
-	Stage      string // "transferring" | "paused" | "verifying"
+	Stage      string // "transferring" | "paused" | "peer_paused" | "verifying"
 	FileIndex  int    // 1-based current file index
 	FileCount  int    // total files in batch
 	FileName   string // current file base name

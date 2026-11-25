@@ -283,9 +283,10 @@ type ActiveTransfer struct {
 	Active     bool   `json:"active"`
 	Direction  string `json:"direction,omitempty"` // "send" | "recv"
 	Peer       string `json:"peer,omitempty"`
-	Stage      string `json:"stage,omitempty"`   // "connecting" | "racing" | "transferring" | "paused" | "verifying"
+	Stage      string `json:"stage,omitempty"`   // "connecting" | "racing" | "transferring" | "paused" | "peer_paused" | "verifying"
 	Channel    string `json:"channel,omitempty"` // "" | "lan" | "punch" | "relay"
 	Paused     bool   `json:"paused,omitempty"`
+	PeerPaused bool   `json:"peer_paused,omitempty"`
 	CanPause   bool   `json:"can_pause,omitempty"`
 	CanCancel  bool   `json:"can_cancel,omitempty"`
 	FileIndex  int    `json:"file_index,omitempty"`
@@ -340,21 +341,31 @@ func attachActiveTransferController(seq uint64, ctrl *transfer.Controller, canPa
 	if ctrl == nil {
 		return
 	}
-	ctrl.SetOnState(func(paused bool) {
+	ctrl.SetOnPauseState(func(localPaused, peerPaused bool) {
 		now := time.Now()
 		activeTxMu.Lock()
 		if !activeTx.Active || activeTxSeq != seq {
 			activeTxMu.Unlock()
 			return
 		}
-		activeTx.Paused = paused
-		if paused {
-			activeTx.Stage = "paused"
-			activeTx.SpeedBPS = 0
-		} else {
-			if activeTx.Stage == "paused" {
-				activeTx.Stage = "transferring"
+		wasAnyPaused := activeTx.Paused || activeTx.PeerPaused
+		activeTx.Paused = localPaused
+		activeTx.PeerPaused = peerPaused
+		if activeTx.Stage != "verifying" {
+			switch {
+			case localPaused:
+				activeTx.Stage = "paused"
+			case peerPaused:
+				activeTx.Stage = "peer_paused"
+			default:
+				if activeTx.Stage == "paused" || activeTx.Stage == "peer_paused" {
+					activeTx.Stage = "transferring"
+				}
 			}
+		}
+		if localPaused || peerPaused {
+			activeTx.SpeedBPS = 0
+		} else if wasAnyPaused {
 			txSamples = []txSpeedSample{{t: now, bytes: activeTx.BytesDone}}
 		}
 		lastProgressT = now
@@ -362,6 +373,7 @@ func attachActiveTransferController(seq uint64, ctrl *transfer.Controller, canPa
 		activeTxMu.Unlock()
 		notifyProgress(snap)
 	})
+	localNow, peerNow := ctrl.IsPaused(), ctrl.IsPeerPaused()
 	activeTxMu.Lock()
 	if !activeTx.Active || activeTxSeq != seq {
 		activeTxMu.Unlock()
@@ -370,6 +382,18 @@ func attachActiveTransferController(seq uint64, ctrl *transfer.Controller, canPa
 	activeTxCtrl = ctrl
 	activeTx.CanPause = canPause
 	activeTx.CanCancel = canCancel
+	activeTx.Paused = localNow
+	activeTx.PeerPaused = peerNow
+	if localNow || peerNow {
+		activeTx.SpeedBPS = 0
+		if activeTx.Stage != "verifying" {
+			if localNow {
+				activeTx.Stage = "paused"
+			} else {
+				activeTx.Stage = "peer_paused"
+			}
+		}
+	}
 	snap := activeTx
 	activeTxMu.Unlock()
 	notifyProgress(snap)
@@ -378,12 +402,15 @@ func attachActiveTransferController(seq uint64, ctrl *transfer.Controller, canPa
 // TogglePauseActiveTransfer toggles pause/resume on the currently active transfer.
 func TogglePauseActiveTransfer() bool {
 	activeTxMu.Lock()
-	if !activeTx.Active || activeTxCtrl == nil || !activeTx.CanPause {
+	if !activeTx.Active || activeTxCtrl == nil || !activeTx.CanPause || activeTx.Stage == "verifying" {
 		activeTxMu.Unlock()
 		return false
 	}
 	ctrl := activeTxCtrl
 	activeTxMu.Unlock()
+	if !ctrl.IsPaused() && ctrl.IsPeerPaused() {
+		return false
+	}
 	return ctrl.TogglePause()
 }
 
@@ -408,9 +435,25 @@ func updateActiveTransfer(seq uint64, stage, channel, peer, fileName string, idx
 		return
 	}
 	major := false
+	if activeTxCtrl != nil {
+		localP := activeTxCtrl.IsPaused()
+		peerP := activeTxCtrl.IsPeerPaused()
+		activeTx.Paused = localP
+		activeTx.PeerPaused = peerP
+		if stage != "verifying" && activeTx.Stage != "verifying" {
+			switch {
+			case localP:
+				stage = "paused"
+			case peerP:
+				stage = "peer_paused"
+			}
+		}
+	} else if stage != "" {
+		activeTx.Paused = stage == "paused"
+		activeTx.PeerPaused = stage == "peer_paused"
+	}
 	if stage != "" && stage != activeTx.Stage {
 		activeTx.Stage = stage
-		activeTx.Paused = stage == "paused"
 		major = true
 	}
 	if channel != "" && channel != activeTx.Channel {
@@ -445,7 +488,7 @@ func updateActiveTransfer(seq uint64, stage, channel, peer, fileName string, idx
 	if total > 0 {
 		activeTx.BytesTotal = total
 	}
-	if activeTx.Stage == "verifying" || activeTx.Stage == "paused" || activeTx.Paused {
+	if activeTx.Stage == "verifying" || activeTx.Stage == "paused" || activeTx.Stage == "peer_paused" || activeTx.Paused || activeTx.PeerPaused {
 		activeTx.SpeedBPS = 0
 	} else {
 		var spd int64

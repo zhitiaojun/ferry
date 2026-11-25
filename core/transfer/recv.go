@@ -218,11 +218,14 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 		frame proto.Frame
 		err   error
 	}
-	frameCh := make(chan recvFrame, 1)
+	frameCh := make(chan recvFrame, 64)
 	go func() {
 		defer close(frameCh)
 		for {
 			fr, rerr := s.Recv(cfg.timeout())
+			if rerr == nil && fr.Type == proto.TypePong {
+				continue
+			}
 			frameCh <- recvFrame{frame: fr, err: rerr}
 			if rerr != nil || fr.Type == proto.TypeFin || fr.Type == proto.TypeError {
 				return
@@ -261,6 +264,16 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 	}
 
 	paused := cfg.Control != nil && cfg.Control.IsPaused()
+	peerPaused := false
+	curStage := func() string {
+		if paused {
+			return "paused"
+		}
+		if peerPaused {
+			return "peer_paused"
+		}
+		return "transferring"
+	}
 	var kaTicker *time.Ticker
 	var kaC <-chan time.Time
 	defer func() {
@@ -269,9 +282,19 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 		}
 	}()
 	if paused {
+		if perr := s.SendMsg(proto.TypePing, &proto.Ping{Token: pingTokenPeerPaused}); perr != nil {
+			if cfg.Control != nil && cfg.Control.IsCancelled() {
+				removeParts()
+				return nil, ErrCancelled
+			}
+			if rerr := drainForRemoteError(); rerr != nil {
+				return nil, rerr
+			}
+			return nil, perr
+		}
 		kaTicker = time.NewTicker(keepaliveInterval(cfg.timeout()))
 		kaC = kaTicker.C
-		emitProgress("paused", cur)
+		emitProgress(curStage(), cur)
 	}
 	pendingAck := false
 	var pendingIdx uint32
@@ -281,18 +304,6 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 		var stateCh <-chan struct{}
 		if cfg.Control != nil {
 			stateCh = cfg.Control.StateCh()
-		}
-		if cfg.Control != nil && cfg.Control.IsCancelled() {
-			_ = s.Conn().SetWriteDeadline(time.Now().Add(300 * time.Millisecond))
-			_ = s.SendError(proto.CodeCancelled, "接收方已取消传输")
-			_ = s.Conn().SetWriteDeadline(time.Time{})
-			removeParts()
-			return nil, ErrCancelled
-		}
-
-		var rfMsg recvFrame
-		select {
-		case <-stateCh:
 			if cfg.Control.IsCancelled() {
 				_ = s.Conn().SetWriteDeadline(time.Now().Add(300 * time.Millisecond))
 				_ = s.SendError(proto.CodeCancelled, "接收方已取消传输")
@@ -304,24 +315,44 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 			if nowPaused != paused {
 				paused = nowPaused
 				if paused {
+					if perr := s.SendMsg(proto.TypePing, &proto.Ping{Token: pingTokenPeerPaused}); perr != nil {
+						if cfg.Control.IsCancelled() {
+							removeParts()
+							return nil, ErrCancelled
+						}
+						if rerr := drainForRemoteError(); rerr != nil {
+							return nil, rerr
+						}
+						return nil, perr
+					}
 					if kaTicker == nil {
 						kaTicker = time.NewTicker(keepaliveInterval(cfg.timeout()))
 					}
 					kaC = kaTicker.C
-					emitProgress("paused", cur)
+					emitProgress(curStage(), cur)
 				} else {
 					if kaTicker != nil {
 						kaTicker.Stop()
 						kaTicker = nil
 					}
 					kaC = nil
+					if perr := s.SendMsg(proto.TypePing, &proto.Ping{Token: pingTokenPeerResumed}); perr != nil {
+						if cfg.Control.IsCancelled() {
+							removeParts()
+							return nil, ErrCancelled
+						}
+						if rerr := drainForRemoteError(); rerr != nil {
+							return nil, rerr
+						}
+						return nil, perr
+					}
 					if pendingAck {
 						if err := s.SendMsg(proto.TypeAck, &proto.Ack{
 							TransferID: m.TransferID,
 							FileIndex:  pendingIdx,
 							Offset:     pendingOff,
 						}); err != nil {
-							if cfg.Control != nil && cfg.Control.IsCancelled() {
+							if cfg.Control.IsCancelled() {
 								removeParts()
 								return nil, ErrCancelled
 							}
@@ -332,13 +363,21 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 						}
 						pendingAck = false
 					}
-					emitProgress("transferring", cur)
+					emitProgress(curStage(), cur)
 				}
 			}
+		}
+
+		var rfMsg recvFrame
+		select {
+		case <-stateCh:
 			continue
 
 		case <-kaC:
-			var tok [8]byte
+			tok := pingTokenKeepalive
+			if paused {
+				tok = pingTokenPeerPaused
+			}
 			if perr := s.SendMsg(proto.TypePing, &proto.Ping{Token: tok}); perr != nil {
 				if cfg.Control != nil && cfg.Control.IsCancelled() {
 					removeParts()
@@ -368,6 +407,24 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 		case proto.TypePing:
 			if p, perr := proto.ParsePing(frame.Payload); perr == nil {
 				_ = s.SendMsg(proto.TypePong, p)
+				switch p.Token {
+				case pingTokenPeerPaused:
+					if !peerPaused {
+						peerPaused = true
+						if cfg.Control != nil {
+							cfg.Control.SetPeerPaused(true)
+						}
+					}
+					emitProgress(curStage(), cur)
+				case pingTokenPeerResumed:
+					if peerPaused {
+						peerPaused = false
+						if cfg.Control != nil {
+							cfg.Control.SetPeerPaused(false)
+						}
+					}
+					emitProgress(curStage(), cur)
+				}
 			}
 
 		case proto.TypePong:
@@ -383,6 +440,12 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 			return nil, rerr
 
 		case proto.TypeData:
+			if peerPaused {
+				peerPaused = false
+				if cfg.Control != nil {
+					cfg.Control.SetPeerPaused(false)
+				}
+			}
 			d, err := proto.ParseData(frame.Payload)
 			if err != nil {
 				_ = s.SendError(proto.CodePayloadInvalid, "malformed DATA: %v", err)
@@ -446,7 +509,7 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 				pendingAck = true
 				pendingIdx = uint32(cur)
 				pendingOff = rf.written
-				emitProgress("paused", cur)
+				emitProgress(curStage(), cur)
 			} else {
 				if err := s.SendMsg(proto.TypeAck, &proto.Ack{
 					TransferID: m.TransferID,
@@ -462,7 +525,7 @@ func Receive(s *session.Session, outDir string, cfg Config) (*Result, error) {
 					}
 					return nil, err
 				}
-				emitProgress("transferring", cur)
+				emitProgress(curStage(), cur)
 			}
 
 		case proto.TypeFin:

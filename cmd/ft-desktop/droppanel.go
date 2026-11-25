@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -419,9 +420,13 @@ func (p *dropPanel) onDrop(hdrop syscall.Handle) {
 		idx = 0
 	}
 	peer := p.peers[idx]
+	openMainWindowOnHome(p.app)
 	go func() {
 		res, err := sendToPeer(p.app, files, peer)
 		if err != nil {
+			if strings.Contains(err.Error(), "已取消") {
+				return
+			}
 			p.app.event("desktop.panel_send_error", map[string]any{"error": err.Error(), "peer": peer.Name})
 			if trayHandle != nil {
 				trayHandle.balloon("发送失败", err.Error())

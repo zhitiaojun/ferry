@@ -450,7 +450,7 @@ func (t *tray) handle(nc net.Conn) {
 		procPostMessageW.Call(uintptr(h), wmAppPaint, 0, 0)
 	}
 	title := fmt.Sprintf("已接收 %d 个文件", len(res.Files))
-	t.balloon(title, fmt.Sprintf("来自 %s，共 %d 字节，已存入 %s", peerName, res.Bytes, outDir))
+	t.balloon(title, fmt.Sprintf("来自 %s，共 %s，已存入 %s", peerName, humanBytes(res.Bytes), outDir))
 }
 
 func trayWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
