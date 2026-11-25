@@ -182,3 +182,119 @@ func TestTempShareSendAndRecvRoundTrip(t *testing.T) {
 		t.Fatal("timed out waiting for OnUploaded callback")
 	}
 }
+
+func TestTempShareProgressCallbacks(t *testing.T) {
+	s := server.New(nil)
+	hs := httptest.NewServer(s.Handler())
+	defer hs.Close()
+
+	key := testKey(t)
+	srcDir := t.TempDir()
+	srcFile := filepath.Join(srcDir, "payload.bin")
+	payload := bytes.Repeat([]byte("tempshare-progress"), 4096)
+	if err := os.WriteFile(srcFile, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var hostSendEvents []tempshare.TransferProgress
+	hostSend, err := tempshare.StartHost(tempshare.HostOptions{
+		BaseURL:     hs.URL,
+		Key:         key,
+		DeviceName:  "HostPhone",
+		Mode:        "send",
+		SharedFiles: []string{srcFile},
+		OnProgress:  func(p tempshare.TransferProgress) { hostSendEvents = append(hostSendEvents, p) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hostSend.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// LAN download + client progress.
+	sessLAN, err := tempshare.ResolveByURL(ctx, hostSend.Status().ShareURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clientRecvLAN []tempshare.TransferProgress
+	if _, _, err := tempshare.DownloadAllWithProgress(ctx, sessLAN, t.TempDir(), func(p tempshare.TransferProgress) {
+		clientRecvLAN = append(clientRecvLAN, p)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertProgressComplete(t, "clientRecvLAN", clientRecvLAN)
+	assertProgressComplete(t, "hostSendLAN", hostSendEvents)
+
+	// Relay download + client progress.
+	hostSendEvents = nil
+	sessRelay, err := tempshare.ResolveByCode(ctx, hs.URL, hostSend.Status().Code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessRelay.LAN = nil
+	var clientRecvRelay []tempshare.TransferProgress
+	if _, _, err := tempshare.DownloadAllWithProgress(ctx, sessRelay, t.TempDir(), func(p tempshare.TransferProgress) {
+		clientRecvRelay = append(clientRecvRelay, p)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertProgressComplete(t, "clientRecvRelay", clientRecvRelay)
+	assertProgressComplete(t, "hostSendRelay", hostSendEvents)
+
+	_ = hostSend.Close()
+
+	// Recv host + LAN/Relay uploads.
+	var hostRecvEvents []tempshare.TransferProgress
+	hostRecv, err := tempshare.StartHost(tempshare.HostOptions{
+		BaseURL:    hs.URL,
+		Key:        key,
+		DeviceName: "HostPC",
+		Mode:       "recv",
+		RecvDir:    t.TempDir(),
+		OnProgress: func(p tempshare.TransferProgress) { hostRecvEvents = append(hostRecvEvents, p) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hostRecv.Close()
+
+	sessUpLAN, err := tempshare.ResolveByURL(ctx, hostRecv.Status().ShareURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clientUpLAN []tempshare.TransferProgress
+	if _, _, err := tempshare.UploadFilesWithProgress(ctx, sessUpLAN, []string{srcFile}, func(p tempshare.TransferProgress) {
+		clientUpLAN = append(clientUpLAN, p)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertProgressComplete(t, "clientUpLAN", clientUpLAN)
+	assertProgressComplete(t, "hostRecvLAN", hostRecvEvents)
+
+	hostRecvEvents = nil
+	sessUpRelay, err := tempshare.ResolveByURL(ctx, hostRecv.Status().ShareURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessUpRelay.LAN = nil
+	var clientUpRelay []tempshare.TransferProgress
+	if _, _, err := tempshare.UploadFilesWithProgress(ctx, sessUpRelay, []string{srcFile}, func(p tempshare.TransferProgress) {
+		clientUpRelay = append(clientUpRelay, p)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertProgressComplete(t, "clientUpRelay", clientUpRelay)
+	assertProgressComplete(t, "hostRecvRelay", hostRecvEvents)
+}
+
+func assertProgressComplete(t *testing.T, label string, events []tempshare.TransferProgress) {
+	t.Helper()
+	if len(events) < 2 {
+		t.Fatalf("%s: expected >=2 progress events, got %d (%+v)", label, len(events), events)
+	}
+	if !events[len(events)-1].Done {
+		t.Fatalf("%s: expected final event Done=true, got %+v", label, events[len(events)-1])
+	}
+}

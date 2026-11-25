@@ -3,6 +3,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -102,5 +103,33 @@ func TestAppActiveTransferLifecycle(t *testing.T) {
 	a.endTransfer(id)
 	if a.currentTransfer() != nil {
 		t.Fatal("expected nil after endTransfer")
+	}
+}
+
+func TestFormatSpeedAndMetrics(t *testing.T) {
+	if got := formatSpeed(512); got != "512 B/s" {
+		t.Fatalf("formatSpeed(512) = %q", got)
+	}
+	if got := formatSpeed(1536); got != "1.5 KB/s" {
+		t.Fatalf("formatSpeed(1536) = %q", got)
+	}
+	if got := formatSpeed(5 * 1024 * 1024); got != "5.0 MB/s" {
+		t.Fatalf("formatSpeed(5MB) = %q", got)
+	}
+
+	m := formatTransferMetrics(time.Now().Add(-2*time.Second), 4*1024*1024, 10*1024*1024, 2*1024*1024)
+	for _, want := range []string{"4.0 MB / 10.0 MB", "2.0 MB/s", "已用", "剩余约"} {
+		if !strings.Contains(m, want) {
+			t.Fatalf("formatTransferMetrics = %q, missing %q", m, want)
+		}
+	}
+
+	a := newApp(defaultReceiveDir(), 18800)
+	id := a.beginTransfer("send", "网页快传", "big.bin", 1, 10*1024*1024)
+	time.Sleep(180 * time.Millisecond)
+	a.updateTransfer(id, "transferring", "LAN", "", "big.bin", 1, 1, 2*1024*1024, 10*1024*1024)
+	cur := a.currentTransfer()
+	if cur == nil || cur.speedBPS <= 0 {
+		t.Fatalf("expected positive speedBPS, got %+v", cur)
 	}
 }

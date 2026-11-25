@@ -12,6 +12,7 @@ import (
 	"hash"
 	"io"
 	"os"
+	"time"
 
 	"github.com/coder/websocket"
 
@@ -22,9 +23,10 @@ import (
 const webChunk = 256 << 10
 
 type webHost struct {
-	srv  *lanweb.Server
-	log  *logging.Logger
-	conn *websocket.Conn
+	srv        *lanweb.Server
+	log        *logging.Logger
+	conn       *websocket.Conn
+	onProgress func(TransferProgress)
 
 	part     *os.File
 	partName string
@@ -32,13 +34,21 @@ type webHost struct {
 	partHash hash.Hash
 	partSize int64
 	partWant int64
+	partTxID uint64
+	partLast time.Time
 	done     bool
 }
 
 // ServeWebHost serves one connected guest WebSocket over the relay room.
 func ServeWebHost(ctx context.Context, conn *websocket.Conn, srv *lanweb.Server, log *logging.Logger) error {
+	return ServeWebHostWithProgress(ctx, conn, srv, log, nil)
+}
+
+// ServeWebHostWithProgress serves one connected guest WebSocket over the relay
+// room and reports live upload/download progress via onProgress.
+func ServeWebHostWithProgress(ctx context.Context, conn *websocket.Conn, srv *lanweb.Server, log *logging.Logger, onProgress func(TransferProgress)) error {
 	conn.SetReadLimit(4 << 20)
-	h := &webHost{srv: srv, log: log, conn: conn}
+	h := &webHost{srv: srv, log: log, conn: conn, onProgress: onProgress}
 	defer h.abort()
 	for {
 		typ, data, err := conn.Read(ctx)
@@ -120,9 +130,32 @@ func (h *webHost) get(ctx context.Context, name string) error {
 	if err := h.sendJSON(ctx, map[string]any{"t": "get.begin", "name": name, "size": st.Size()}); err != nil {
 		return err
 	}
+	txID := lanweb.NextProgressID()
+	total := st.Size()
+	if h.onProgress != nil {
+		h.onProgress(TransferProgress{
+			ID:         txID,
+			Direction:  "send",
+			Channel:    "relay",
+			Stage:      "transferring",
+			FileName:   name,
+			FileIndex:  1,
+			FileCount:  1,
+			BytesDone:  0,
+			BytesTotal: total,
+		})
+		defer h.onProgress(TransferProgress{
+			ID:        txID,
+			Direction: "send",
+			Channel:   "relay",
+			FileName:  name,
+			Done:      true,
+		})
+	}
 	hsh := sha256.New()
 	buf := make([]byte, webChunk)
 	var sent int64
+	lastEmit := time.Now()
 	for {
 		n, err := f.Read(buf)
 		if n > 0 {
@@ -133,6 +166,23 @@ func (h *webHost) get(ctx context.Context, name string) error {
 				return werr
 			}
 			sent += int64(n)
+			if h.onProgress != nil {
+				now := time.Now()
+				if now.Sub(lastEmit) >= 120*time.Millisecond || (total > 0 && sent >= total) {
+					lastEmit = now
+					h.onProgress(TransferProgress{
+						ID:         txID,
+						Direction:  "send",
+						Channel:    "relay",
+						Stage:      "transferring",
+						FileName:   name,
+						FileIndex:  1,
+						FileCount:  1,
+						BytesDone:  sent,
+						BytesTotal: total,
+					})
+				}
+			}
 		}
 		if err == io.EOF {
 			break
@@ -165,6 +215,21 @@ func (h *webHost) begin(ctx context.Context, name string, size int64) error {
 		return err
 	}
 	h.part, h.partName, h.partPath, h.partHash, h.partSize, h.partWant = f, unique, path, sha256.New(), 0, size
+	h.partTxID = lanweb.NextProgressID()
+	h.partLast = time.Now()
+	if h.onProgress != nil {
+		h.onProgress(TransferProgress{
+			ID:         h.partTxID,
+			Direction:  "recv",
+			Channel:    "relay",
+			Stage:      "transferring",
+			FileName:   unique,
+			FileIndex:  1,
+			FileCount:  1,
+			BytesDone:  0,
+			BytesTotal: size,
+		})
+	}
 	h.event("tempshare.web_put_begin", map[string]any{"name": unique, "size": size})
 	return h.sendJSON(ctx, map[string]any{"t": "put.ready", "name": unique})
 }
@@ -183,6 +248,23 @@ func (h *webHost) chunk(data []byte) error {
 		return err
 	}
 	h.partSize += int64(len(data))
+	if h.onProgress != nil {
+		now := time.Now()
+		if now.Sub(h.partLast) >= 120*time.Millisecond || (h.partWant > 0 && h.partSize >= h.partWant) {
+			h.partLast = now
+			h.onProgress(TransferProgress{
+				ID:         h.partTxID,
+				Direction:  "recv",
+				Channel:    "relay",
+				Stage:      "transferring",
+				FileName:   h.partName,
+				FileIndex:  1,
+				FileCount:  1,
+				BytesDone:  h.partSize,
+				BytesTotal: h.partWant,
+			})
+		}
+	}
 	return nil
 }
 
@@ -192,8 +274,30 @@ func (h *webHost) end(ctx context.Context) error {
 	}
 	f := h.part
 	partPath := h.partPath
+	txID := h.partTxID
 	sum := hex.EncodeToString(h.partHash.Sum(nil))
 	h.part = nil
+	h.partTxID = 0
+	if h.onProgress != nil {
+		h.onProgress(TransferProgress{
+			ID:         txID,
+			Direction:  "recv",
+			Channel:    "relay",
+			Stage:      "verifying",
+			FileName:   h.partName,
+			FileIndex:  1,
+			FileCount:  1,
+			BytesDone:  h.partSize,
+			BytesTotal: h.partWant,
+		})
+		defer h.onProgress(TransferProgress{
+			ID:        txID,
+			Direction: "recv",
+			Channel:   "relay",
+			FileName:  h.partName,
+			Done:      true,
+		})
+	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
 		_ = os.Remove(partPath + ".part")
@@ -222,9 +326,21 @@ func (h *webHost) abort() {
 		return
 	}
 	partPath := h.partPath
+	txID := h.partTxID
+	partName := h.partName
 	_ = h.part.Close()
 	if partPath != "" {
 		_ = os.Remove(partPath + ".part")
 	}
 	h.part = nil
+	h.partTxID = 0
+	if txID != 0 && h.onProgress != nil {
+		h.onProgress(TransferProgress{
+			ID:        txID,
+			Direction: "recv",
+			Channel:   "relay",
+			FileName:  partName,
+			Done:      true,
+		})
+	}
 }

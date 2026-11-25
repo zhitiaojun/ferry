@@ -314,3 +314,17 @@ func TestWebRoomRecreatedAfterClose(t *testing.T) {
 	defer guest2.Close(websocket.StatusNormalClosure, "")
 	echo(host2, guest2, "second")
 }
+
+func TestWebTransferPageIncludesProgressAndSpeed(t *testing.T) {
+	_, hs := newWebTest(t)
+	resp, body := doJSON(t, "GET", hs.URL+"/transfer", nil, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/transfer status = %d", resp.StatusCode)
+	}
+	html := string(body)
+	for _, needle := range []string{`id="up-box"`, `id="dl-box"`, `fmtSpeed`, `makeSpeedTracker`} {
+		if !strings.Contains(html, needle) {
+			t.Fatalf("/transfer HTML missing %s", needle)
+		}
+	}
+}

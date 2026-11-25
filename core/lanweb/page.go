@@ -56,8 +56,13 @@ const pageHTML = `<!doctype html>
   #drop.hot b{color:var(--accent)}
   .pick-btn{display:inline-block;margin-top:12px;padding:8px 18px;border-radius:8px;
             background:var(--accent);color:var(--accent-ink);font-weight:600;font-size:13px}
-  #bar{height:5px;background:var(--line-soft);border-radius:999px;overflow:hidden;margin-top:14px;display:none}
-  #bar>i{display:block;height:100%;width:0;background:var(--accent);transition:width .15s linear}
+  #bar{height:6px;background:var(--line-soft);border-radius:999px;overflow:hidden;margin-top:8px}
+  #bar>i{display:block;height:100%;width:0;background:var(--accent);transition:width .12s linear}
+  .tx-box{margin-top:14px;padding:12px 14px;border-radius:11px;border:1px solid var(--line);background:var(--paper-2)}
+  .tx-top{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:13px}
+  .tx-name{font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .tx-pct{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--accent);flex:none}
+  .tx-meta{margin-top:7px;font-family:var(--mono);font-size:12px;color:var(--ink-2);word-break:break-word}
   #msg{margin-top:10px;font-size:13px;color:var(--ink-2);white-space:pre-wrap}
   #msg:empty{display:none}
 
@@ -105,7 +110,11 @@ const pageHTML = `<!doctype html>
       <span class="pick-btn">选择文件上传</span>
       <input id="pick" type="file" multiple style="display:none">
     </div>
-    <div id="bar"><i></i></div>
+    <div class="tx-box" id="tx-box" hidden>
+      <div class="tx-top"><span class="tx-name" id="tx-name"></span><span class="tx-pct" id="tx-pct"></span></div>
+      <div id="bar"><i></i></div>
+      <div class="tx-meta" id="tx-meta"></div>
+    </div>
     <div id="msg"></div>
   </section>
 
@@ -131,10 +140,15 @@ const pageHTML = `<!doctype html>
   document.getElementById("tok").textContent = location.host;
   var rows = document.getElementById("rows");
   var msg = document.getElementById("msg");
-  var bar = document.getElementById("bar");
-  var fill = bar.querySelector("i");
+  var txBox = document.getElementById("tx-box");
+  var txName = document.getElementById("tx-name");
+  var txPct = document.getElementById("tx-pct");
+  var txMeta = document.getElementById("tx-meta");
+  var fill = document.querySelector("#bar>i");
   var uploadCard = document.getElementById("upload-card");
   function fmt(n){ if(n<1024)return n+" B"; if(n<1048576)return (n/1024).toFixed(1)+" KB"; if(n<1073741824)return (n/1048576).toFixed(1)+" MB"; return (n/1073741824).toFixed(2)+" GB"; }
+  function fmtSpeed(bps){ if(!bps||bps<=0)return ""; if(bps<1024)return Math.round(bps)+" B/s"; if(bps<1048576)return (bps/1024).toFixed(1)+" KB/s"; if(bps<1073741824)return (bps/1048576).toFixed(1)+" MB/s"; return (bps/1073741824).toFixed(2)+" GB/s"; }
+  function fmtETA(sec){ if(sec==null||!isFinite(sec)||sec<=0||sec>=86400)return ""; sec=Math.max(1,Math.round(sec)); if(sec<60)return "剩余 "+sec+"s"; return "剩余 "+Math.floor(sec/60)+"m"+String(sec%60).padStart(2,"0")+"s"; }
   function addRow(f){
     var tr=document.createElement("tr");
     var td1=document.createElement("td"); td1.textContent=f.name;
@@ -155,25 +169,75 @@ const pageHTML = `<!doctype html>
       rows.innerHTML=""; list.forEach(addRow);
     }).catch(function(e){ msg.textContent="列表失败："+e; });
   }
+  function showTx(label, done, total, bps, note){
+    txBox.hidden = false;
+    txName.textContent = label;
+    var pct = total > 0 ? Math.max(0, Math.min(100, Math.round(100 * done / total))) : 100;
+    txPct.textContent = pct + "%";
+    fill.style.width = pct + "%";
+    var parts = [total > 0 ? (fmt(Math.min(done, total)) + " / " + fmt(total)) : fmt(done)];
+    if(bps > 0) parts.push(fmtSpeed(bps));
+    if(total > 0 && done > 0 && done < total && bps > 0){
+      var eta = fmtETA((total - done) / bps);
+      if(eta) parts.push(eta);
+    }
+    if(note) parts.push(note);
+    txMeta.textContent = parts.join(" · ");
+  }
   function send(files){
     if(!files || !files.length) return;
     if(busy){ msg.textContent="正在上传中，请稍候"; return; }
+    var list = Array.prototype.slice.call(files);
+    var totalFiles = list.length;
+    var idx = 0;
     busy = true;
-    var fd=new FormData();
-    for(var i=0;i<files.length;i++) fd.append("file", files[i], files[i].name);
-    msg.textContent=""; bar.style.display="block"; fill.style.width="0%";
-    var xhr=new XMLHttpRequest();
-    xhr.open("POST", base+"/upload");
-    xhr.upload.onprogress=function(e){ if(e.lengthComputable) fill.style.width=(100*e.loaded/e.total).toFixed(1)+"%"; };
-    xhr.onload=function(){
-      busy = false;
-      bar.style.display="none";
-      if(xhr.status!==200){ msg.textContent="上传失败："+xhr.status+" "+(xhr.responseText||""); return; }
-      msg.textContent="上传完成"; load();
-    };
-    xhr.onerror=function(){ busy=false; bar.style.display="none"; msg.textContent="上传失败：网络错误"; };
-    xhr.onabort=function(){ busy=false; bar.style.display="none"; };
-    xhr.send(fd);
+    msg.textContent = "";
+    function next(){
+      if(idx >= list.length){
+        busy = false;
+        txBox.hidden = true;
+        msg.textContent = totalFiles > 1 ? ("全部上传完成（共 " + totalFiles + " 个文件）") : msg.textContent;
+        load();
+        return;
+      }
+      var f = list[idx++];
+      var fsize = f.size || 0;
+      var label = "上传中：" + (totalFiles > 1 ? ("(" + idx + "/" + totalFiles + ") ") : "") + f.name;
+      var start = performance.now();
+      var samples = [{ t: start, b: 0 }];
+      var fd = new FormData();
+      fd.append("file", f, f.name);
+      showTx(label, 0, fsize, 0);
+      var xhr = new XMLHttpRequest();
+      xhr.open("POST", base+"/upload");
+      xhr.setRequestHeader("X-File-Size", String(fsize));
+      xhr.upload.onprogress = function(e){
+        var total = fsize > 0 ? fsize : (e.lengthComputable ? e.total : 0);
+        var loaded = total > 0 ? Math.min(total, e.loaded) : e.loaded;
+        var now = performance.now();
+        samples.push({ t: now, b: loaded });
+        while(samples.length > 2 && now - samples[0].t > 2000) samples.shift();
+        var dt = (now - samples[0].t) / 1000, db = loaded - samples[0].b;
+        var bps = (dt >= 0.15 && db > 0) ? (db / dt) : ((now - start) >= 150 && loaded > 0 ? (loaded / ((now - start) / 1000)) : 0);
+        var note = (total === 0 || loaded >= total) ? "对方校验保存中…" : "";
+        showTx(label, loaded, total, bps, note);
+      };
+      xhr.onload = function(){
+        if(xhr.status !== 200){
+          busy = false; txBox.hidden = true;
+          msg.textContent = "上传失败：" + xhr.status + " " + (xhr.responseText || "");
+          return;
+        }
+        var totalDt = (performance.now() - start) / 1000;
+        var avgSpd = (totalDt >= 0.1 && fsize > 0) ? fmtSpeed(fsize / totalDt) : "";
+        msg.textContent = "上传完成：" + f.name + (avgSpd ? "（平均 " + avgSpd + "）" : "");
+        next();
+      };
+      xhr.onerror = function(){ busy = false; txBox.hidden = true; msg.textContent = "上传失败：网络错误"; };
+      xhr.onabort = function(){ busy = false; txBox.hidden = true; };
+      xhr.send(fd);
+    }
+    next();
   }
   var drop=document.getElementById("drop");
   var pick=document.getElementById("pick");

@@ -258,7 +258,14 @@ type activeTransfer struct {
 	fileCount  int
 	bytesDone  int64
 	bytesTotal int64
+	speedBPS   int64
 	startedAt  time.Time
+	samples    []txSpeedSample
+}
+
+type txSpeedSample struct {
+	t     time.Time
+	bytes int64
 }
 
 // app holds state shared by tray and drop modes.
@@ -306,6 +313,7 @@ func (a *app) beginTransfer(dir, peer, fileName string, fileCount int, total int
 	if a == nil {
 		return 0
 	}
+	now := time.Now()
 	a.mu.Lock()
 	a.txSeq++
 	id := a.txSeq
@@ -318,9 +326,10 @@ func (a *app) beginTransfer(dir, peer, fileName string, fileCount int, total int
 		fileIndex:  1,
 		fileCount:  fileCount,
 		bytesTotal: total,
-		startedAt:  time.Now(),
+		startedAt:  now,
+		samples:    []txSpeedSample{{t: now, bytes: 0}},
 	}
-	a.lastPaint = time.Now()
+	a.lastPaint = now
 	a.mu.Unlock()
 	if h := existingMainWindow(); h != 0 {
 		procPostMessageW.Call(uintptr(h), wmAppPaint, 0, 0)
@@ -361,10 +370,38 @@ func (a *app) updateTransfer(id uint64, stage, channel, peer, fileName string, f
 		a.tx.fileCount = fileCnt
 	}
 	if done >= 0 {
+		prevDone := a.tx.bytesDone
 		a.tx.bytesDone = done
+		if done < prevDone || len(a.tx.samples) == 0 {
+			a.tx.samples = []txSpeedSample{{t: now, bytes: done}}
+		} else {
+			a.tx.samples = append(a.tx.samples, txSpeedSample{t: now, bytes: done})
+			for len(a.tx.samples) > 2 && now.Sub(a.tx.samples[0].t) > 2*time.Second {
+				a.tx.samples = a.tx.samples[1:]
+			}
+		}
 	}
 	if total > 0 {
 		a.tx.bytesTotal = total
+	}
+	if a.tx.stage == "verifying" {
+		a.tx.speedBPS = 0
+	} else {
+		var spd int64
+		if len(a.tx.samples) >= 2 {
+			first := a.tx.samples[0]
+			dt := now.Sub(first.t).Seconds()
+			db := a.tx.bytesDone - first.bytes
+			if dt >= 0.15 && db > 0 {
+				spd = int64(float64(db) / dt)
+			}
+		}
+		if spd == 0 && a.tx.bytesDone > 0 {
+			if elapsed := now.Sub(a.tx.startedAt).Seconds(); elapsed >= 0.5 {
+				spd = int64(float64(a.tx.bytesDone) / elapsed)
+			}
+		}
+		a.tx.speedBPS = spd
 	}
 	shouldPaint := changedMajor || now.Sub(a.lastPaint) >= 80*time.Millisecond
 	if shouldPaint {

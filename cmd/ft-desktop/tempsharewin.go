@@ -69,6 +69,14 @@ type tempWin struct {
 	host   *tempshare.Host
 	qrBits [][]bool
 
+	txActive   bool
+	txTitle    string
+	txMeta     string
+	txPct      float64
+	txSpeedBPS int64
+	txID       uint64
+	txSamples  []txSpeedSample
+
 	codeEdit syscall.Handle
 	editBg   syscall.Handle
 
@@ -544,8 +552,18 @@ func (w *tempWin) paint(hwnd syscall.Handle) {
 		} else if w.status != "" {
 			infoText = w.status
 		}
-		cv.drawAlphaText(w.fontSm, infoText, rectT{pad, cy + w.px(62), cr.right - pad, cy + w.px(88)},
-			dtCenter|dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink3)
+		tempWinMu.Lock()
+		txActive := w.txActive
+		txTitle := w.txTitle
+		txMeta := w.txMeta
+		txPct := w.txPct
+		tempWinMu.Unlock()
+		if txActive {
+			w.drawTempProgress(cv, rectT{pad, cy + w.px(58), cr.right - pad, cy + w.px(110)}, txTitle, txMeta, txPct)
+		} else {
+			cv.drawAlphaText(w.fontSm, infoText, rectT{pad, cy + w.px(62), cr.right - pad, cy + w.px(88)},
+				dtCenter|dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink3)
+		}
 
 		cFill := w.pal.paper2
 		if w.hover == tsHoverCopy {
@@ -580,11 +598,22 @@ func (w *tempWin) paint(hwnd syscall.Handle) {
 		}
 		cv.drawAlphaText(w.fontBody, btnTxt, w.joinGoRect, dtCenter|dtSingleLine|dtVCenter, w.pal.accentInk)
 
+		tempWinMu.Lock()
+		txActive := w.txActive
+		txTitle := w.txTitle
+		txMeta := w.txMeta
+		txPct := w.txPct
+		tempWinMu.Unlock()
+		statusTop := w.px(274)
+		if txActive {
+			w.drawTempProgress(cv, rectT{pad, w.px(270), cr.right - pad, w.px(324)}, txTitle, txMeta, txPct)
+			statusTop = w.px(336)
+		}
 		if w.errMsg != "" {
-			cv.drawAlphaText(w.fontSm, w.errMsg, rectT{pad, w.px(274), cr.right - pad, w.px(340)},
+			cv.drawAlphaText(w.fontSm, w.errMsg, rectT{pad, statusTop, cr.right - pad, w.px(420)},
 				dtCenter|dtWordBreak, w.pal.danger)
 		} else if w.status != "" {
-			cv.drawAlphaText(w.fontSm, w.status, rectT{pad, w.px(274), cr.right - pad, w.px(340)},
+			cv.drawAlphaText(w.fontSm, w.status, rectT{pad, statusTop, cr.right - pad, w.px(420)},
 				dtCenter|dtWordBreak, w.pal.ink2)
 		}
 		cv.drawAlphaText(w.fontSm, "← 返回发起快传", w.backRect, dtCenter|dtSingleLine|dtVCenter, w.pal.accent)
@@ -687,6 +716,9 @@ func (w *tempWin) startHost(mode string, files []string) {
 	a := w.app
 	hwnd := w.hwnd
 	own := w.owner
+	var hostTxMu sync.Mutex
+	var hostTxID uint64
+	var hostTxSeq uint64
 	go func() {
 		key, err := identity.LoadOrCreateKey(a.keyPath)
 		var host *tempshare.Host
@@ -704,6 +736,47 @@ func (w *tempWin) startHost(mode string, files []string) {
 						procInvalidateRect.Call(uintptr(own), 0, 1)
 					}
 					procPostMessageW.Call(uintptr(hwnd), wmTempUpdate, 0, 0)
+				},
+				OnProgress: func(p tempshare.TransferProgress) {
+					updateTempWinProgress(hwnd, p)
+					hostTxMu.Lock()
+					if p.Done {
+						if hostTxID == p.ID || p.ID == 0 {
+							seq := hostTxSeq
+							hostTxID = 0
+							hostTxSeq = 0
+							hostTxMu.Unlock()
+							if seq != 0 {
+								a.endTransfer(seq)
+							}
+							return
+						}
+						hostTxMu.Unlock()
+						return
+					}
+					ch := "中继"
+					if p.Channel == "lan" {
+						ch = "LAN"
+					}
+					if hostTxID != p.ID {
+						prevSeq := hostTxSeq
+						fc := p.FileCount
+						if fc < 1 {
+							fc = 1
+						}
+						seq := a.beginTransfer(p.Direction, "网页快传", p.FileName, fc, p.BytesTotal)
+						hostTxID = p.ID
+						hostTxSeq = seq
+						hostTxMu.Unlock()
+						if prevSeq != 0 {
+							a.endTransfer(prevSeq)
+						}
+						a.updateTransfer(seq, p.Stage, ch, "网页快传", p.FileName, p.FileIndex, fc, p.BytesDone, p.BytesTotal)
+						return
+					}
+					seq := hostTxSeq
+					hostTxMu.Unlock()
+					a.updateTransfer(seq, p.Stage, ch, "网页快传", p.FileName, p.FileIndex, p.FileCount, p.BytesDone, p.BytesTotal)
 				},
 			})
 		}
@@ -767,7 +840,22 @@ func (w *tempWin) joinByCode() {
 			return
 		}
 		if sess.Mode == "send" {
-			via, saved, err := tempshare.DownloadAll(context.Background(), sess, a.receiveDir())
+			peerName := sess.Name
+			if peerName == "" {
+				peerName = "临时快传"
+			}
+			txSeq := a.beginTransfer("recv", peerName, "", 0, 0)
+			via, saved, err := tempshare.DownloadAllWithProgress(context.Background(), sess, a.receiveDir(), func(p tempshare.TransferProgress) {
+				updateTempWinProgress(hwnd, p)
+				if !p.Done {
+					ch := "中继"
+					if p.Channel == "lan" {
+						ch = "LAN"
+					}
+					a.updateTransfer(txSeq, p.Stage, ch, peerName, p.FileName, p.FileIndex, p.FileCount, p.BytesDone, p.BytesTotal)
+				}
+			})
+			a.endTransfer(txSeq)
 			if err != nil {
 				w.finishJoinError(hwnd, "下载失败："+err.Error())
 				return
@@ -804,7 +892,22 @@ func (w *tempWin) joinByCode() {
 			}
 			return
 		}
-		via, uploaded, err := tempshare.UploadFiles(context.Background(), sess, files)
+		peerName := sess.Name
+		if peerName == "" {
+			peerName = "临时快传"
+		}
+		txSeq := a.beginTransfer("send", peerName, "", len(files), 0)
+		via, uploaded, err := tempshare.UploadFilesWithProgress(context.Background(), sess, files, func(p tempshare.TransferProgress) {
+			updateTempWinProgress(hwnd, p)
+			if !p.Done {
+				ch := "中继"
+				if p.Channel == "lan" {
+					ch = "LAN"
+				}
+				a.updateTransfer(txSeq, p.Stage, ch, peerName, p.FileName, p.FileIndex, p.FileCount, p.BytesDone, p.BytesTotal)
+			}
+		})
+		a.endTransfer(txSeq)
 		if err != nil {
 			w.finishJoinError(hwnd, "上传失败："+err.Error())
 			return
@@ -831,11 +934,133 @@ func (w *tempWin) joinByCode() {
 func (w *tempWin) finishJoinError(hwnd syscall.Handle, msg string) {
 	tempWinMu.Lock()
 	cur := tempWins[hwnd]
-	tempWinMu.Unlock()
 	if cur != nil {
 		cur.busy = false
+		cur.txActive = false
+		cur.txSamples = nil
 		cur.errMsg = msg
 		cur.status = ""
+	}
+	tempWinMu.Unlock()
+	if cur != nil {
 		procPostMessageW.Call(uintptr(hwnd), wmTempUpdate, 0, 0)
 	}
+}
+
+func updateTempWinProgress(hwnd syscall.Handle, p tempshare.TransferProgress) {
+	now := time.Now()
+	tempWinMu.Lock()
+	w := tempWins[hwnd]
+	if w == nil {
+		tempWinMu.Unlock()
+		return
+	}
+	if p.Done {
+		if w.txID == p.ID || p.ID == 0 {
+			w.txActive = false
+			w.txSpeedBPS = 0
+			w.txSamples = nil
+			w.txID = 0
+		}
+		tempWinMu.Unlock()
+		procPostMessageW.Call(uintptr(hwnd), wmTempUpdate, 0, 0)
+		return
+	}
+	if w.txID != p.ID || len(w.txSamples) == 0 || (w.txSamples[len(w.txSamples)-1].bytes > p.BytesDone) {
+		w.txID = p.ID
+		w.txSamples = []txSpeedSample{{t: now, bytes: p.BytesDone}}
+	} else {
+		w.txSamples = append(w.txSamples, txSpeedSample{t: now, bytes: p.BytesDone})
+		for len(w.txSamples) > 2 && now.Sub(w.txSamples[0].t) > 2*time.Second {
+			w.txSamples = w.txSamples[1:]
+		}
+	}
+	var speedBPS int64
+	if p.Stage != "verifying" && len(w.txSamples) >= 2 {
+		first := w.txSamples[0]
+		dt := now.Sub(first.t).Seconds()
+		db := p.BytesDone - first.bytes
+		if dt >= 0.15 && db > 0 {
+			speedBPS = int64(float64(db) / dt)
+		}
+	}
+	w.txActive = true
+	w.txSpeedBPS = speedBPS
+	verb := "发送"
+	if p.Direction == "recv" {
+		verb = "接收"
+	}
+	chLabel := "中继"
+	if p.Channel == "lan" {
+		chLabel = "LAN"
+	}
+	if p.FileCount > 1 && p.FileIndex > 0 {
+		w.txTitle = fmt.Sprintf("%s（%s）· %d/%d %s", verb, chLabel, p.FileIndex, p.FileCount, p.FileName)
+	} else if p.FileName != "" {
+		w.txTitle = fmt.Sprintf("%s（%s）· %s", verb, chLabel, p.FileName)
+	} else {
+		w.txTitle = fmt.Sprintf("%s（%s）", verb, chLabel)
+	}
+	if p.BytesTotal > 0 {
+		ratio := float64(p.BytesDone) / float64(p.BytesTotal)
+		if ratio > 1 {
+			ratio = 1
+		} else if ratio < 0 {
+			ratio = 0
+		}
+		w.txPct = ratio
+	} else {
+		w.txPct = 0
+	}
+	var meta []string
+	if p.BytesTotal > 0 {
+		meta = append(meta, fmt.Sprintf("%d%% · %s / %s", int(w.txPct*100+0.5), humanBytes(p.BytesDone), humanBytes(p.BytesTotal)))
+	} else if p.BytesDone > 0 {
+		meta = append(meta, humanBytes(p.BytesDone))
+	} else {
+		meta = append(meta, "准备传输…")
+	}
+	if p.Stage == "verifying" {
+		meta = append(meta, "校验写入中…")
+	} else if speedBPS > 0 {
+		meta = append(meta, formatSpeed(speedBPS))
+		if p.BytesTotal > 0 && p.BytesDone > 0 && p.BytesDone < p.BytesTotal {
+			rem := int(float64(p.BytesTotal-p.BytesDone)/float64(speedBPS) + 0.5)
+			if rem >= 1 && rem < 86400 {
+				if rem >= 60 {
+					meta = append(meta, fmt.Sprintf("剩余 %dm%ds", rem/60, rem%60))
+				} else {
+					meta = append(meta, fmt.Sprintf("剩余 %ds", rem))
+				}
+			}
+		}
+	}
+	w.txMeta = strings.Join(meta, " · ")
+	tempWinMu.Unlock()
+	procPostMessageW.Call(uintptr(hwnd), wmTempUpdate, 0, 0)
+}
+
+func (w *tempWin) drawTempProgress(cv *glassCanvas, r rectT, title, meta string, pct float64) {
+	cv.drawAlphaRoundRect(r, float64(w.px(8)), w.pal.paper2, 240, w.pal.accent, 180, 1.0)
+	inL := r.left + w.px(10)
+	inR := r.right - w.px(10)
+	cv.drawAlphaText(w.fontSm, title, rectT{inL, r.top + w.px(5), inR, r.top + w.px(21)},
+		dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink)
+
+	barR := rectT{inL, r.top + w.px(24), inR, r.top + w.px(29)}
+	cv.drawAlphaRoundRect(barR, float64(w.px(3)), w.pal.paper3, 230, 0, 0, 0)
+	fillRatio := pct
+	if fillRatio <= 0 {
+		fillRatio = 0.25
+	}
+	fw := int32(float64(barR.right-barR.left) * fillRatio)
+	if fw < w.px(6) {
+		fw = w.px(6)
+	}
+	if barR.left+fw > barR.right {
+		fw = barR.right - barR.left
+	}
+	cv.drawAlphaRoundRect(rectT{barR.left, barR.top, barR.left + fw, barR.bottom}, float64(w.px(3)), w.pal.accent, 255, 0, 0, 0)
+	cv.drawAlphaText(w.fontSm, meta, rectT{inL, r.top + w.px(32), inR, r.bottom - w.px(4)},
+		dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
 }

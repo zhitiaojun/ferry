@@ -285,3 +285,84 @@ func TestScopedSendAndRecvModes(t *testing.T) {
 		t.Fatalf("recv upload = %d, notify = %q", rec.Code, gotNotify)
 	}
 }
+
+func TestOnProgressUploadAndDownload(t *testing.T) {
+	dir := t.TempDir()
+	var events []Progress
+	srv, err := NewScoped(ScopedOptions{
+		Mode:    "both",
+		RecvDir: dir,
+		Token:   "tokprog",
+		Log:     logging.New(io.Discard),
+		OnProgress: func(p Progress) {
+			events = append(events, p)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload := bytes.Repeat([]byte("ferry-lanweb-progress"), 4096)
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	fw, err := mw.CreateFormFile("file", "big.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fw.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	_ = mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/tokprog/upload", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("X-File-Size", fmt.Sprint(len(payload)))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("upload = %d %s", rec.Code, rec.Body.String())
+	}
+
+	var sawRecvStart, sawRecvVerify, sawRecvDone bool
+	for _, ev := range events {
+		if ev.Direction == "recv" {
+			if ev.Stage == "transferring" && ev.BytesTotal == int64(len(payload)) {
+				sawRecvStart = true
+			}
+			if ev.Stage == "verifying" && ev.BytesDone == int64(len(payload)) {
+				sawRecvVerify = true
+			}
+			if ev.Done {
+				sawRecvDone = true
+			}
+		}
+	}
+	if !sawRecvStart || !sawRecvVerify || !sawRecvDone {
+		t.Fatalf("missing recv progress phases: start=%v verify=%v done=%v events=%+v", sawRecvStart, sawRecvVerify, sawRecvDone, events)
+	}
+
+	events = nil
+	dlRec := httptest.NewRecorder()
+	srv.ServeHTTP(dlRec, httptest.NewRequest(http.MethodGet, "/tokprog/f/big.bin", nil))
+	if dlRec.Code != http.StatusOK || dlRec.Body.Len() != len(payload) {
+		t.Fatalf("download = %d len=%d", dlRec.Code, dlRec.Body.Len())
+	}
+	var sawSendTransfer, sawSendDone bool
+	for _, ev := range events {
+		if ev.Direction == "send" {
+			if ev.Stage == "transferring" && ev.BytesTotal == int64(len(payload)) {
+				sawSendTransfer = true
+			}
+			if ev.Done {
+				sawSendDone = true
+			}
+		}
+	}
+	if !sawSendTransfer || !sawSendDone {
+		t.Fatalf("missing send progress phases: transfer=%v done=%v events=%+v", sawSendTransfer, sawSendDone, events)
+	}
+
+	if !strings.Contains(pageHTML, "fmtSpeed") || !strings.Contains(pageHTML, `id="tx-box"`) {
+		t.Fatal("pageHTML missing speed/progress UI")
+	}
+}

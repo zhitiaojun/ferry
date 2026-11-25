@@ -1784,10 +1784,11 @@ func (w *mainWin) drawActiveTransferCard(cv *glassCanvas, r rectT, tx *activeTra
 	if fileInfo == "" {
 		fileInfo = "准备文件信息…"
 	}
-	rightInfo := formatTransferMetrics(tx.startedAt, tx.bytesDone, tx.bytesTotal)
+	rightInfo := formatTransferMetrics(tx.startedAt, tx.bytesDone, tx.bytesTotal, tx.speedBPS)
 	rw := textWidth(cv.memDC, w.fontSm, rightInfo) + p(8)
-	if rw > (inR-inL)/2 {
-		rw = (inR - inL) / 2
+	maxRW := (inR - inL) * 62 / 100
+	if rw > maxRW {
+		rw = maxRW
 	}
 	cv.drawAlphaText(w.fontSm, fileInfo, rectT{inL, r.top + p(58), inR - rw - p(8), r.bottom - p(10)},
 		dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
@@ -1816,6 +1817,8 @@ func channelDisplayLabel(ch string, pal palette, dark bool) (string, uint32, uin
 	switch strings.ToLower(strings.TrimSpace(ch)) {
 	case "lan", "lan 直连":
 		return "LAN 直连", pal.accentSoft, pal.accent
+	case "网页快传", "web":
+		return "网页快传", pal.accentSoft, pal.accent
 	case "打洞", "punch", "udp 打洞":
 		if dark {
 			return "UDP 打洞", col(0x45, 0x1A, 0x03), pal.amber
@@ -1833,20 +1836,54 @@ func channelDisplayLabel(ch string, pal palette, dark bool) (string, uint32, uin
 	}
 }
 
-func formatTransferMetrics(startedAt time.Time, done, total int64) string {
+func formatSpeed(bps int64) string {
+	switch {
+	case bps <= 0:
+		return ""
+	case bps >= 1<<30:
+		return fmt.Sprintf("%.2f GB/s", float64(bps)/(1<<30))
+	case bps >= 1<<20:
+		return fmt.Sprintf("%.1f MB/s", float64(bps)/(1<<20))
+	case bps >= 1<<10:
+		return fmt.Sprintf("%.1f KB/s", float64(bps)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B/s", bps)
+	}
+}
+
+func formatTransferMetrics(startedAt time.Time, done, total, speedBPS int64) string {
 	var parts []string
 	if total > 0 {
 		parts = append(parts, humanBytes(done)+" / "+humanBytes(total))
 	} else if done > 0 {
 		parts = append(parts, humanBytes(done))
 	}
+	var elapsed time.Duration
 	if !startedAt.IsZero() {
-		elapsed := time.Since(startedAt)
+		elapsed = time.Since(startedAt)
+		if speedBPS <= 0 && done > 0 && elapsed >= 500*time.Millisecond {
+			speedBPS = int64(float64(done) / elapsed.Seconds())
+		}
+	}
+	if speedBPS > 0 {
+		parts = append(parts, formatSpeed(speedBPS))
+	}
+	if !startedAt.IsZero() {
 		if elapsed < time.Second {
 			elapsed = time.Second
 		}
 		parts = append(parts, fmt.Sprintf("已用 %ds", int(elapsed.Seconds())))
-		if eta := formatETA(elapsed, done, total); eta != "" {
+		if speedBPS > 0 && total > 0 && done > 0 && done < total {
+			remSec := int(float64(total-done)/float64(speedBPS) + 0.5)
+			if remSec < 1 {
+				remSec = 1
+			}
+			if remSec >= 60 {
+				parts = append(parts, fmt.Sprintf("剩余约 %dm%ds", remSec/60, remSec%60))
+			} else {
+				parts = append(parts, fmt.Sprintf("剩余约 %ds", remSec))
+			}
+		} else if eta := formatETA(elapsed, done, total); eta != "" {
 			parts = append(parts, eta)
 		}
 	}

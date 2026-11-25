@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestPollReceivedDrain(t *testing.T) {
@@ -72,5 +73,30 @@ func TestActiveTransferStatusLifecycle(t *testing.T) {
 	endActiveTransfer(seq)
 	if got := ActiveTransferStatus(); got != `{"active":false}` {
 		t.Fatalf("after end ActiveTransferStatus = %q, want {\"active\":false}", got)
+	}
+}
+
+func TestActiveTransferSpeedComputation(t *testing.T) {
+	seq := beginActiveTransfer("send", "网页快传", "video.mp4", 1, 20*1024*1024)
+	defer endActiveTransfer(seq)
+
+	time.Sleep(180 * time.Millisecond)
+	updateActiveTransfer(seq, "transferring", "lan", "网页快传", "video.mp4", 1, 1, 4*1024*1024, 20*1024*1024)
+
+	var st ActiveTransfer
+	if err := json.Unmarshal([]byte(ActiveTransferStatus()), &st); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if st.SpeedBPS <= 0 {
+		t.Fatalf("expected SpeedBPS > 0, got %+v", st)
+	}
+
+	updateActiveTransfer(seq, "verifying", "lan", "网页快传", "video.mp4", 1, 1, 20*1024*1024, 20*1024*1024)
+	var stVerifying ActiveTransfer
+	if err := json.Unmarshal([]byte(ActiveTransferStatus()), &stVerifying); err != nil {
+		t.Fatalf("unmarshal verifying: %v", err)
+	}
+	if stVerifying.SpeedBPS != 0 {
+		t.Fatalf("expected SpeedBPS = 0 in verifying stage, got %+v", stVerifying)
 	}
 }

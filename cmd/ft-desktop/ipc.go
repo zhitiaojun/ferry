@@ -257,10 +257,22 @@ func (d *desktopIPC) sendDirectLAN(ctx context.Context, addr string, files []str
 	if len(files) == 0 {
 		return ipc.SendResponse{OK: false, Error: "没有可发送的文件"}
 	}
+	var totalBytes int64
+	for _, fp := range files {
+		if st, serr := os.Stat(fp); serr == nil {
+			totalBytes += st.Size()
+		}
+	}
+	txID := a.beginTransfer("send", addr, filepath.Base(files[0]), len(files), totalBytes)
+	defer a.endTransfer(txID)
+
 	res, err := client.SendLAN(ctx, client.Options{
 		KeyPath:    a.keyPath,
 		PairedPath: a.pairedPath,
 		Name:       a.deviceName(),
+		OnStatus: func(st client.Status) {
+			a.updateTransfer(txID, st.Stage, "LAN", "", st.FileName, st.FileIndex, st.FileCount, st.BytesDone, st.BytesTotal)
+		},
 	}, addr, files)
 	if err != nil {
 		return ipc.SendResponse{OK: false, Error: err.Error()}
@@ -268,6 +280,8 @@ func (d *desktopIPC) sendDirectLAN(ctx context.Context, addr string, files []str
 	peerLabel := res.PeerName
 	if peerLabel == "" {
 		peerLabel = addr
+	} else {
+		a.updateTransfer(txID, "", "", peerLabel, "", 0, 0, -1, 0)
 	}
 	a.note(fmt.Sprintf("%s  → %s · %s · %s · %s · LAN",
 		time.Now().Format("15:04"), sanitizeLedgerText(peerLabel), summarizeFiles(files), humanBytes(res.Bytes), fmtDur(res.Duration)))
@@ -298,6 +312,15 @@ func (d *desktopIPC) sendToSelectedPeer(ctx context.Context, peer client.Peer, f
 		if len(files) == 0 {
 			return ipc.SendResponse{OK: false, Error: "所选文件夹内没有可发送的文件"}
 		}
+		var totalBytes int64
+		for _, fp := range files {
+			if st, serr := os.Stat(fp); serr == nil {
+				totalBytes += st.Size()
+			}
+		}
+		txID := a.beginTransfer("send", peerLabel(peer), filepath.Base(files[0]), len(files), totalBytes)
+		defer a.endTransfer(txID)
+
 		opts := client.Options{
 			SignalURL:    a.signalURL,
 			KeyPath:      a.keyPath,
@@ -306,6 +329,18 @@ func (d *desktopIPC) sendToSelectedPeer(ctx context.Context, peer client.Peer, f
 			STUNServers:  a.stunServers,
 			CandRoute:    a.registerCandRoute,
 			DisablePunch: mode == "relay",
+			OnStatus: func(st client.Status) {
+				ch := ""
+				switch st.Channel {
+				case "lan":
+					ch = "LAN"
+				case "punch":
+					ch = "打洞"
+				case "relay":
+					ch = "中继"
+				}
+				a.updateTransfer(txID, st.Stage, ch, "", st.FileName, st.FileIndex, st.FileCount, st.BytesDone, st.BytesTotal)
+			},
 		}
 		if sigCl := a.activeSignalClient(); sigCl != nil {
 			opts.SignalClient = sigCl

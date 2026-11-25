@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -156,6 +157,12 @@ func probeAndKeepRelay(ctx context.Context, sess *ResolvedSession) (*ProbeResult
 
 // DownloadAll downloads all shared files into outDir, preferring LAN and falling back to relay.
 func DownloadAll(ctx context.Context, sess *ResolvedSession, outDir string) (via string, saved []string, err error) {
+	return DownloadAllWithProgress(ctx, sess, outDir, nil)
+}
+
+// DownloadAllWithProgress downloads all shared files into outDir, preferring LAN
+// and falling back to relay, reporting live transfer progress via onProgress.
+func DownloadAllWithProgress(ctx context.Context, sess *ResolvedSession, outDir string, onProgress func(TransferProgress)) (via string, saved []string, err error) {
 	probe, ws, err := probeAndKeepRelay(ctx, sess)
 	if err != nil {
 		return "", nil, err
@@ -166,23 +173,53 @@ func DownloadAll(ctx context.Context, sess *ResolvedSession, outDir string) (via
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return "", nil, err
 	}
+
+	var totalBytes int64
+	for _, f := range probe.Files {
+		totalBytes += f.Size
+	}
+	fileCount := len(probe.Files)
+	txID := lanweb.NextProgressID()
+	if onProgress != nil && fileCount > 0 {
+		onProgress(TransferProgress{
+			ID:         txID,
+			Direction:  "recv",
+			Channel:    probe.Via,
+			Stage:      "connecting",
+			FileName:   probe.Files[0].Name,
+			FileIndex:  1,
+			FileCount:  fileCount,
+			BytesDone:  0,
+			BytesTotal: totalBytes,
+		})
+		defer onProgress(TransferProgress{
+			ID:        txID,
+			Direction: "recv",
+			Channel:   probe.Via,
+			Done:      true,
+		})
+	}
+
+	var completed int64
 	if probe.Via == "lan" {
 		dlClient := &http.Client{Timeout: 10 * time.Minute}
-		for _, f := range probe.Files {
-			dest, derr := downloadLANFile(ctx, dlClient, probe.LANBase, f, outDir)
+		for idx, f := range probe.Files {
+			dest, derr := downloadLANFile(ctx, dlClient, probe.LANBase, f, outDir, txID, idx+1, fileCount, completed, totalBytes, onProgress)
 			if derr != nil {
 				return "lan", saved, derr
 			}
+			completed += f.Size
 			saved = append(saved, dest)
 		}
 		return "lan", saved, nil
 	}
 
-	for _, f := range probe.Files {
-		dest, derr := relayDownloadFile(ctx, ws, f.Name, outDir)
+	for idx, f := range probe.Files {
+		dest, derr := relayDownloadFile(ctx, ws, f.Name, outDir, txID, idx+1, fileCount, completed, totalBytes, f.Size, onProgress)
 		if derr != nil {
 			return "relay", saved, derr
 		}
+		completed += f.Size
 		saved = append(saved, dest)
 	}
 	return "relay", saved, nil
@@ -190,8 +227,22 @@ func DownloadAll(ctx context.Context, sess *ResolvedSession, outDir string) (via
 
 // UploadFiles uploads local files to the host, preferring LAN and falling back to relay.
 func UploadFiles(ctx context.Context, sess *ResolvedSession, paths []string) (via string, uploaded []string, err error) {
+	return UploadFilesWithProgress(ctx, sess, paths, nil)
+}
+
+// UploadFilesWithProgress uploads local files to the host, preferring LAN and
+// falling back to relay, reporting live transfer progress via onProgress.
+func UploadFilesWithProgress(ctx context.Context, sess *ResolvedSession, paths []string, onProgress func(TransferProgress)) (via string, uploaded []string, err error) {
 	if len(paths) == 0 {
 		return "", nil, fmt.Errorf("no files selected")
+	}
+	sizes := make([]int64, len(paths))
+	var totalBytes int64
+	for i, p := range paths {
+		if st, serr := os.Stat(p); serr == nil {
+			sizes[i] = st.Size()
+			totalBytes += st.Size()
+		}
 	}
 	probe, ws, err := probeAndKeepRelay(ctx, sess)
 	if err != nil {
@@ -200,22 +251,48 @@ func UploadFiles(ctx context.Context, sess *ResolvedSession, paths []string) (vi
 	if ws != nil {
 		defer ws.CloseNow()
 	}
+
+	fileCount := len(paths)
+	txID := lanweb.NextProgressID()
+	if onProgress != nil {
+		onProgress(TransferProgress{
+			ID:         txID,
+			Direction:  "send",
+			Channel:    probe.Via,
+			Stage:      "connecting",
+			FileName:   filepath.Base(paths[0]),
+			FileIndex:  1,
+			FileCount:  fileCount,
+			BytesDone:  0,
+			BytesTotal: totalBytes,
+		})
+		defer onProgress(TransferProgress{
+			ID:        txID,
+			Direction: "send",
+			Channel:   probe.Via,
+			Done:      true,
+		})
+	}
+
+	var completed int64
 	if probe.Via == "lan" {
 		upClient := &http.Client{Timeout: 30 * time.Minute}
-		for _, p := range paths {
-			if uerr := uploadLANFile(ctx, upClient, probe.LANBase, p); uerr != nil {
+		for idx, p := range paths {
+			if uerr := uploadLANFile(ctx, upClient, probe.LANBase, p, txID, idx+1, fileCount, completed, totalBytes, onProgress); uerr != nil {
 				return "lan", uploaded, uerr
 			}
+			completed += sizes[idx]
 			uploaded = append(uploaded, filepath.Base(p))
 		}
 		return "lan", uploaded, nil
 	}
 
-	for _, p := range paths {
-		name, uerr := relayUploadFile(ctx, ws, p)
+	for idx, p := range paths {
+		name, uerr := relayUploadFile(ctx, ws, p, txID, idx+1, fileCount, completed, totalBytes, onProgress)
 		if uerr != nil {
 			return "relay", uploaded, uerr
 		}
+		completed += sizes[idx]
 		uploaded = append(uploaded, name)
 	}
 	return "relay", uploaded, nil
@@ -255,7 +332,46 @@ func relayList(ctx context.Context, ws *websocket.Conn) ([]lanweb.File, error) {
 	return msg.Files, nil
 }
 
-func downloadLANFile(ctx context.Context, client *http.Client, lanBase string, f lanweb.File, outDir string) (string, error) {
+type progressIO struct {
+	r          io.Reader
+	txID       uint64
+	direction  string
+	channel    string
+	fileName   string
+	fileIndex  int
+	fileCount  int
+	baseBytes  int64
+	totalBytes int64
+	curBytes   int64
+	lastEmit   time.Time
+	onProgress func(TransferProgress)
+}
+
+func (p *progressIO) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if n > 0 && p.onProgress != nil {
+		p.curBytes += int64(n)
+		done := p.baseBytes + p.curBytes
+		now := time.Now()
+		if now.Sub(p.lastEmit) >= 120*time.Millisecond || (p.totalBytes > 0 && done >= p.totalBytes) {
+			p.lastEmit = now
+			p.onProgress(TransferProgress{
+				ID:         p.txID,
+				Direction:  p.direction,
+				Channel:    p.channel,
+				Stage:      "transferring",
+				FileName:   p.fileName,
+				FileIndex:  p.fileIndex,
+				FileCount:  p.fileCount,
+				BytesDone:  done,
+				BytesTotal: p.totalBytes,
+			})
+		}
+	}
+	return n, err
+}
+
+func downloadLANFile(ctx context.Context, client *http.Client, lanBase string, f lanweb.File, outDir string, txID uint64, fileIdx, fileCount int, completedBefore, totalBytes int64, onProgress func(TransferProgress)) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, lanBase+"/f/"+url.PathEscape(f.Name), nil)
 	if err != nil {
 		return "", err
@@ -274,14 +390,56 @@ func downloadLANFile(ctx context.Context, client *http.Client, lanBase string, f
 	if err != nil {
 		return "", err
 	}
+	if onProgress != nil {
+		onProgress(TransferProgress{
+			ID:         txID,
+			Direction:  "recv",
+			Channel:    "lan",
+			Stage:      "transferring",
+			FileName:   f.Name,
+			FileIndex:  fileIdx,
+			FileCount:  fileCount,
+			BytesDone:  completedBefore,
+			BytesTotal: totalBytes,
+		})
+	}
 	h := sha256.New()
-	_, err = io.Copy(io.MultiWriter(out, h), resp.Body)
+	src := io.Reader(resp.Body)
+	if onProgress != nil {
+		src = &progressIO{
+			r:          resp.Body,
+			txID:       txID,
+			direction:  "recv",
+			channel:    "lan",
+			fileName:   f.Name,
+			fileIndex:  fileIdx,
+			fileCount:  fileCount,
+			baseBytes:  completedBefore,
+			totalBytes: totalBytes,
+			lastEmit:   time.Now(),
+			onProgress: onProgress,
+		}
+	}
+	n, err := io.Copy(io.MultiWriter(out, h), src)
 	if cerr := out.Close(); err == nil {
 		err = cerr
 	}
 	if err != nil {
 		_ = os.Remove(tmp)
 		return "", err
+	}
+	if onProgress != nil {
+		onProgress(TransferProgress{
+			ID:         txID,
+			Direction:  "recv",
+			Channel:    "lan",
+			Stage:      "verifying",
+			FileName:   f.Name,
+			FileIndex:  fileIdx,
+			FileCount:  fileCount,
+			BytesDone:  completedBefore + n,
+			BytesTotal: totalBytes,
+		})
 	}
 	gotHex := hex.EncodeToString(h.Sum(nil))
 	if f.SHA256 != "" && gotHex != f.SHA256 {
@@ -295,21 +453,69 @@ func downloadLANFile(ctx context.Context, client *http.Client, lanBase string, f
 	return dest, nil
 }
 
-func uploadLANFile(ctx context.Context, client *http.Client, lanBase, path string) error {
+func uploadLANFile(ctx context.Context, client *http.Client, lanBase, path string, txID uint64, fileIdx, fileCount int, completedBefore, totalBytes int64, onProgress func(TransferProgress)) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	fname := filepath.Base(path)
+	if onProgress != nil {
+		onProgress(TransferProgress{
+			ID:         txID,
+			Direction:  "send",
+			Channel:    "lan",
+			Stage:      "transferring",
+			FileName:   fname,
+			FileIndex:  fileIdx,
+			FileCount:  fileCount,
+			BytesDone:  completedBefore,
+			BytesTotal: totalBytes,
+		})
+	}
 	pr, pw := io.Pipe()
 	mw := multipart.NewWriter(pw)
 	go func() {
-		fw, werr := mw.CreateFormFile("file", filepath.Base(path))
+		fw, werr := mw.CreateFormFile("file", fname)
+		var copied int64
 		if werr == nil {
-			_, werr = io.Copy(fw, f)
+			src := io.Reader(f)
+			if onProgress != nil {
+				src = &progressIO{
+					r:          f,
+					txID:       txID,
+					direction:  "send",
+					channel:    "lan",
+					fileName:   fname,
+					fileIndex:  fileIdx,
+					fileCount:  fileCount,
+					baseBytes:  completedBefore,
+					totalBytes: totalBytes,
+					lastEmit:   time.Now(),
+					onProgress: onProgress,
+				}
+			}
+			copied, werr = io.Copy(fw, src)
 		}
 		if cerr := mw.Close(); werr == nil {
 			werr = cerr
+		}
+		if werr == nil && onProgress != nil {
+			onProgress(TransferProgress{
+				ID:         txID,
+				Direction:  "send",
+				Channel:    "lan",
+				Stage:      "verifying",
+				FileName:   fname,
+				FileIndex:  fileIdx,
+				FileCount:  fileCount,
+				BytesDone:  completedBefore + copied,
+				BytesTotal: totalBytes,
+			})
 		}
 		_ = pw.CloseWithError(werr)
 	}()
@@ -318,6 +524,7 @@ func uploadLANFile(ctx context.Context, client *http.Client, lanBase, path strin
 		return err
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("X-File-Size", strconv.FormatInt(st.Size(), 10))
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -325,12 +532,12 @@ func uploadLANFile(ctx context.Context, client *http.Client, lanBase, path strin
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("upload %s: %s %s", filepath.Base(path), resp.Status, strings.TrimSpace(string(b)))
+		return fmt.Errorf("upload %s: %s %s", fname, resp.Status, strings.TrimSpace(string(b)))
 	}
 	return nil
 }
 
-func relayDownloadFile(ctx context.Context, ws *websocket.Conn, name, outDir string) (string, error) {
+func relayDownloadFile(ctx context.Context, ws *websocket.Conn, name, outDir string, txID uint64, fileIdx, fileCount int, completedBefore, totalBytes, fileSize int64, onProgress func(TransferProgress)) (string, error) {
 	reqB, _ := json.Marshal(map[string]string{"t": "get", "name": name})
 	if err := ws.Write(ctx, websocket.MessageText, reqB); err != nil {
 		return "", err
@@ -339,6 +546,8 @@ func relayDownloadFile(ctx context.Context, ws *websocket.Conn, name, outDir str
 	tmp := dest + ".part"
 	var out *os.File
 	h := sha256.New()
+	var written int64
+	lastEmit := time.Now()
 	cleanup := func() {
 		if out != nil {
 			_ = out.Close()
@@ -363,10 +572,30 @@ func relayDownloadFile(ctx context.Context, ws *websocket.Conn, name, outDir str
 			if _, err := out.Write(data); err != nil {
 				return "", err
 			}
+			written += int64(len(data))
+			if onProgress != nil {
+				now := time.Now()
+				done := completedBefore + written
+				if now.Sub(lastEmit) >= 120*time.Millisecond || (totalBytes > 0 && done >= totalBytes) {
+					lastEmit = now
+					onProgress(TransferProgress{
+						ID:         txID,
+						Direction:  "recv",
+						Channel:    "relay",
+						Stage:      "transferring",
+						FileName:   name,
+						FileIndex:  fileIdx,
+						FileCount:  fileCount,
+						BytesDone:  done,
+						BytesTotal: totalBytes,
+					})
+				}
+			}
 			continue
 		}
 		var msg struct {
 			T      string `json:"t"`
+			Size   int64  `json:"size"`
 			SHA256 string `json:"sha256"`
 			Msg    string `json:"msg"`
 		}
@@ -379,9 +608,38 @@ func relayDownloadFile(ctx context.Context, ws *websocket.Conn, name, outDir str
 			if err != nil {
 				return "", err
 			}
+			if totalBytes <= 0 && msg.Size > 0 {
+				totalBytes = completedBefore + msg.Size
+			}
+			if onProgress != nil {
+				onProgress(TransferProgress{
+					ID:         txID,
+					Direction:  "recv",
+					Channel:    "relay",
+					Stage:      "transferring",
+					FileName:   name,
+					FileIndex:  fileIdx,
+					FileCount:  fileCount,
+					BytesDone:  completedBefore,
+					BytesTotal: totalBytes,
+				})
+			}
 		case "get.end":
 			if out == nil {
 				return "", fmt.Errorf("missing get.begin")
+			}
+			if onProgress != nil {
+				onProgress(TransferProgress{
+					ID:         txID,
+					Direction:  "recv",
+					Channel:    "relay",
+					Stage:      "verifying",
+					FileName:   name,
+					FileIndex:  fileIdx,
+					FileCount:  fileCount,
+					BytesDone:  completedBefore + written,
+					BytesTotal: totalBytes,
+				})
 			}
 			if err := out.Close(); err != nil {
 				return "", err
@@ -403,7 +661,7 @@ func relayDownloadFile(ctx context.Context, ws *websocket.Conn, name, outDir str
 	}
 }
 
-func relayUploadFile(ctx context.Context, ws *websocket.Conn, path string) (string, error) {
+func relayUploadFile(ctx context.Context, ws *websocket.Conn, path string, txID uint64, fileIdx, fileCount int, completedBefore, totalBytes int64, onProgress func(TransferProgress)) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
@@ -413,7 +671,8 @@ func relayUploadFile(ctx context.Context, ws *websocket.Conn, path string) (stri
 	if err != nil {
 		return "", err
 	}
-	beginB, _ := json.Marshal(map[string]any{"t": "put.begin", "name": filepath.Base(path), "size": st.Size()})
+	fname := filepath.Base(path)
+	beginB, _ := json.Marshal(map[string]any{"t": "put.begin", "name": fname, "size": st.Size()})
 	if err := ws.Write(ctx, websocket.MessageText, beginB); err != nil {
 		return "", err
 	}
@@ -435,12 +694,46 @@ func relayUploadFile(ctx context.Context, ws *websocket.Conn, path string) (stri
 	if ready.T != "put.ready" {
 		return "", fmt.Errorf("unexpected response %q", ready.T)
 	}
+	if onProgress != nil {
+		onProgress(TransferProgress{
+			ID:         txID,
+			Direction:  "send",
+			Channel:    "relay",
+			Stage:      "transferring",
+			FileName:   fname,
+			FileIndex:  fileIdx,
+			FileCount:  fileCount,
+			BytesDone:  completedBefore,
+			BytesTotal: totalBytes,
+		})
+	}
 	buf := make([]byte, webChunk)
+	var sent int64
+	lastEmit := time.Now()
 	for {
 		n, rerr := f.Read(buf)
 		if n > 0 {
 			if werr := ws.Write(ctx, websocket.MessageBinary, buf[:n]); werr != nil {
 				return "", werr
+			}
+			sent += int64(n)
+			if onProgress != nil {
+				now := time.Now()
+				done := completedBefore + sent
+				if now.Sub(lastEmit) >= 120*time.Millisecond || (totalBytes > 0 && done >= totalBytes) {
+					lastEmit = now
+					onProgress(TransferProgress{
+						ID:         txID,
+						Direction:  "send",
+						Channel:    "relay",
+						Stage:      "transferring",
+						FileName:   fname,
+						FileIndex:  fileIdx,
+						FileCount:  fileCount,
+						BytesDone:  done,
+						BytesTotal: totalBytes,
+					})
+				}
 			}
 		}
 		if rerr == io.EOF {
@@ -449,6 +742,19 @@ func relayUploadFile(ctx context.Context, ws *websocket.Conn, path string) (stri
 		if rerr != nil {
 			return "", rerr
 		}
+	}
+	if onProgress != nil {
+		onProgress(TransferProgress{
+			ID:         txID,
+			Direction:  "send",
+			Channel:    "relay",
+			Stage:      "verifying",
+			FileName:   fname,
+			FileIndex:  fileIdx,
+			FileCount:  fileCount,
+			BytesDone:  completedBefore + sent,
+			BytesTotal: totalBytes,
+		})
 	}
 	if err := ws.Write(ctx, websocket.MessageText, []byte(`{"t":"put.end"}`)); err != nil {
 		return "", err

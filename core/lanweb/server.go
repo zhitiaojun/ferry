@@ -22,8 +22,10 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cwlindean/filetransfer/core/logging"
@@ -44,6 +46,25 @@ type File struct {
 	ModTime int64  `json:"mtime_ms"`
 }
 
+// Progress reports live HTTP or relay transfer progress from lanweb.
+type Progress struct {
+	ID         uint64
+	Direction  string // "send" | "recv"
+	Channel    string // "lan" | "relay"
+	Stage      string // "transferring" | "verifying"
+	FileName   string
+	BytesDone  int64
+	BytesTotal int64
+	Done       bool
+}
+
+var progressSeq atomic.Uint64
+
+// NextProgressID returns a unique monotonically increasing transfer progress ID.
+func NextProgressID() uint64 {
+	return progressSeq.Add(1)
+}
+
 // ScopedOptions configures a mode-scoped LAN web server for temporary share
 // sessions ("send" exposes only SharedFiles; "recv" accepts uploads into
 // RecvDir without exposing pre-existing files; "both" exposes RecvDir).
@@ -55,6 +76,7 @@ type ScopedOptions struct {
 	Token       string
 	Log         *logging.Logger
 	OnUploaded  func(File)
+	OnProgress  func(Progress)
 }
 
 // Server is the LAN web endpoint.
@@ -65,6 +87,7 @@ type Server struct {
 	deviceName string
 	log        *logging.Logger
 	onUploaded func(File)
+	onProgress func(Progress)
 
 	mu        sync.Mutex
 	files     map[string]File   // by name
@@ -116,6 +139,7 @@ func NewScoped(opts ScopedOptions) (*Server, error) {
 		deviceName: opts.DeviceName,
 		log:        opts.Log,
 		onUploaded: opts.OnUploaded,
+		onProgress: opts.OnProgress,
 		files:      map[string]File{},
 		filePaths:  map[string]string{},
 	}
@@ -163,6 +187,13 @@ func (s *Server) AllowUpload() bool { return s.mode != "send" }
 func (s *Server) NotifyUploaded(f File) {
 	if s.onUploaded != nil {
 		s.onUploaded(f)
+	}
+}
+
+// NotifyProgress emits a live transfer progress snapshot if OnProgress is set.
+func (s *Server) NotifyProgress(p Progress) {
+	if s.onProgress != nil {
+		s.onProgress(p)
 	}
 }
 
@@ -243,7 +274,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// device through ft.cwlindean.cn, so list/upload/download need CORS.
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-File-Size")
 	w.Header().Set("Access-Control-Max-Age", "600")
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
@@ -301,7 +332,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var saved []File
-	for {
+	for partIdx := 0; ; partIdx++ {
 		part, err := mr.NextPart()
 		if err == io.EOF {
 			break
@@ -315,7 +346,19 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 			_ = part.Close()
 			continue
 		}
-		f, err := s.save(name, part)
+		var expectedSize int64
+		if raw := strings.TrimSpace(part.Header.Get("X-File-Size")); raw != "" {
+			if n, perr := strconv.ParseInt(raw, 10, 64); perr == nil && n > 0 {
+				expectedSize = n
+			}
+		} else if partIdx == 0 {
+			if raw := strings.TrimSpace(r.Header.Get("X-File-Size")); raw != "" {
+				if n, perr := strconv.ParseInt(raw, 10, 64); perr == nil && n > 0 {
+					expectedSize = n
+				}
+			}
+		}
+		f, err := s.save(name, part, expectedSize)
 		_ = part.Close()
 		if err != nil {
 			http.Error(w, "save: "+err.Error(), http.StatusInternalServerError)
@@ -342,7 +385,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 
 // save streams the upload to a temporary file, hashes it, then renames it into
 // place. A name collision gets a numeric suffix instead of overwriting.
-func (s *Server) save(name string, r io.Reader) (File, error) {
+func (s *Server) save(name string, r io.Reader, expectedSize int64) (File, error) {
 	s.mu.Lock()
 	final := name
 	for i := 2; ; i++ {
@@ -356,19 +399,62 @@ func (s *Server) save(name string, r io.Reader) (File, error) {
 	}
 	s.mu.Unlock()
 
+	var txID uint64
+	if s.onProgress != nil {
+		txID = NextProgressID()
+		s.NotifyProgress(Progress{
+			ID:         txID,
+			Direction:  "recv",
+			Channel:    "lan",
+			Stage:      "transferring",
+			FileName:   final,
+			BytesDone:  0,
+			BytesTotal: expectedSize,
+		})
+		defer s.NotifyProgress(Progress{
+			ID:        txID,
+			Direction: "recv",
+			Channel:   "lan",
+			FileName:  final,
+			Done:      true,
+		})
+	}
+
 	tmp := filepath.Join(s.dir, "."+final+".part")
 	out, err := os.Create(tmp)
 	if err != nil {
 		return File{}, err
 	}
+	pr := &progressReader{
+		r:        r,
+		txID:     txID,
+		fileName: final,
+		total:    expectedSize,
+		notify:   s.onProgress,
+	}
 	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(out, h), r)
+	n, err := io.Copy(io.MultiWriter(out, h), pr)
 	if cerr := out.Close(); err == nil {
 		err = cerr
 	}
 	if err != nil {
 		_ = os.Remove(tmp)
 		return File{}, err
+	}
+	if s.onProgress != nil {
+		total := expectedSize
+		if n > total {
+			total = n
+		}
+		s.NotifyProgress(Progress{
+			ID:         txID,
+			Direction:  "recv",
+			Channel:    "lan",
+			Stage:      "verifying",
+			FileName:   final,
+			BytesDone:  n,
+			BytesTotal: total,
+		})
 	}
 	if err := os.Rename(tmp, filepath.Join(s.dir, final)); err != nil {
 		_ = os.Remove(tmp)
@@ -407,7 +493,110 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, name str
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", fmt.Sprint(info.Size()))
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+clean+"\"")
-	http.ServeContent(w, r, clean, info.ModTime(), f)
+
+	dst := w
+	if r.Method == http.MethodGet && s.onProgress != nil {
+		txID := NextProgressID()
+		total := info.Size()
+		s.NotifyProgress(Progress{
+			ID:         txID,
+			Direction:  "send",
+			Channel:    "lan",
+			Stage:      "transferring",
+			FileName:   clean,
+			BytesDone:  0,
+			BytesTotal: total,
+		})
+		prw := &progressResponseWriter{
+			ResponseWriter: w,
+			txID:           txID,
+			fileName:       clean,
+			total:          total,
+			notify:         s.onProgress,
+		}
+		defer s.NotifyProgress(Progress{
+			ID:        txID,
+			Direction: "send",
+			Channel:   "lan",
+			FileName:  clean,
+			Done:      true,
+		})
+		dst = prw
+	}
+	http.ServeContent(dst, r, clean, info.ModTime(), f)
+}
+
+type progressReader struct {
+	r        io.Reader
+	txID     uint64
+	fileName string
+	total    int64
+	done     int64
+	lastEmit time.Time
+	notify   func(Progress)
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if n > 0 && p.notify != nil {
+		p.done += int64(n)
+		now := time.Now()
+		if now.Sub(p.lastEmit) >= 120*time.Millisecond {
+			p.lastEmit = now
+			total := p.total
+			if total > 0 && p.done > total {
+				total = p.done
+			}
+			p.notify(Progress{
+				ID:         p.txID,
+				Direction:  "recv",
+				Channel:    "lan",
+				Stage:      "transferring",
+				FileName:   p.fileName,
+				BytesDone:  p.done,
+				BytesTotal: total,
+			})
+		}
+	}
+	return n, err
+}
+
+// progressResponseWriter wraps http.ResponseWriter intentionally without
+// io.ReaderFrom so http.ServeContent writes chunks through Write([]byte).
+type progressResponseWriter struct {
+	http.ResponseWriter
+	txID     uint64
+	fileName string
+	total    int64
+	done     int64
+	lastEmit time.Time
+	notify   func(Progress)
+}
+
+func (p *progressResponseWriter) Write(b []byte) (int, error) {
+	if cl := strings.TrimSpace(p.ResponseWriter.Header().Get("Content-Length")); cl != "" {
+		if n, err := strconv.ParseInt(cl, 10, 64); err == nil && n > 0 {
+			p.total = n
+		}
+	}
+	n, err := p.ResponseWriter.Write(b)
+	if n > 0 && p.notify != nil {
+		p.done += int64(n)
+		now := time.Now()
+		if now.Sub(p.lastEmit) >= 120*time.Millisecond || (p.total > 0 && p.done >= p.total) {
+			p.lastEmit = now
+			p.notify(Progress{
+				ID:         p.txID,
+				Direction:  "send",
+				Channel:    "lan",
+				Stage:      "transferring",
+				FileName:   p.fileName,
+				BytesDone:  p.done,
+				BytesTotal: p.total,
+			})
+		}
+	}
+	return n, err
 }
 
 // cleanName reduces a browser-supplied name to a safe base name.

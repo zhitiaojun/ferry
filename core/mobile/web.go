@@ -15,9 +15,12 @@ import (
 )
 
 var (
-	webMu sync.Mutex
-	webSV *lanweb.Server
-	webLn net.Listener
+	webMu     sync.Mutex
+	webSV     *lanweb.Server
+	webLn     net.Listener
+	webTxMu   sync.Mutex
+	webTxID   uint64
+	webTxSeq  uint64
 )
 
 // StartWebShare serves outDir over HTTP on the LAN and returns a JSON summary
@@ -44,7 +47,43 @@ func StartWebShare(outDir string, port int, hintJSON string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	srv, err := lanweb.New(outDir, "", logging.New(nil))
+	srv, err := lanweb.NewScoped(lanweb.ScopedOptions{
+		Mode:    "both",
+		RecvDir: outDir,
+		Log:     logging.New(nil),
+		OnProgress: func(p lanweb.Progress) {
+			webTxMu.Lock()
+			if p.Done {
+				if webTxID == p.ID || p.ID == 0 {
+					seq := webTxSeq
+					webTxID = 0
+					webTxSeq = 0
+					webTxMu.Unlock()
+					if seq != 0 {
+						endActiveTransfer(seq)
+					}
+					return
+				}
+				webTxMu.Unlock()
+				return
+			}
+			if webTxID != p.ID {
+				prevSeq := webTxSeq
+				seq := beginActiveTransfer(p.Direction, "网页快传", p.FileName, 1, p.BytesTotal)
+				webTxID = p.ID
+				webTxSeq = seq
+				webTxMu.Unlock()
+				if prevSeq != 0 {
+					endActiveTransfer(prevSeq)
+				}
+				updateActiveTransfer(seq, p.Stage, p.Channel, "网页快传", p.FileName, 1, 1, p.BytesDone, p.BytesTotal)
+				return
+			}
+			seq := webTxSeq
+			webTxMu.Unlock()
+			updateActiveTransfer(seq, p.Stage, p.Channel, "网页快传", p.FileName, 1, 1, p.BytesDone, p.BytesTotal)
+		},
+	})
 	if err != nil {
 		ln.Close()
 		return "", err
@@ -92,6 +131,14 @@ func StopWebShare() error {
 		webLn = nil
 	}
 	webSV = nil
+	webTxMu.Lock()
+	seq := webTxSeq
+	webTxID = 0
+	webTxSeq = 0
+	webTxMu.Unlock()
+	if seq != 0 {
+		endActiveTransfer(seq)
+	}
 	return nil
 }
 

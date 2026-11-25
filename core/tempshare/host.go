@@ -24,6 +24,36 @@ import (
 // DefaultBaseURL is the public Ferry website and relay base URL.
 const DefaultBaseURL = "https://ferry.cwlindean.cn"
 
+// TransferProgress reports live file transfer progress for a TempShare host or client.
+type TransferProgress struct {
+	ID         uint64
+	Direction  string // "send" | "recv"
+	Channel    string // "lan" | "relay"
+	Stage      string // "connecting" | "transferring" | "verifying"
+	FileName   string
+	FileIndex  int
+	FileCount  int
+	BytesDone  int64
+	BytesTotal int64
+	Done       bool
+}
+
+// HostActiveTransfer describes the transfer currently running inside a TempShare Host.
+type HostActiveTransfer struct {
+	Direction  string `json:"direction"`
+	Channel    string `json:"channel"`
+	Stage      string `json:"stage"`
+	FileName   string `json:"file_name"`
+	BytesDone  int64  `json:"bytes_done"`
+	BytesTotal int64  `json:"bytes_total"`
+	SpeedBPS   int64  `json:"speed_bps,omitempty"`
+}
+
+type txSpeedSample struct {
+	t     time.Time
+	bytes int64
+}
+
 // HostOptions configures a temporary transfer host session.
 type HostOptions struct {
 	BaseURL     string
@@ -34,20 +64,22 @@ type HostOptions struct {
 	RecvDir     string
 	LANHintIP   string
 	OnUploaded  func(lanweb.File)
+	OnProgress  func(TransferProgress)
 	Log         *logging.Logger
 }
 
 // HostStatus summarizes an active temporary transfer host session.
 type HostStatus struct {
-	Active        bool   `json:"active"`
-	Code          string `json:"code"`
-	ShareURL      string `json:"url"`
-	LANURL        string `json:"lan_url"`
-	Mode          string `json:"mode"`
-	FileCount     int    `json:"file_count"`
-	TTLSeconds    int    `json:"ttl_s"`
-	UploadedCount int    `json:"uploaded_count"`
-	LastFile      string `json:"last_file"`
+	Active        bool                `json:"active"`
+	Code          string              `json:"code"`
+	ShareURL      string              `json:"url"`
+	LANURL        string              `json:"lan_url"`
+	Mode          string              `json:"mode"`
+	FileCount     int                 `json:"file_count"`
+	TTLSeconds    int                 `json:"ttl_s"`
+	UploadedCount int                 `json:"uploaded_count"`
+	LastFile      string              `json:"last_file"`
+	ActiveTx      *HostActiveTransfer `json:"active_tx,omitempty"`
 }
 
 // Host owns a local lanweb server and a public temporary relay room.
@@ -69,6 +101,7 @@ type Host struct {
 	ln         net.Listener
 	httpClient *http.Client
 	log        *logging.Logger
+	onProgress func(TransferProgress)
 
 	cancel    context.CancelFunc
 	closeOnce sync.Once
@@ -76,6 +109,9 @@ type Host struct {
 	mu            sync.Mutex
 	uploadedCount int
 	lastFile      string
+	activeTxID    uint64
+	activeTx      *HostActiveTransfer
+	txSamples     []txSpeedSample
 }
 
 // SignCreate produces the Ed25519 signature required by POST /api/temp/create.
@@ -114,6 +150,22 @@ func StartHost(opts HostOptions) (*Host, error) {
 			}
 			if opts.OnUploaded != nil {
 				opts.OnUploaded(f)
+			}
+		},
+		OnProgress: func(p lanweb.Progress) {
+			if h != nil {
+				h.reportProgress(TransferProgress{
+					ID:         p.ID,
+					Direction:  p.Direction,
+					Channel:    p.Channel,
+					Stage:      p.Stage,
+					FileName:   p.FileName,
+					FileIndex:  1,
+					FileCount:  1,
+					BytesDone:  p.BytesDone,
+					BytesTotal: p.BytesTotal,
+					Done:       p.Done,
+				})
 			}
 		},
 	})
@@ -164,12 +216,61 @@ func StartHost(opts HostOptions) (*Host, error) {
 		ln:         ln,
 		httpClient: httpClient,
 		log:        opts.Log,
+		onProgress: opts.OnProgress,
 		cancel:     cancel,
 	}
 
 	go h.heartbeatLoop(ctx)
 	go h.relayLoop(ctx)
 	return h, nil
+}
+
+func (h *Host) reportProgress(p TransferProgress) {
+	if h == nil {
+		return
+	}
+	now := time.Now()
+	h.mu.Lock()
+	if p.Done {
+		if h.activeTxID == p.ID || p.ID == 0 {
+			h.activeTxID = 0
+			h.activeTx = nil
+			h.txSamples = nil
+		}
+	} else {
+		if h.activeTxID != p.ID || (len(h.txSamples) > 0 && p.BytesDone < h.txSamples[len(h.txSamples)-1].bytes) {
+			h.activeTxID = p.ID
+			h.txSamples = []txSpeedSample{{t: now, bytes: p.BytesDone}}
+		} else {
+			h.txSamples = append(h.txSamples, txSpeedSample{t: now, bytes: p.BytesDone})
+			for len(h.txSamples) > 2 && now.Sub(h.txSamples[0].t) > 2*time.Second {
+				h.txSamples = h.txSamples[1:]
+			}
+		}
+		var speedBPS int64
+		if p.Stage != "verifying" && len(h.txSamples) >= 2 {
+			first := h.txSamples[0]
+			dt := now.Sub(first.t).Seconds()
+			db := p.BytesDone - first.bytes
+			if dt >= 0.15 && db > 0 {
+				speedBPS = int64(float64(db) / dt)
+			}
+		}
+		h.activeTx = &HostActiveTransfer{
+			Direction:  p.Direction,
+			Channel:    p.Channel,
+			Stage:      p.Stage,
+			FileName:   p.FileName,
+			BytesDone:  p.BytesDone,
+			BytesTotal: p.BytesTotal,
+			SpeedBPS:   speedBPS,
+		}
+	}
+	cb := h.onProgress
+	h.mu.Unlock()
+	if cb != nil {
+		cb(p)
+	}
 }
 
 // Status returns a snapshot of the active session.
@@ -181,6 +282,11 @@ func (h *Host) Status() HostStatus {
 	upCount := h.uploadedCount
 	last := h.lastFile
 	exp := h.expiresAt
+	var activeCopy *HostActiveTransfer
+	if h.activeTx != nil {
+		cp := *h.activeTx
+		activeCopy = &cp
+	}
 	h.mu.Unlock()
 	rem := int(time.Until(exp).Seconds())
 	if rem < 0 {
@@ -196,6 +302,7 @@ func (h *Host) Status() HostStatus {
 		TTLSeconds:    rem,
 		UploadedCount: upCount,
 		LastFile:      last,
+		ActiveTx:      activeCopy,
 	}
 }
 
@@ -341,7 +448,7 @@ func (h *Host) relayOnce(ctx context.Context) error {
 		}
 	}()
 
-	return ServeWebHost(ctx, c, h.srv, h.log)
+	return ServeWebHostWithProgress(ctx, c, h.srv, h.log, h.reportProgress)
 }
 
 func collectLANURLs(srv *lanweb.Server, port int, hintIP string) []string {

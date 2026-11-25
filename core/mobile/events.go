@@ -289,17 +289,25 @@ type ActiveTransfer struct {
 	FileName   string `json:"file_name,omitempty"`
 	BytesDone  int64  `json:"bytes_done,omitempty"`
 	BytesTotal int64  `json:"bytes_total,omitempty"`
+	SpeedBPS   int64  `json:"speed_bps,omitempty"`
 	StartedAt  int64  `json:"started_at,omitempty"`
+}
+
+type txSpeedSample struct {
+	t     time.Time
+	bytes int64
 }
 
 var (
 	activeTxMu    sync.Mutex
 	activeTxSeq   uint64
 	activeTx      ActiveTransfer
+	txSamples     []txSpeedSample
 	lastProgressT time.Time
 )
 
 func beginActiveTransfer(dir, peer, fileName string, fileCount int, total int64) uint64 {
+	now := time.Now()
 	activeTxMu.Lock()
 	activeTxSeq++
 	activeTx = ActiveTransfer{
@@ -311,10 +319,11 @@ func beginActiveTransfer(dir, peer, fileName string, fileCount int, total int64)
 		FileCount:  fileCount,
 		FileName:   fileName,
 		BytesTotal: total,
-		StartedAt:  time.Now().UnixMilli(),
+		StartedAt:  now.UnixMilli(),
 	}
+	txSamples = []txSpeedSample{{t: now, bytes: 0}}
 	snap := activeTx
-	lastProgressT = time.Now()
+	lastProgressT = now
 	seq := activeTxSeq
 	activeTxMu.Unlock()
 	notifyProgress(snap)
@@ -351,10 +360,39 @@ func updateActiveTransfer(seq uint64, stage, channel, peer, fileName string, idx
 		activeTx.FileCount = cnt
 	}
 	if done >= 0 {
+		prevDone := activeTx.BytesDone
 		activeTx.BytesDone = done
+		if done < prevDone || len(txSamples) == 0 {
+			txSamples = []txSpeedSample{{t: now, bytes: done}}
+		} else {
+			txSamples = append(txSamples, txSpeedSample{t: now, bytes: done})
+			for len(txSamples) > 2 && now.Sub(txSamples[0].t) > 2*time.Second {
+				txSamples = txSamples[1:]
+			}
+		}
 	}
 	if total > 0 {
 		activeTx.BytesTotal = total
+	}
+	if activeTx.Stage == "verifying" {
+		activeTx.SpeedBPS = 0
+	} else {
+		var spd int64
+		if len(txSamples) >= 2 {
+			first := txSamples[0]
+			dt := now.Sub(first.t).Seconds()
+			db := activeTx.BytesDone - first.bytes
+			if dt >= 0.15 && db > 0 {
+				spd = int64(float64(db) / dt)
+			}
+		}
+		if spd == 0 && activeTx.BytesDone > 0 && activeTx.StartedAt > 0 {
+			elapsed := float64(now.UnixMilli()-activeTx.StartedAt) / 1000.0
+			if elapsed >= 0.5 {
+				spd = int64(float64(activeTx.BytesDone) / elapsed)
+			}
+		}
+		activeTx.SpeedBPS = spd
 	}
 	shouldNotify := major || now.Sub(lastProgressT) >= 150*time.Millisecond
 	var snap ActiveTransfer
@@ -373,6 +411,7 @@ func endActiveTransfer(seq uint64) {
 	cleared := false
 	if activeTxSeq == seq {
 		activeTx = ActiveTransfer{}
+		txSamples = nil
 		cleared = true
 	}
 	activeTxMu.Unlock()

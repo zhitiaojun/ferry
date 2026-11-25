@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -14,8 +15,11 @@ import (
 )
 
 var (
-	tempMu   sync.Mutex
-	tempHost *tempshare.Host
+	tempMu       sync.Mutex
+	tempHost     *tempshare.Host
+	tempHostTxMu sync.Mutex
+	tempHostTxID uint64
+	tempHostSeq  uint64
 )
 
 // StartTempShare starts an HTTPS-accessible temporary transfer session
@@ -58,6 +62,42 @@ func StartTempShare(baseURL, keyPath, deviceName, mode, filePathsJSON, outDir, h
 				recordReceivedFrom(outDir, "web", "临时快传", []string{filepath.Join(outDir, f.Name)}, f.Size)
 			}
 		},
+		OnProgress: func(p tempshare.TransferProgress) {
+			tempHostTxMu.Lock()
+			if p.Done {
+				if tempHostTxID == p.ID || p.ID == 0 {
+					seq := tempHostSeq
+					tempHostTxID = 0
+					tempHostSeq = 0
+					tempHostTxMu.Unlock()
+					if seq != 0 {
+						endActiveTransfer(seq)
+					}
+					return
+				}
+				tempHostTxMu.Unlock()
+				return
+			}
+			if tempHostTxID != p.ID {
+				prevSeq := tempHostSeq
+				fc := p.FileCount
+				if fc < 1 {
+					fc = 1
+				}
+				seq := beginActiveTransfer(p.Direction, "网页快传", p.FileName, fc, p.BytesTotal)
+				tempHostTxID = p.ID
+				tempHostSeq = seq
+				tempHostTxMu.Unlock()
+				if prevSeq != 0 {
+					endActiveTransfer(prevSeq)
+				}
+				updateActiveTransfer(seq, p.Stage, p.Channel, "网页快传", p.FileName, p.FileIndex, fc, p.BytesDone, p.BytesTotal)
+				return
+			}
+			seq := tempHostSeq
+			tempHostTxMu.Unlock()
+			updateActiveTransfer(seq, p.Stage, p.Channel, "网页快传", p.FileName, p.FileIndex, p.FileCount, p.BytesDone, p.BytesTotal)
+		},
 	})
 	if err != nil {
 		return "", err
@@ -77,6 +117,14 @@ func StopTempShare() error {
 	h := tempHost
 	tempHost = nil
 	tempMu.Unlock()
+	tempHostTxMu.Lock()
+	seq := tempHostSeq
+	tempHostTxID = 0
+	tempHostSeq = 0
+	tempHostTxMu.Unlock()
+	if seq != 0 {
+		endActiveTransfer(seq)
+	}
 	if h != nil {
 		return h.Close()
 	}
@@ -126,7 +174,18 @@ func TempShareDownloadAll(shareURL, outDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	via, saved, err := tempshare.DownloadAll(ctx, sess, outDir)
+	peerLabel := sess.Name
+	if peerLabel == "" {
+		peerLabel = "临时快传"
+	}
+	txSeq := beginActiveTransfer("recv", peerLabel, "", 0, 0)
+	defer endActiveTransfer(txSeq)
+
+	via, saved, err := tempshare.DownloadAllWithProgress(ctx, sess, outDir, func(p tempshare.TransferProgress) {
+		if !p.Done {
+			updateActiveTransfer(txSeq, p.Stage, p.Channel, peerLabel, p.FileName, p.FileIndex, p.FileCount, p.BytesDone, p.BytesTotal)
+		}
+	})
 	if err != nil {
 		return "", err
 	}
@@ -147,20 +206,44 @@ func TempShareUploadFiles(shareURL, filePathsJSON string) (string, error) {
 	if err := json.Unmarshal([]byte(filePathsJSON), &paths); err != nil {
 		return "", fmt.Errorf("bad file list: %w", err)
 	}
+	var totalBytes int64
+	firstFile := ""
+	if len(paths) > 0 {
+		firstFile = filepath.Base(paths[0])
+		for _, p := range paths {
+			if st, err := os.Stat(p); err == nil {
+				totalBytes += st.Size()
+			}
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 	sess, err := tempshare.ResolveByURL(ctx, shareURL)
 	if err != nil {
 		return "", err
 	}
-	via, uploaded, err := tempshare.UploadFiles(ctx, sess, paths)
+	peerLabel := sess.Name
+	if peerLabel == "" {
+		peerLabel = "临时快传"
+	}
+	txSeq := beginActiveTransfer("send", peerLabel, firstFile, len(paths), totalBytes)
+	defer endActiveTransfer(txSeq)
+
+	start := time.Now()
+	via, uploaded, err := tempshare.UploadFilesWithProgress(ctx, sess, paths, func(p tempshare.TransferProgress) {
+		if !p.Done {
+			updateActiveTransfer(txSeq, p.Stage, p.Channel, peerLabel, p.FileName, p.FileIndex, p.FileCount, p.BytesDone, p.BytesTotal)
+		}
+	})
 	if err != nil {
 		return "", err
 	}
 	b, _ := json.Marshal(map[string]any{
-		"ok":    true,
-		"via":   via,
-		"files": uploaded,
+		"ok":          true,
+		"via":         via,
+		"files":       uploaded,
+		"bytes":       totalBytes,
+		"duration_ms": time.Since(start).Milliseconds(),
 	})
 	return string(b), nil
 }

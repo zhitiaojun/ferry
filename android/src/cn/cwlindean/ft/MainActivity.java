@@ -160,6 +160,15 @@ public class MainActivity extends Activity {
     private File tempSendStageDir;
     private TextView tempTtlTv;
     private TextView tempUploadTv;
+    private LinearLayout tempTxBox;
+    private TextView tempTxTitleTv;
+    private ProgressBar tempTxBar;
+    private TextView tempTxMetaTv;
+    private LinearLayout tempJoinTxBox;
+    private TextView tempJoinTxTitleTv;
+    private ProgressBar tempJoinTxBar;
+    private TextView tempJoinTxMetaTv;
+    private Button tempJoinActionBtn;
     private boolean lanSearching;
     private String signalState = "offline";
     private final Set<String> cloudOnlineSet = new HashSet<>();
@@ -1048,7 +1057,8 @@ public class MainActivity extends Activity {
         activeTransferCard.addView(txProgressBar, pbLp);
 
         txMetricsTv = label("准备传输数据…", 11, cOnSurfaceVariant, false);
-        txMetricsTv.setSingleLine(true);
+        txMetricsTv.setSingleLine(false);
+        txMetricsTv.setMaxLines(2);
         txMetricsTv.setEllipsize(TextUtils.TruncateAt.END);
         LinearLayout.LayoutParams tmLp = new LinearLayout.LayoutParams(MATCH, WRAP);
         tmLp.topMargin = dp(8);
@@ -2977,6 +2987,34 @@ public class MainActivity extends Activity {
             upLp.topMargin = dp(6);
             sheet.addView(tempUploadTv, upLp);
 
+            tempTxBox = new LinearLayout(this);
+            tempTxBox.setOrientation(LinearLayout.VERTICAL);
+            tempTxBox.setPadding(dp(12), dp(10), dp(12), dp(10));
+            tempTxBox.setBackground(roundBox(cSurfaceAlt, cPrimary, 12));
+            tempTxBox.setVisibility(View.GONE);
+            tempTxTitleTv = label("正在传输…", 12, cOnSurface, true);
+            tempTxTitleTv.setSingleLine(true);
+            tempTxTitleTv.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+            tempTxBox.addView(tempTxTitleTv, new LinearLayout.LayoutParams(MATCH, WRAP));
+            tempTxBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+            tempTxBar.setMax(1000);
+            tempTxBar.setIndeterminate(true);
+            tempTxBar.setProgressTintList(ColorStateList.valueOf(cPrimary));
+            tempTxBar.setIndeterminateTintList(ColorStateList.valueOf(cPrimary));
+            tempTxBar.setProgressBackgroundTintList(ColorStateList.valueOf(cBorder));
+            LinearLayout.LayoutParams tpbLp = new LinearLayout.LayoutParams(MATCH, dp(5));
+            tpbLp.topMargin = dp(6);
+            tempTxBox.addView(tempTxBar, tpbLp);
+            tempTxMetaTv = label("", 11, cOnSurfaceVariant, false);
+            tempTxMetaTv.setSingleLine(false);
+            tempTxMetaTv.setMaxLines(2);
+            LinearLayout.LayoutParams tmLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+            tmLp.topMargin = dp(6);
+            tempTxBox.addView(tempTxMetaTv, tmLp);
+            LinearLayout.LayoutParams txbLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+            txbLp.topMargin = dp(10);
+            sheet.addView(tempTxBox, txbLp);
+
             LinearLayout btnRow = new LinearLayout(this);
             btnRow.setOrientation(LinearLayout.HORIZONTAL);
             LinearLayout.LayoutParams brLp = new LinearLayout.LayoutParams(MATCH, WRAP);
@@ -2997,9 +3035,18 @@ public class MainActivity extends Activity {
 
             ui.removeCallbacks(tempPollTask);
             ui.postDelayed(tempPollTask, 2000);
+            pollActiveTransferOnce();
         }
 
-        dlg.setOnDismissListener(d -> ui.removeCallbacks(tempPollTask));
+        dlg.setOnDismissListener(d -> {
+            ui.removeCallbacks(tempPollTask);
+            tempTtlTv = null;
+            tempUploadTv = null;
+            tempTxBox = null;
+            tempTxTitleTv = null;
+            tempTxBar = null;
+            tempTxMetaTv = null;
+        });
         dlg.setContentView(sheet);
         Window w = dlg.getWindow();
         if (w != null) {
@@ -3127,6 +3174,42 @@ public class MainActivity extends Activity {
         bodyBox.setOrientation(LinearLayout.VERTICAL);
         sheet.addView(bodyBox, new LinearLayout.LayoutParams(MATCH, WRAP));
 
+        tempJoinTxBox = new LinearLayout(this);
+        tempJoinTxBox.setOrientation(LinearLayout.VERTICAL);
+        tempJoinTxBox.setPadding(dp(12), dp(10), dp(12), dp(10));
+        tempJoinTxBox.setBackground(roundBox(cSurfaceAlt, cPrimary, 12));
+        tempJoinTxBox.setVisibility(View.GONE);
+        tempJoinTxTitleTv = label("准备传输…", 12, cOnSurface, true);
+        tempJoinTxTitleTv.setSingleLine(true);
+        tempJoinTxTitleTv.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        tempJoinTxBox.addView(tempJoinTxTitleTv, new LinearLayout.LayoutParams(MATCH, WRAP));
+        tempJoinTxBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        tempJoinTxBar.setMax(1000);
+        tempJoinTxBar.setIndeterminate(true);
+        tempJoinTxBar.setProgressTintList(ColorStateList.valueOf(cPrimary));
+        tempJoinTxBar.setIndeterminateTintList(ColorStateList.valueOf(cPrimary));
+        tempJoinTxBar.setProgressBackgroundTintList(ColorStateList.valueOf(cBorder));
+        LinearLayout.LayoutParams jpbLp = new LinearLayout.LayoutParams(MATCH, dp(5));
+        jpbLp.topMargin = dp(6);
+        tempJoinTxBox.addView(tempJoinTxBar, jpbLp);
+        tempJoinTxMetaTv = label("", 11, cOnSurfaceVariant, false);
+        tempJoinTxMetaTv.setSingleLine(false);
+        tempJoinTxMetaTv.setMaxLines(2);
+        LinearLayout.LayoutParams jmLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        jmLp.topMargin = dp(6);
+        tempJoinTxBox.addView(tempJoinTxMetaTv, jmLp);
+        LinearLayout.LayoutParams jtxLp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        jtxLp.topMargin = dp(12);
+        sheet.addView(tempJoinTxBox, jtxLp);
+
+        dlg.setOnDismissListener(d -> {
+            tempJoinTxBox = null;
+            tempJoinTxTitleTv = null;
+            tempJoinTxBar = null;
+            tempJoinTxMetaTv = null;
+            tempJoinActionBtn = null;
+        });
+
         dlg.setContentView(sheet);
         Window w = dlg.getWindow();
         if (w != null) {
@@ -3172,10 +3255,13 @@ public class MainActivity extends Activity {
                             }
                         }
                         final Button dlBtn = filledBtn("全部下载到手机", cPrimaryPressed, cOnPrimary);
+                        tempJoinActionBtn = dlBtn;
                         dlBtn.setEnabled(count > 0);
                         dlBtn.setOnClickListener(v -> {
                             dlBtn.setEnabled(false);
                             dlBtn.setText("正在下载…");
+                            startKeepAlive("临时快传下载中");
+                            startProgressPolling();
                             new Thread(() -> {
                                 try {
                                     String res = Mobile.tempShareDownloadAll(shareUrl, inboxDir().getAbsolutePath());
@@ -3184,6 +3270,10 @@ public class MainActivity extends Activity {
                                     int n = saved == null ? 0 : saved.length();
                                     pollReceivedOnce();
                                     ui.post(() -> {
+                                        pollActiveTransferOnce();
+                                        if (!recvRunning && !webRunning && !sendBusyFlag) {
+                                            stopKeepAlive();
+                                        }
                                         toast("已通过" + viaLabel + "下载 " + n + " 个文件");
                                         if (dlg.isShowing()) {
                                             dlg.dismiss();
@@ -3191,6 +3281,10 @@ public class MainActivity extends Activity {
                                     });
                                 } catch (Exception e) {
                                     ui.post(() -> {
+                                        pollActiveTransferOnce();
+                                        if (!recvRunning && !webRunning && !sendBusyFlag) {
+                                            stopKeepAlive();
+                                        }
                                         dlBtn.setEnabled(true);
                                         dlBtn.setText("全部下载到手机");
                                         toast("下载失败：" + e.getMessage());
@@ -3205,6 +3299,7 @@ public class MainActivity extends Activity {
                         TextView info = label("对方正在等待接收文件，上传后不会保存设备配对记录。", 13, cOnSurfaceVariant, false);
                         bodyBox.addView(info, new LinearLayout.LayoutParams(MATCH, WRAP));
                         Button pickBtn = filledBtn("选择文件发送给对方", cPrimaryPressed, cOnPrimary);
+                        tempJoinActionBtn = pickBtn;
                         pickBtn.setOnClickListener(v -> {
                             pendingTempJoinUrl = shareUrl;
                             Intent i = new Intent(Intent.ACTION_GET_CONTENT);
@@ -3235,6 +3330,12 @@ public class MainActivity extends Activity {
             return;
         }
         toast("正在发送 " + uris.size() + " 个文件…");
+        if (tempJoinActionBtn != null) {
+            tempJoinActionBtn.setEnabled(false);
+            tempJoinActionBtn.setText("正在上传…");
+        }
+        startKeepAlive("临时快传上传中");
+        startProgressPolling();
         new Thread(() -> {
             File stageDir = new File(new File(getCacheDir(), "temp-upload"), String.valueOf(System.nanoTime()));
             List<File> copied = new ArrayList<>();
@@ -3247,15 +3348,43 @@ public class MainActivity extends Activity {
                 }
                 String raw = Mobile.tempShareUploadFiles(shareUrl, arr.toString());
                 JSONObject o = new JSONObject(raw);
-                String viaLabel = "lan".equals(o.optString("via", "")) ? "局域网直连" : "云端中继";
+                String via = o.optString("via", "relay");
+                String viaLabel = "lan".equals(via) ? "局域网直连" : "云端中继";
+                long bytes = o.optLong("bytes", 0L);
+                long durMs = o.optLong("duration_ms", 0L);
+                JSONArray upFiles = o.optJSONArray("files");
+                int cnt = upFiles != null ? upFiles.length() : uris.size();
+                String first = (upFiles != null && upFiles.length() > 0) ? upFiles.optString(0, "临时快传文件") : "临时快传文件";
+                String recTitle = cnt > 1 ? first + " 等 " + cnt + " 个文件" : first;
+                String spdSuffix = "";
+                if (durMs >= 200L && bytes > 0L) {
+                    spdSuffix = " · " + fmtSpeed((bytes * 1000L) / durMs);
+                }
+                final String doneMsg = "已通过" + viaLabel + "发送 " + cnt + " 个文件" + spdSuffix;
                 ui.post(() -> {
-                    toast("已通过" + viaLabel + "发送 " + uris.size() + " 个文件");
+                    pollActiveTransferOnce();
+                    if (!recvRunning && !webRunning && !sendBusyFlag) {
+                        stopKeepAlive();
+                    }
+                    addRecentEntry(new ReceivedEntry(recTitle, "", "", via, bytes,
+                            System.currentTimeMillis(), "send", "临时快传"));
+                    toast(doneMsg);
                     if (tempJoinDialog != null && tempJoinDialog.isShowing()) {
                         tempJoinDialog.dismiss();
                     }
                 });
             } catch (Exception e) {
-                ui.post(() -> toast("发送失败：" + e.getMessage()));
+                ui.post(() -> {
+                    pollActiveTransferOnce();
+                    if (!recvRunning && !webRunning && !sendBusyFlag) {
+                        stopKeepAlive();
+                    }
+                    if (tempJoinActionBtn != null) {
+                        tempJoinActionBtn.setEnabled(true);
+                        tempJoinActionBtn.setText("选择文件发送给对方");
+                    }
+                    toast("发送失败：" + e.getMessage());
+                });
             } finally {
                 for (File f : copied) {
                     deleteTree(f, f.getParentFile());
@@ -4463,6 +4592,12 @@ public class MainActivity extends Activity {
             boolean active = o.optBoolean("active", false);
             if (!active) {
                 activeTransferCard.setVisibility(View.GONE);
+                if (tempTxBox != null) {
+                    tempTxBox.setVisibility(View.GONE);
+                }
+                if (tempJoinTxBox != null) {
+                    tempJoinTxBox.setVisibility(View.GONE);
+                }
                 if (!sendBusyFlag) {
                     stopProgressPolling();
                 }
@@ -4481,6 +4616,7 @@ public class MainActivity extends Activity {
             String fName = o.optString("file_name", "");
             long done = o.optLong("bytes_done", 0);
             long total = o.optLong("bytes_total", 0);
+            long speedBps = o.optLong("speed_bps", 0);
             long startedAt = o.optLong("started_at", 0);
 
             String head = "recv".equals(dir) ? "正在接收" : "正在发送";
@@ -4506,16 +4642,20 @@ public class MainActivity extends Activity {
             txSubTv.setText(sb.toString());
 
             boolean determinate = total > 0 && ("transferring".equals(stage) || "verifying".equals(stage) || done > 0);
+            int progressPromille = 0;
             if (determinate) {
+                progressPromille = (int) Math.max(0, Math.min(1000, (done * 1000L) / total));
                 txProgressBar.setIndeterminate(false);
-                int p = (int) Math.max(0, Math.min(1000, (done * 1000L) / total));
-                txProgressBar.setProgress(p);
+                txProgressBar.setProgress(progressPromille);
             } else {
                 txProgressBar.setIndeterminate(true);
             }
 
             long nowMs = System.currentTimeMillis();
             long elapsedMs = startedAt > 0 && nowMs > startedAt ? nowMs - startedAt : 0L;
+            if (speedBps <= 0L && done > 0L && elapsedMs >= 500L && !"verifying".equals(stage)) {
+                speedBps = (done * 1000L) / elapsedMs;
+            }
             StringBuilder mb = new StringBuilder();
             if (total > 0) {
                 int pct = (int) Math.max(0, Math.min(100, (done * 100L) / total));
@@ -4525,20 +4665,53 @@ public class MainActivity extends Activity {
             } else {
                 mb.append("正在建立传输通道…");
             }
+            if (speedBps > 0L && !"verifying".equals(stage)) {
+                mb.append(" · ").append(fmtSpeed(speedBps));
+            }
             if (elapsedMs >= 1000L) {
                 mb.append(" · 已用 ").append(formatDurationSec(elapsedMs / 1000L));
             }
-            if (total > 0 && done > 0 && done < total && elapsedMs >= 1200L) {
-                long remSec = ((total - done) * elapsedMs) / (done * 1000L);
+            if (total > 0 && done > 0 && done < total && !"verifying".equals(stage)) {
+                long remSec = -1L;
+                if (speedBps > 0L) {
+                    remSec = (total - done) / speedBps;
+                } else if (elapsedMs >= 1200L) {
+                    remSec = ((total - done) * elapsedMs) / (done * 1000L);
+                }
                 if (remSec >= 0L && remSec < 86400L) {
                     mb.append(" · 预计剩余 ").append(formatDurationSec(remSec));
                 }
             }
-            txMetricsTv.setText(mb.toString());
+            String metricsText = mb.toString();
+            txMetricsTv.setText(metricsText);
             activeTransferCard.setVisibility(View.VISIBLE);
+
+            String dialogTitle = ("recv".equals(dir) ? "接收中" : "发送中")
+                    + (channel.isEmpty() ? "" : "（" + pathLabel(channel) + "）")
+                    + (fName.isEmpty() ? "" : " · " + fName);
+            updateTempDialogProgress(tempTxBox, tempTxTitleTv, tempTxBar, tempTxMetaTv,
+                    dialogTitle, determinate, progressPromille, metricsText);
+            updateTempDialogProgress(tempJoinTxBox, tempJoinTxTitleTv, tempJoinTxBar, tempJoinTxMetaTv,
+                    dialogTitle, determinate, progressPromille, metricsText);
         } catch (Exception e) {
             Log.w(TAG, "applyActiveTransferJson", e);
         }
+    }
+
+    private static void updateTempDialogProgress(LinearLayout box, TextView titleTv, ProgressBar bar, TextView metaTv,
+                                                 String title, boolean determinate, int progressPromille, String meta) {
+        if (box == null || titleTv == null || bar == null || metaTv == null) {
+            return;
+        }
+        box.setVisibility(View.VISIBLE);
+        titleTv.setText(title);
+        if (determinate) {
+            bar.setIndeterminate(false);
+            bar.setProgress(progressPromille);
+        } else {
+            bar.setIndeterminate(true);
+        }
+        metaTv.setText(meta);
     }
 
     private static String stageLabel(String stage) {
@@ -4588,11 +4761,13 @@ public class MainActivity extends Activity {
                 JSONArray files = o.optJSONArray("files");
                 int n = files != null ? files.length() : 0;
                 long bytes = o.optLong("bytes", 0);
+                long durMs = o.optLong("duration_ms", 0);
                 String first = n > 0 ? files.optString(0, "已发送文件") : "已发送文件";
                 String recTitle = n > 1 ? first + " 等 " + n + " 个文件" : first;
                 addRecentEntry(new ReceivedEntry(recTitle, "", "", path, bytes,
                         System.currentTimeMillis(), "send", targetName));
-                showSendBanner(path, "已发送 · " + recTitle + " (" + fmtBytes(bytes) + ")", false);
+                String spd = (durMs >= 200L && bytes > 0L) ? (" · " + fmtSpeed((bytes * 1000L) / durMs)) : "";
+                showSendBanner(path, "已发送 · " + recTitle + " (" + fmtBytes(bytes) + spd + ")", false);
             } catch (Exception e) {
                 showSendBanner("", raw, false);
             }
@@ -5471,6 +5646,9 @@ public class MainActivity extends Activity {
         if ("relay".equalsIgnoreCase(path)) {
             return "服务器中继";
         }
+        if ("web".equalsIgnoreCase(path)) {
+            return "网页快传";
+        }
         if ("fail".equalsIgnoreCase(path)) {
             return "失败";
         }
@@ -5674,6 +5852,22 @@ public class MainActivity extends Activity {
             return String.format(Locale.US, "%.1f MB", n / 1048576.0);
         }
         return String.format(Locale.US, "%.2f GB", n / 1073741824.0);
+    }
+
+    private static String fmtSpeed(long bps) {
+        if (bps <= 0L) {
+            return "";
+        }
+        if (bps < 1024L) {
+            return bps + " B/s";
+        }
+        if (bps < 1048576L) {
+            return String.format(Locale.US, "%.1f KB/s", bps / 1024.0);
+        }
+        if (bps < 1073741824L) {
+            return String.format(Locale.US, "%.1f MB/s", bps / 1048576.0);
+        }
+        return String.format(Locale.US, "%.2f GB/s", bps / 1073741824.0);
     }
 
     private void copyText(String label, String value, String okMsg) {
