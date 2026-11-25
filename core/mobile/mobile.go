@@ -10,11 +10,13 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -63,6 +65,7 @@ type receiver struct {
 
 // Device is one peer seen on the LAN (plain fields for gomobile).
 type Device struct {
+	ID    string `json:"ID,omitempty"`
 	Name  string
 	Addr  string
 	Iface string
@@ -373,8 +376,15 @@ func (r *receiver) handle(ctx context.Context, nc net.Conn) {
 	recordReceivedFrom(r.outDir, "lan", pairing.SanitizeName(s.Peer.Name), res.Files, res.Bytes)
 }
 
+func discoverNoHintError(goos string, hint *discovery.Hint) error {
+	if goos == "android" && hint == nil {
+		return errors.New("当前未连接 Wi-Fi 或局域网，无法搜索局域网设备")
+	}
+	return nil
+}
+
 // Discover waits timeoutMS for LAN announcements and returns a JSON array of
-// devices (name, addr, iface). It announces this device's name too.
+// devices (id, name, addr, iface). It announces this device's receiver port if running.
 func Discover(name string, timeoutMS int, hintJSON string) (string, error) {
 	name = pairing.SanitizeName(name)
 	if name == "" {
@@ -383,12 +393,25 @@ func Discover(name string, timeoutMS int, hintJSON string) (string, error) {
 	if timeoutMS <= 0 {
 		timeoutMS = 3000
 	}
+	hint := parseHint(hintJSON)
+	if err := discoverNoHintError(runtime.GOOS, hint); err != nil {
+		return "", err
+	}
+
+	devID := identity.DeviceID(name)
+	rcvPort := 0
+	mu.Lock()
+	if rcv != nil {
+		devID = rcv.devID
+		rcvPort = portOf(rcv.ln.Addr())
+	}
+	mu.Unlock()
+
 	timeout := time.Duration(timeoutMS) * time.Millisecond
 	ctx, cancel := context.WithTimeout(context.Background(), timeout+time.Second)
 	defer cancel()
-	hint := parseHint(hintJSON)
 	l, err := discovery.Listen(discovery.Config{
-		DeviceID: identity.DeviceID(name),
+		DeviceID: devID,
 		Name:     name,
 		Hint:     hint,
 	})
@@ -398,24 +421,40 @@ func Discover(name string, timeoutMS int, hintJSON string) (string, error) {
 	defer l.Close()
 	go func() { _ = l.Run(ctx) }()
 
-	announceCtx, stopAnnounce := context.WithCancel(ctx)
-	defer stopAnnounce()
-	go func() {
-		_ = discovery.Announce(announceCtx, discovery.Config{
-			DeviceID: identity.DeviceID(name),
-			Name:     name,
-			Port:     1, // discovery-only: no TCP service in this call
-			Hint:     hint,
-		})
-	}()
+	if rcvPort > 0 {
+		announceCtx, stopAnnounce := context.WithCancel(ctx)
+		defer stopAnnounce()
+		go func() {
+			_ = discovery.Announce(announceCtx, discovery.Config{
+				DeviceID: devID,
+				Name:     name,
+				Port:     rcvPort,
+				Hint:     hint,
+			})
+		}()
+	}
 
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		time.Sleep(100 * time.Millisecond)
 	}
-	devices := make([]Device, 0, 8)
-	for _, d := range l.Devices() {
-		devices = append(devices, Device{Name: d.Name, Addr: d.TCPAddr, Iface: d.Iface})
+	rawDevs := l.Devices()
+	devices := make([]Device, 0, len(rawDevs))
+	changed := false
+	lanPeersMu.Lock()
+	for _, d := range rawDevs {
+		idHex := hex.EncodeToString(d.DeviceID[:])
+		devices = append(devices, Device{ID: idHex, Name: d.Name, Addr: d.TCPAddr, Iface: d.Iface})
+		if d.TCPAddr != "" {
+			if prev, ok := lanPeers[idHex]; !ok || prev.TCPAddr != d.TCPAddr {
+				changed = true
+			}
+			lanPeers[idHex] = lanPeerEntry{TCPAddr: d.TCPAddr, LastSeen: d.LastSeen}
+		}
+	}
+	lanPeersMu.Unlock()
+	if changed {
+		notifyConnectionChanged()
 	}
 	b, err := json.Marshal(devices)
 	if err != nil {

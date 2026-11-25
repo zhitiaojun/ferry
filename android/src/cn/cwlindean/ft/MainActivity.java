@@ -102,10 +102,12 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -4733,13 +4735,15 @@ public class MainActivity extends Activity {
                     if (name.isEmpty()) {
                         name = "设备 " + (id.length() > 6 ? id.substring(0, 6) : id);
                     }
-                    entries.add(new PeerEntry(name, id));
+                    entries.add(new PeerEntry(name, id, id));
                 }
                 ui.post(() -> {
                     pairedEntries.clear();
                     pairedEntries.addAll(entries);
+                    prunePairedLanEntries();
                     if (selectedTarget.isEmpty() && !entries.isEmpty()) {
                         selectedTarget = entries.get(0).value;
+                        saveLastPeer(selectedTarget);
                     }
                     renderPeerSection();
                     if (shareDialog != null && shareDialog.isShowing()) {
@@ -4752,8 +4756,38 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void prunePairedLanEntries() {
+        Map<String, String> pairedById = new HashMap<>();
+        for (PeerEntry p : pairedEntries) {
+            if (!p.deviceId.isEmpty()) {
+                pairedById.put(p.deviceId, p.value);
+            }
+        }
+        Iterator<PeerEntry> it = lanEntries.iterator();
+        while (it.hasNext()) {
+            PeerEntry e = it.next();
+            if (!e.deviceId.isEmpty() && pairedById.containsKey(e.deviceId)) {
+                String pairedVal = pairedById.get(e.deviceId);
+                lanOnlineSet.add(pairedVal);
+                if (e.value.equals(selectedTarget)) {
+                    selectedTarget = pairedVal;
+                    saveLastPeer(selectedTarget);
+                }
+                if (e.value.equals(shareSelectedTarget)) {
+                    shareSelectedTarget = pairedVal;
+                }
+                it.remove();
+            }
+        }
+    }
+
     private void discover() {
         if (lanSearching) {
+            return;
+        }
+        final String hint = lanHint();
+        if (hint == null || hint.trim().isEmpty()) {
+            toast("当前未连接 Wi-Fi，无法搜索局域网设备");
             return;
         }
         lanSearching = true;
@@ -4761,7 +4795,7 @@ public class MainActivity extends Activity {
         final String name = deviceName;
         new Thread(() -> {
             try {
-                String json = Mobile.discover(name, 3000, lanHint());
+                String json = Mobile.discover(name, 3000, hint);
                 JSONArray arr = new JSONArray(json);
                 final List<PeerEntry> found = new ArrayList<>();
                 for (int i = 0; i < arr.length(); i++) {
@@ -4774,15 +4808,36 @@ public class MainActivity extends Activity {
                     if (dn.isEmpty()) {
                         dn = addr;
                     }
-                    found.add(new PeerEntry(dn + " (LAN)", addr));
+                    String id = o.optString("ID", "").trim().toLowerCase(Locale.US);
+                    found.add(new PeerEntry(dn + " (LAN)", addr, id));
                 }
                 ui.post(() -> {
                     lanSearching = false;
+                    Map<String, String> pairedById = new HashMap<>();
+                    for (PeerEntry p : pairedEntries) {
+                        if (!p.deviceId.isEmpty()) {
+                            pairedById.put(p.deviceId, p.value);
+                        }
+                    }
+                    List<PeerEntry> unpairedFound = new ArrayList<>();
+                    int pairedFoundCount = 0;
+                    for (PeerEntry e : found) {
+                        if (!e.deviceId.isEmpty() && pairedById.containsKey(e.deviceId)) {
+                            pairedFoundCount++;
+                            lanOnlineSet.add(pairedById.get(e.deviceId));
+                        } else {
+                            unpairedFound.add(e);
+                        }
+                    }
                     lanEntries.clear();
-                    lanEntries.addAll(found);
-                    if (!found.isEmpty() && selectedTarget.isEmpty()) {
-                        selectedTarget = found.get(0).value;
-                    } else if (found.isEmpty()) {
+                    lanEntries.addAll(unpairedFound);
+                    if (!unpairedFound.isEmpty()) {
+                        if (selectedTarget.isEmpty()) {
+                            selectedTarget = unpairedFound.get(0).value;
+                        }
+                    } else if (pairedFoundCount > 0) {
+                        toast("已在局域网发现 " + pairedFoundCount + " 台已配对设备");
+                    } else {
                         toast("同一局域网暂无可直连设备");
                     }
                     renderPeerSection();
@@ -4813,8 +4868,20 @@ public class MainActivity extends Activity {
         sendCard.setVisibility(hasAny ? View.VISIBLE : View.GONE);
         unpairedCard.setVisibility(hasAny ? View.GONE : View.VISIBLE);
 
-        if (selectedTarget.isEmpty() && !combined.isEmpty()) {
-            selectedTarget = combined.get(0).value;
+        if (!combined.isEmpty()) {
+            boolean foundSel = false;
+            for (PeerEntry e : combined) {
+                if (e.value.equals(selectedTarget)) {
+                    foundSel = true;
+                    break;
+                }
+            }
+            if (!foundSel) {
+                selectedTarget = combined.get(0).value;
+                if (HEX64.matcher(selectedTarget).matches()) {
+                    saveLastPeer(selectedTarget);
+                }
+            }
         }
         if (sendTargetTitle != null) {
             sendTargetTitle.setText("发往 " + resolveTargetName(selectedTarget));
@@ -4994,13 +5061,15 @@ public class MainActivity extends Activity {
 
     private void prefillLastPeer() {
         String last = getPreferences(MODE_PRIVATE).getString("lastPeer", "");
-        if (!last.isEmpty() && selectedTarget.isEmpty()) {
+        if (!last.isEmpty() && selectedTarget.isEmpty() && HEX64.matcher(last).matches()) {
             selectedTarget = last;
         }
     }
 
     private void saveLastPeer(String peer) {
-        getPreferences(MODE_PRIVATE).edit().putString("lastPeer", peer).apply();
+        if (peer == null || peer.isEmpty() || HEX64.matcher(peer).matches()) {
+            getPreferences(MODE_PRIVATE).edit().putString("lastPeer", peer == null ? "" : peer).apply();
+        }
     }
 
     private String loadSavedName() {
@@ -5059,10 +5128,16 @@ public class MainActivity extends Activity {
     private static class PeerEntry {
         final String name;
         final String value;
+        final String deviceId;
 
         PeerEntry(String name, String value) {
+            this(name, value, "");
+        }
+
+        PeerEntry(String name, String value, String deviceId) {
             this.name = name;
             this.value = value;
+            this.deviceId = deviceId == null ? "" : deviceId.trim().toLowerCase(Locale.US);
         }
     }
 

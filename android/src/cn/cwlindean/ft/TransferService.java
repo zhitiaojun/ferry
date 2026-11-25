@@ -968,16 +968,27 @@ public class TransferService extends Service implements EventListener {
                     if (n == null || !ni.isUp() || ni.isLoopback() || ni.isVirtual()) {
                         continue;
                     }
-                    if (n.startsWith("rmnet") || n.startsWith("p2p") || n.startsWith("dummy")
-                            || n.startsWith("tun") || n.startsWith("ip6tnl")) {
+                    String nLow = n.toLowerCase(Locale.US);
+                    if (nLow.startsWith("rmnet") || nLow.startsWith("v4-rmnet") || nLow.startsWith("r_rmnet")
+                            || nLow.startsWith("ccmni") || nLow.startsWith("v4-ccmni") || nLow.startsWith("clat")
+                            || nLow.startsWith("wwan") || nLow.startsWith("epdg") || nLow.startsWith("seth_lte")
+                            || nLow.startsWith("p2p") || nLow.startsWith("dummy")
+                            || nLow.startsWith("tun") || nLow.startsWith("tap")
+                            || nLow.startsWith("ip6tnl") || nLow.startsWith("ip_vti")
+                            || nLow.startsWith("sit") || nLow.equals("lo")) {
                         continue;
                     }
-                    if (pass == 0 && !n.toLowerCase(Locale.US).startsWith("wlan")) {
+                    if (pass == 0 && !nLow.startsWith("wlan")) {
                         continue;
                     }
                     for (InterfaceAddress ia : ni.getInterfaceAddresses()) {
                         InetAddress a = ia.getAddress();
                         if (a instanceof Inet4Address && !a.isLoopbackAddress() && !a.isLinkLocalAddress()) {
+                            byte[] raw = a.getAddress();
+                            if (raw.length == 4 && (raw[0] & 0xFF) == 198
+                                    && ((raw[1] & 0xFF) == 18 || (raw[1] & 0xFF) == 19)) {
+                                continue;
+                            }
                             JSONObject o = new JSONObject();
                             o.put("name", n);
                             o.put("index", ni.getIndex());

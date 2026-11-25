@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/cwlindean/filetransfer/core/discovery"
 	"github.com/cwlindean/filetransfer/core/identity"
 )
 
@@ -136,5 +138,35 @@ func TestReceiverLANConfirmAndVerifiedPairedBypass(t *testing.T) {
 	}
 	if _, serr := os.Stat(filepath.Join(outDir, "temp.txt")); serr != nil {
 		t.Fatalf("expected temp.txt for paired sender: %v", serr)
+	}
+}
+
+func TestDiscoverNoHintAndDeviceIDSerialization(t *testing.T) {
+	if err := discoverNoHintError("android", nil); err == nil {
+		t.Fatal("expected error on android without hint")
+	} else if !strings.Contains(err.Error(), "Wi-Fi") {
+		t.Fatalf("unexpected android error message: %v", err)
+	}
+	if err := discoverNoHintError("android", &discovery.Hint{Name: "wlan0", IP: "192.168.1.2", Prefix: 24}); err != nil {
+		t.Fatalf("unexpected error with valid hint: %v", err)
+	}
+	if err := discoverNoHintError("windows", nil); err != nil {
+		t.Fatalf("unexpected error on windows without hint: %v", err)
+	}
+
+	b, err := json.Marshal(Device{
+		ID:    "abcd",
+		Name:  "HyperX",
+		Addr:  "192.168.1.5:1234",
+		Iface: "wlan0",
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal(Device): %v", err)
+	}
+	got := string(b)
+	for _, want := range []string{`"ID":"abcd"`, `"Name":"HyperX"`, `"Addr":"192.168.1.5:1234"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("marshaled Device = %s, missing %s", got, want)
+		}
 	}
 }
