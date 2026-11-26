@@ -91,8 +91,8 @@ func (a *app) triggerLANScan(onDone func(found int)) bool {
 	a.lanScanning = true
 	keyPath := a.keyPath
 	port := a.port
-	devName := a.deviceName()
 	a.mu.Unlock()
+	devName := a.deviceName()
 	a.notifyMainPaint()
 
 	go func() {

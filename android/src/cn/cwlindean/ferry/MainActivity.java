@@ -1143,7 +1143,7 @@ public class MainActivity extends Activity {
         heroSubRow.addView(sendTargetTitle, new LinearLayout.LayoutParams(0, WRAP, 1f));
         heroCol.addView(heroSubRow, hsrLp);
 
-        sendCard.addView(heroCol, new LinearLayout.LayoutParams(0, WRAP, 1f));
+        sendPickTile.addView(heroCol, new LinearLayout.LayoutParams(0, WRAP, 1f));
 
         FrameLayout heroIconBox = new FrameLayout(this);
         heroIconBox.setBackground(roundBox(Color.parseColor("#29FFFFFF"), 0, 12));
@@ -1152,7 +1152,7 @@ public class MainActivity extends Activity {
         heroIconBox.addView(heroIv, new FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER));
         LinearLayout.LayoutParams hiLp = new LinearLayout.LayoutParams(dp(42), dp(42));
         hiLp.leftMargin = dp(12);
-        sendCard.addView(heroIconBox, hiLp);
+        sendPickTile.addView(heroIconBox, hiLp);
 
         // Compact 3-button secondary row: 发剪贴板 | 发文字 | 发文件夹 (NO equal 2x2 grid)
         LinearLayout secRow = new LinearLayout(this);
@@ -3870,7 +3870,7 @@ public class MainActivity extends Activity {
 
     private void refreshTargetStatusUi() {
         String stText = "离线";
-        int dotClr = cOutline;
+        int dotClr = Color.parseColor("#99FFFFFF");
         boolean online = false;
         if (selectedTarget == null || selectedTarget.isEmpty()) {
             stText = "未选择";

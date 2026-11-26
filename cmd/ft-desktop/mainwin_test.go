@@ -215,3 +215,26 @@ func TestAppPeerPauseOwnerOnlyAndHumanBytes(t *testing.T) {
 		t.Fatalf("expected transferring after peer resume, got %+v", cur)
 	}
 }
+
+func TestTriggerLANScanNoDeadlock(t *testing.T) {
+	a := newApp(t.TempDir(), 18899)
+	a.name = "TestPC"
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- a.triggerLANScan(nil)
+	}()
+
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Fatal("triggerLANScan() = false, want true")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("triggerLANScan deadlocked")
+	}
+
+	if got := a.deviceName(); got != "TestPC" {
+		t.Fatalf("deviceName() = %q, want TestPC", got)
+	}
+}
