@@ -252,4 +252,5 @@ M5 剩余：无（G5 已出，2026-11-08 收尾记录见文末）。
   - 浏览器与临时快传流式 + 暂停/取消对齐：`core/lanweb` 分块流式上传与 `#tx-pause`、`core/tempshare` `get/put` 控制帧不断 WS、`server/assets/app.html` `file.slice` + `showSaveFilePicker` + 纯 JS 增量 SHA-256、桌面快传窗增加暂停/取消。
   - 自定义服务器配置 UI + 极简「关于」页：桌面与 Android 设置页新增信令 WSS / 临时快传 HTTPS / STUN 配置与恢复默认；双端新增第 4 标签「关于」。
   - Android 包名从 `cn.cwlindean.ft` 迁移至 `cn.cwlindean.ferry`；Windows 注册表迁移至 `HKCU\Software\Ferry` 并为 `ft-setup` 注入发布版本号；`site/index.html` 清理旧 `ft` 示例；IPv6 明确未改动与暂未实现。
-- [ ] **待完成**：等待 GitHub Actions 构建 `v1.0.0-beta.37` 产物；若需让公网门户与网页下载同步更新 `server/assets/app.html`，待用户后续单独审批再部署 BJ 服务端。
+- [x] **BJ 服务端已同步部署 `v1.0.0-beta.37`（2026-11-26 11:44）**：交叉编译 `linux/amd64` 二进制（`7,340,192 B`，sha256 `a464399652146483764c525abaccf2b61575f3d80bf75758d29646686a3b8386`），备份前版至 `/opt/ft-server/ft-server.bak-20261126-beta37` 后原子替换；`ft-server -version` = `ft-server v1.0.0-beta.37`，`MemoryCurrent=1499136`（上限 256M），`https://ferry.cwlindean.cn/healthz` 200，`https://ferry.cwlindean.cn/transfer` 已含 `makeSha256`/`showSaveFilePicker`/`dl-pause`（未改动 openresty 与 80/443）。
+- [ ] **待完成**：等待 GitHub Actions 构建完成 `v1.0.0-beta.37` 双端发行产物。
