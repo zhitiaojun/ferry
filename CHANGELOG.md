@@ -1,5 +1,10 @@
 # 变更日志
 
+## 1.0.1 — 2026-11-26
+
+- **新增 Android 32 位 (`armeabi-v7a`) 安装包**：CI 与本地构建脚本同步产出 `ferry-android-arm64.apk`（`arm64-v8a`，16 KB 页对齐）与 `ferry-android-armv7a.apk`（`armeabi-v7a`），兼容更多老旧 32 位 Android 设备。
+- **32 位 ARM 编译兼容性修复**：将 `core/lanweb.MaxUpload` 显式定义为 `int64`，并在 CI 测试任务增加 `linux/arm GOARM=7` 的 `go vet` 检查。
+
 ## 1.0.0 — 2026-11-26
 
 首个正式开源版本（采用 **AGPL-3.0** 协议发布）：
