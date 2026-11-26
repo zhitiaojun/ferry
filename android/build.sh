@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Build the minimal M2 Android APK without Gradle.
+# Build Ferry Android APKs without Gradle.
 #
 #   ./android/build.sh
 #
-# Output: android/build/ferry-android-arm64.apk (arm64-v8a only).
+# Outputs:
+#   android/build/ferry-android-arm64.apk   (arm64-v8a, 16 KB ELF page aligned)
+#   android/build/ferry-android-armv7a.apk  (armeabi-v7a)
+#
 # Requires the local toolchain under .tools/ (JDK 17, Android SDK 34,
 # NDK r27c, Go, gomobile). Native tools get Windows-style paths (cygpath -m).
 set -euo pipefail
@@ -31,22 +34,26 @@ VER_CODE=${VER_CODE:-1000}
 echo "== go build =="
 (cd "$ROOT" && go build ./...)
 
-echo "== gomobile bind =="
+echo "== gomobile bind (arm64-v8a & armeabi-v7a) =="
 mkdir -p "$OUT"
-(cd "$ROOT" && CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384" gomobile.exe bind -target=android/arm64 -androidapi 21 -ldflags="-X github.com/zhitiaojun/ferry/core/mobile.Version=${VER_NAME}" -o android/ft.aar ./core/mobile)
+(cd "$ROOT" && CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384" gomobile.exe bind -target=android/arm64 -androidapi 21 -ldflags="-X github.com/zhitiaojun/ferry/core/mobile.Version=${VER_NAME}" -o android/ft-arm64.aar ./core/mobile)
+(cd "$ROOT" && gomobile.exe bind -target=android/arm -androidapi 21 -ldflags="-X github.com/zhitiaojun/ferry/core/mobile.Version=${VER_NAME}" -o android/ft-armv7a.aar ./core/mobile)
 
 echo "== extract AAR =="
 rm -rf "$WORK"
 mkdir -p "$WORK/aar" "$WORK/classes" "$WORK/dex"
-python - "$(m "$ROOT/android/ft.aar")" "$(m "$WORK/aar")" "$(m "$WORK")" <<'PY'
+python - "$(m "$ROOT/android/ft-arm64.aar")" "$(m "$ROOT/android/ft-armv7a.aar")" "$(m "$WORK/aar")" "$(m "$WORK")" <<'PY'
 import sys, zipfile
-aar, aarout, work = sys.argv[1], sys.argv[2], sys.argv[3]
-with zipfile.ZipFile(aar) as z:
+aar64, aar32, aarout, work = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+with zipfile.ZipFile(aar64) as z:
     z.extract("classes.jar", aarout)
     z.extract("jni/arm64-v8a/libgojni.so", work)
+with zipfile.ZipFile(aar32) as z:
+    z.extract("jni/armeabi-v7a/libgojni.so", work)
 PY
-mkdir -p "$WORK/lib/arm64-v8a"
+mkdir -p "$WORK/lib/arm64-v8a" "$WORK/lib/armeabi-v7a"
 cp "$WORK/jni/arm64-v8a/libgojni.so" "$WORK/lib/arm64-v8a/libgojni.so"
+cp "$WORK/jni/armeabi-v7a/libgojni.so" "$WORK/lib/armeabi-v7a/libgojni.so"
 
 echo "== javac =="
 cd "$ROOT"
@@ -69,13 +76,6 @@ echo "== aapt2 link =="
   --manifest "$(m "$ROOT/android/AndroidManifest.xml")" \
   -I "$(m "$AJAR")" --min-sdk-version 21 --target-sdk-version 34 \
   --version-code "$VER_CODE" --version-name "$VER_NAME" "$(m "$WORK/res.zip")"
-
-echo "== package =="
-cp "$WORK/dex/classes.dex" "$WORK/classes.dex"
-(cd "$WORK" && python "$ROOT/android/zipadd.py" base.apk classes.dex=classes.dex lib/arm64-v8a/libgojni.so=lib/arm64-v8a/libgojni.so)
-
-echo "== zipalign =="
-"$BT/zipalign.exe" -f -p 4 "$(m "$WORK/base.apk")" "$(m "$WORK/aligned.apk")"
 
 echo "== key =="
 if [ -f "$TOOLS/ferry-release.keystore" ] && [ -f "$TOOLS/ferry-signing.env" ]; then
@@ -100,14 +100,22 @@ else
   fi
 fi
 
-echo "== sign =="
-"$JDK/bin/java" -jar "$(m "$BT/lib/apksigner.jar")" sign \
-  --ks "$(m "$KS")" --ks-key-alias "$ALIAS" \
-  --ks-pass "pass:$KSPASS" --key-pass "pass:$KPASS" \
-  --out "$(m "$OUT/ferry-android-arm64.apk")" "$(m "$WORK/aligned.apk")"
+cp "$WORK/dex/classes.dex" "$WORK/classes.dex"
 
-"$JDK/bin/java" -jar "$(m "$BT/lib/apksigner.jar")" verify --print-certs "$(m "$OUT/ferry-android-arm64.apk")" | head -4
+for pair in "arm64:arm64-v8a" "armv7a:armeabi-v7a"; do
+  arch=${pair%%:*}
+  abi=${pair##*:}
+  echo "== package & sign ($abi) =="
+  cp "$WORK/base.apk" "$WORK/base-${arch}.apk"
+  (cd "$WORK" && python "$ROOT/android/zipadd.py" "base-${arch}.apk" classes.dex=classes.dex "lib/${abi}/libgojni.so=lib/${abi}/libgojni.so")
+  "$BT/zipalign.exe" -f -p 4 "$(m "$WORK/base-${arch}.apk")" "$(m "$WORK/aligned-${arch}.apk")"
+  "$JDK/bin/java" -jar "$(m "$BT/lib/apksigner.jar")" sign \
+    --ks "$(m "$KS")" --ks-key-alias "$ALIAS" \
+    --ks-pass "pass:$KSPASS" --key-pass "pass:$KPASS" \
+    --out "$(m "$OUT/ferry-android-${arch}.apk")" "$(m "$WORK/aligned-${arch}.apk")"
+  "$JDK/bin/java" -jar "$(m "$BT/lib/apksigner.jar")" verify --print-certs "$(m "$OUT/ferry-android-${arch}.apk")" | head -4
+done
 
 echo
-echo "APK: $OUT/ferry-android-arm64.apk"
-ls -l "$OUT/ferry-android-arm64.apk"
+echo "APKs:"
+ls -l "$OUT"/ferry-android-*.apk

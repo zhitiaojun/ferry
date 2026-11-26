@@ -1,6 +1,6 @@
 # `android/`
 
-轻渡 Ferry Android 原生客户端（包名：`cn.cwlindean.ferry`），采用原生 Java UI（Material Design 3）+ `gomobile` 编译 Go 核心（`./core/mobile`），支持 Android 5.0+（`arm64-v8a`，16 KB ELF 页对齐），无 Gradle 依赖。
+轻渡 Ferry Android 原生客户端（包名：`cn.cwlindean.ferry`），采用原生 Java UI（Material Design 3）+ `gomobile` 编译 Go 核心（`./core/mobile`），支持 Android 5.0+（分别构建 `arm64-v8a`（16 KB ELF 页对齐）与 `armeabi-v7a` 双架构 APK：`ferry-android-arm64.apk`、`ferry-android-armv7a.apk`），无 Gradle 依赖。
 
 ## 本地构建依赖
 

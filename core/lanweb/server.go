@@ -35,7 +35,7 @@ import (
 
 // MaxUpload bounds one browser upload (single file) to keep a hostile page
 // from filling the disk in one request.
-const MaxUpload = 4 << 30 // 4 GiB
+const MaxUpload int64 = 4 << 30 // 4 GiB
 
 // TokenLen is the number of random bytes behind the page path.
 const TokenLen = 16

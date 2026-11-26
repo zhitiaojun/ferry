@@ -81,7 +81,7 @@
 | 端 / 组件 | 产物 / 入口 | 核心特性 |
 | --- | --- | --- |
 | **Windows 桌面端** | `ferry-setup-windows-amd64.exe` | 纯 Win32 GDI + SDF 矢量图标 + DWM Acrylic 弹窗（零 WebView2 依赖）、托盘常驻、拖拽浮窗投放、Windows 11 一级右键菜单（`ftmenu.dll`）、文件/文件夹/剪贴板互传、自定义服务器配置与传输台账 |
-| **Android 原生端** | `ferry-android-arm64.apk` | 原生 Java（Material Design 3）+ `gomobile` Go 核心（`cn.cwlindean.ferry`，API 21+，16 KB 页对齐），支持文件/文件夹树发送、剪贴板文字、系统「分享」面板接入、扫码配对与系统公共 `Download/Ferry` 落盘 |
+| **Android 原生端** | `ferry-android-arm64.apk` / `ferry-android-armv7a.apk` | 原生 Java（Material Design 3）+ `gomobile` Go 核心（`cn.cwlindean.ferry`，API 21+，`arm64-v8a` 支持 16 KB 页对齐 + 兼容 32 位 `armeabi-v7a`），支持文件/文件夹树发送、剪贴板文字、系统「分享」面板接入、扫码配对与公共 `Download/Ferry` 落盘 |
 | **浏览器临时快传** | `/transfer` · `/app` · `/s/<token>` | 免装客户端一码双用：`file.slice` 分块流式上传、`showSaveFilePicker` + 纯 JS 增量 SHA-256 流式下载、暂停/恢复与取消（不中断控制信道），支持一键切换同 Wi-Fi 直连 |
 | **跨平台 CLI & MCP** | `ferry`（`./cmd/ferry`） | Windows / Linux / macOS 命令行收发、常驻守护进程（`ferry daemon`）、临时快传（`ferry share`）与标准 stdio **MCP Server**（`ferry mcp`） |
 | **信令与中继服务端** | `ferry-server-linux-amd64`（`./cmd/ft-server`） | 单二进制、全内存状态、内置 `-memlimit`；集成 WebSocket 信令（`/signal`）、加密中继（`/relay`）、匿名快传门户与双端口 UDP STUN 服务 |
@@ -100,7 +100,7 @@
   ```powershell
   ferry-setup-windows-amd64.exe -uninstall
   ```
-- **Android**：下载并安装 `ferry-android-arm64.apk`（`arm64-v8a`，Android 5.0+）。首次使用建议按引导授予存储/通知/相机权限，并在省电设置中放行后台保活以减少休眠断连。
+- **Android**：现代设备下载安装 `ferry-android-arm64.apk`（`arm64-v8a`），老旧 32 位设备可选 `ferry-android-armv7a.apk`（`armeabi-v7a`，均支持 Android 5.0+）。首次使用建议按引导授予存储/通知/相机权限，并在省电设置中放行后台保活以减少休眠断连。
 - **Linux / macOS CLI**：下载 `ferry-linux-amd64` 或通过源码编译后放入 `PATH`。
 
 ### 2. 设备配对
@@ -244,7 +244,7 @@ go build -trimpath -ldflags="-H=windowsgui" -o out/ferry-desktop-windows-amd64.e
 ```
 
 ```bash
-# 构建 Android APK（arm64-v8a，自动应用 16 KB 页对齐并签名）
+# 构建 Android APK（同时生成 arm64-v8a 与 armeabi-v7a 双架构安装包并签名）
 VER_NAME=1.0.0 ./android/build.sh
 ```
 

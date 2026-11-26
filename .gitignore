@@ -8,6 +8,8 @@
 # Generated Android artifacts (rebuilt by android/build.sh).
 android/ft.aar
 android/ft-sources.jar
+android/ft-*.aar
+android/ft-*-sources.jar
 android/build/
 nohup.out
 

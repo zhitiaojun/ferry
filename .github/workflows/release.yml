@@ -19,6 +19,7 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go vet ./...
+      - run: GOOS=linux GOARCH=arm GOARM=7 go vet ./core/... ./cmd/ferry ./cmd/ft-server
       - run: go test -count=1 ./...
 
   build-windows:
@@ -111,7 +112,7 @@ jobs:
           path: out/linux/*
 
   build-android:
-    name: Build Android APK (arm64-v8a, 16KB aligned)
+    name: Build Android APKs (arm64-v8a / armeabi-v7a)
     needs: test
     runs-on: ubuntu-latest
     steps:
@@ -146,7 +147,7 @@ jobs:
           go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20261011034528-197770444867
           go install golang.org/x/mobile/cmd/gobind@v0.0.0-20261011034528-197770444867
           PATH="$(go env GOPATH)/bin:$PATH" gomobile init
-      - name: Build and Sign Android APK
+      - name: Build and Sign Android APKs
         shell: bash
         env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
@@ -168,17 +169,21 @@ jobs:
 
           mkdir -p "$OUT" "$WORK/aar" "$WORK/classes" "$WORK/dex"
           CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384" \
-            gomobile bind -target=android/arm64 -androidapi 21 -ldflags="-X github.com/zhitiaojun/ferry/core/mobile.Version=${VER_NAME}" -o android/ft.aar ./core/mobile
+            gomobile bind -target=android/arm64 -androidapi 21 -ldflags="-X github.com/zhitiaojun/ferry/core/mobile.Version=${VER_NAME}" -o "$WORK/ft-arm64.aar" ./core/mobile
+          gomobile bind -target=android/arm -androidapi 21 -ldflags="-X github.com/zhitiaojun/ferry/core/mobile.Version=${VER_NAME}" -o "$WORK/ft-armv7a.aar" ./core/mobile
 
-          python3 - android/ft.aar "$WORK/aar" "$WORK" <<'PY'
+          python3 - "$WORK/ft-arm64.aar" "$WORK/ft-armv7a.aar" "$WORK/aar" "$WORK" <<'PY'
           import sys, zipfile
-          aar, aarout, work = sys.argv[1], sys.argv[2], sys.argv[3]
-          with zipfile.ZipFile(aar) as z:
+          aar64, aar32, aarout, work = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+          with zipfile.ZipFile(aar64) as z:
               z.extract("classes.jar", aarout)
               z.extract("jni/arm64-v8a/libgojni.so", work)
+          with zipfile.ZipFile(aar32) as z:
+              z.extract("jni/armeabi-v7a/libgojni.so", work)
           PY
-          mkdir -p "$WORK/lib/arm64-v8a"
+          mkdir -p "$WORK/lib/arm64-v8a" "$WORK/lib/armeabi-v7a"
           cp "$WORK/jni/arm64-v8a/libgojni.so" "$WORK/lib/arm64-v8a/libgojni.so"
+          cp "$WORK/jni/armeabi-v7a/libgojni.so" "$WORK/lib/armeabi-v7a/libgojni.so"
 
           find android/src -name '*.java' > "$WORK/sources.txt"
           javac -encoding UTF-8 --release 8 -Xlint:-options \
@@ -196,10 +201,6 @@ jobs:
             --manifest android/AndroidManifest.xml \
             -I "$AJAR" --min-sdk-version 21 --target-sdk-version 34 \
             --version-code "$VER_CODE" --version-name "$VER_NAME" "$WORK/res.zip"
-
-          cp "$WORK/dex/classes.dex" "$WORK/classes.dex"
-          (cd "$WORK" && python3 "$GITHUB_WORKSPACE/android/zipadd.py" base.apk classes.dex=classes.dex lib/arm64-v8a/libgojni.so=lib/arm64-v8a/libgojni.so)
-          "$BT/zipalign" -f -p 4 "$WORK/base.apk" "$WORK/aligned.apk"
 
           if [ -n "${ANDROID_KEYSTORE_B64:-}" ]; then
             printf '%s' "$ANDROID_KEYSTORE_B64" | tr -d '\r\n ' | base64 -d > "$WORK/release.keystore"
@@ -219,15 +220,24 @@ jobs:
               -dname "CN=Ferry CI,O=Ferry,C=CN" >/dev/null 2>&1
           fi
 
-          java -jar "$BT/lib/apksigner.jar" sign \
-            --ks "$KS" --ks-key-alias "$ALIAS" \
-            --ks-pass "pass:$KSPASS" --key-pass "pass:$KPASS" \
-            --out "$OUT/ferry-android-arm64.apk" "$WORK/aligned.apk"
-          java -jar "$BT/lib/apksigner.jar" verify --print-certs "$OUT/ferry-android-arm64.apk"
+          cp "$WORK/dex/classes.dex" "$WORK/classes.dex"
+
+          for pair in "arm64:arm64-v8a" "armv7a:armeabi-v7a"; do
+            arch="${pair%%:*}"
+            abi="${pair##*:}"
+            cp "$WORK/base.apk" "$WORK/base-${arch}.apk"
+            (cd "$WORK" && python3 "$GITHUB_WORKSPACE/android/zipadd.py" "base-${arch}.apk" classes.dex=classes.dex "lib/${abi}/libgojni.so=lib/${abi}/libgojni.so")
+            "$BT/zipalign" -f -p 4 "$WORK/base-${arch}.apk" "$WORK/aligned-${arch}.apk"
+            java -jar "$BT/lib/apksigner.jar" sign \
+              --ks "$KS" --ks-key-alias "$ALIAS" \
+              --ks-pass "pass:$KSPASS" --key-pass "pass:$KPASS" \
+              --out "$OUT/ferry-android-${arch}.apk" "$WORK/aligned-${arch}.apk"
+            java -jar "$BT/lib/apksigner.jar" verify --print-certs "$OUT/ferry-android-${arch}.apk"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: android-artifacts
-          path: out/android/ferry-android-arm64.apk
+          path: out/android/*.apk
 
   release:
     name: Publish GitHub Release
