@@ -14,5 +14,7 @@ nohup.out
 # 发布产物与安装包载荷（构建时生成）
 dist/
 cmd/ft-setup/payload/*.exe
+cmd/ft-setup/payload/*.gz
 cmd/ft-setup/payload/menu/*.dll
 cmd/ft-setup/payload/menu/*.exe
+cmd/ft-setup/payload/menu/*.gz

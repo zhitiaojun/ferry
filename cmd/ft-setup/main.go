@@ -6,9 +6,12 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"embed"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -128,10 +131,26 @@ func stopRunningProcess(name string) {
 	_ = cmd.Run()
 }
 
+func gunzipBytes(raw []byte) ([]byte, error) {
+	gr, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	defer gr.Close()
+	return io.ReadAll(gr)
+}
+
+func readPayloadFile(name string) ([]byte, error) {
+	if gz, err := payload.ReadFile(name + ".gz"); err == nil {
+		return gunzipBytes(gz)
+	}
+	return payload.ReadFile(name)
+}
+
 func readPayloadAny(names ...string) ([]byte, error) {
 	var lastErr error
 	for _, n := range names {
-		data, err := payload.ReadFile(n)
+		data, err := readPayloadFile(n)
 		if err == nil {
 			return data, nil
 		}
@@ -652,7 +671,8 @@ func removeShellMenu() error {
 	return err
 }
 
-// extractDir copies an embedded directory tree onto disk.
+// extractDir copies an embedded directory tree onto disk, transparently
+// decompressing any .gz payload files while stripping the .gz extension.
 func extractDir(root, dest string) error {
 	entries, err := payload.ReadDir(root)
 	if err != nil {
@@ -661,20 +681,37 @@ func extractDir(root, dest string) error {
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return err
 	}
+	hasGz := make(map[string]bool)
 	for _, e := range entries {
-		src := root + "/" + e.Name()
-		out := filepath.Join(dest, e.Name())
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".gz") {
+			hasGz[strings.TrimSuffix(e.Name(), ".gz")] = true
+		}
+	}
+	for _, e := range entries {
+		name := e.Name()
+		src := root + "/" + name
 		if e.IsDir() {
-			if err := extractDir(src, out); err != nil {
+			if err := extractDir(src, filepath.Join(dest, name)); err != nil {
 				return err
 			}
+			continue
+		}
+		if hasGz[name] {
 			continue
 		}
 		data, err := payload.ReadFile(src)
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(out, data, 0o644); err != nil {
+		outName := name
+		if strings.HasSuffix(name, ".gz") {
+			outName = strings.TrimSuffix(name, ".gz")
+			data, err = gunzipBytes(data)
+			if err != nil {
+				return fmt.Errorf("decompress %s: %w", src, err)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(dest, outName), data, 0o644); err != nil {
 			return err
 		}
 	}

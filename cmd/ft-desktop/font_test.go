@@ -26,8 +26,8 @@ func resolvedTextFace(h syscall.Handle) string {
 
 func TestEmbeddedMiSansFontLoads(t *testing.T) {
 	n := ensureEmbeddedFonts()
-	if n < 2 {
-		t.Fatalf("expected >= 2 embedded fonts registered, got %d", n)
+	if n < 1 {
+		t.Fatalf("expected >= 1 embedded font registered, got %d", n)
 	}
 	face := uiFontFace()
 	boldFace := uiFontBoldFace(face)

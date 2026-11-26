@@ -34,13 +34,33 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          function Compress-GzipFile([string]$src, [string]$dst) {
+            $in = [System.IO.File]::OpenRead($src)
+            try {
+              $out = [System.IO.File]::Create($dst)
+              try {
+                $gz = [System.IO.Compression.GZipStream]::new($out, [System.IO.Compression.CompressionLevel]::Optimal)
+                try {
+                  $in.CopyTo($gz)
+                } finally {
+                  $gz.Dispose()
+                }
+              } finally {
+                $out.Dispose()
+              }
+            } finally {
+              $in.Dispose()
+            }
+          }
+
           New-Item -ItemType Directory -Force -Path out/windows, cmd/ft-setup/payload/menu/Assets | Out-Null
+          Remove-Item -Force -ErrorAction SilentlyContinue cmd/ft-setup/payload/*.exe, cmd/ft-setup/payload/*.gz, cmd/ft-setup/payload/menu/*.dll, cmd/ft-setup/payload/menu/*.exe, cmd/ft-setup/payload/menu/*.gz
           $ver = "${{ github.ref_name }}".TrimStart("v")
           if (-not $ver -or $ver -eq "main") { $ver = "1.0.0-dev" }
 
-          go build -trimpath -ldflags="-X main.version=$ver" -o out/windows/ferry-windows-amd64.exe ./cmd/ferry
-          go build -trimpath -ldflags="-H=windowsgui -X main.version=$ver" -o out/windows/ferry-desktop-windows-amd64.exe ./cmd/ft-desktop
-          go build -trimpath -o cmd/ft-setup/payload/menu/ftstub.exe ./cmd/ft-msix-stub
+          go build -trimpath -ldflags="-s -w -X main.version=$ver" -o out/windows/ferry-windows-amd64.exe ./cmd/ferry
+          go build -trimpath -ldflags="-s -w -H=windowsgui -X main.version=$ver" -o out/windows/ferry-desktop-windows-amd64.exe ./cmd/ft-desktop
+          go build -trimpath -ldflags="-s -w" -o out/windows/ftstub.exe ./cmd/ft-msix-stub
 
           $cc = ""
           if (Test-Path "C:\msys64\mingw64\bin\gcc.exe") {
@@ -50,18 +70,20 @@ jobs:
           } else {
             throw "No MinGW C compiler found to build ftmenu.dll"
           }
-          & $cc -shared -O2 -o cmd/ft-setup/payload/menu/ftmenu.dll cmd/ft-shellmenu/ftmenu.c cmd/ft-shellmenu/ftmenu.def "-Wl,--exclude-all-symbols" -lole32 -luuid -lshell32 -ladvapi32
+          & $cc -shared -O2 -s -o out/windows/ftmenu.dll cmd/ft-shellmenu/ftmenu.c cmd/ft-shellmenu/ftmenu.def "-Wl,--exclude-all-symbols" -lole32 -luuid -lshell32 -ladvapi32
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          Copy-Item out/windows/ferry-windows-amd64.exe cmd/ft-setup/payload/ferry.exe -Force
-          Copy-Item out/windows/ferry-desktop-windows-amd64.exe cmd/ft-setup/payload/ferry-desktop.exe -Force
+          Compress-GzipFile out/windows/ferry-windows-amd64.exe cmd/ft-setup/payload/ferry.exe.gz
+          Compress-GzipFile out/windows/ferry-desktop-windows-amd64.exe cmd/ft-setup/payload/ferry-desktop.exe.gz
+          Compress-GzipFile out/windows/ftstub.exe cmd/ft-setup/payload/menu/ftstub.exe.gz
+          Compress-GzipFile out/windows/ftmenu.dll cmd/ft-setup/payload/menu/ftmenu.dll.gz
           Copy-Item deploy/msix/AppxManifest.xml cmd/ft-setup/payload/menu/ -Force
           Copy-Item deploy/msix/ft.ico cmd/ft-setup/payload/menu/ -Force
           Copy-Item deploy/msix/Assets/*.png cmd/ft-setup/payload/menu/Assets/ -Force
 
-          go build -trimpath -ldflags="-H=windowsgui -X main.version=$ver" -o out/windows/ferry-setup-windows-amd64.exe ./cmd/ft-setup
+          go build -trimpath -ldflags="-s -w -H=windowsgui -X main.version=$ver" -o out/windows/ferry-setup-windows-amd64.exe ./cmd/ft-setup
           go vet ./...
-          go test -count=1 ./cmd/ferry ./cmd/ft-desktop
+          go test -count=1 ./cmd/ferry ./cmd/ft-desktop ./cmd/ft-setup
       - uses: actions/upload-artifact@v4
         with:
           name: windows-artifacts
@@ -81,8 +103,8 @@ jobs:
           mkdir -p out/linux
           VER="${GITHUB_REF_NAME#v}"
           if [ -z "$VER" ] || [ "$VER" = "main" ]; then VER="1.0.0-dev"; fi
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-X main.version=$VER" -o out/linux/ferry-linux-amd64 ./cmd/ferry
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-X main.version=$VER" -o out/linux/ferry-server-linux-amd64 ./cmd/ft-server
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -X main.version=$VER" -o out/linux/ferry-linux-amd64 ./cmd/ferry
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -X main.version=$VER" -o out/linux/ferry-server-linux-amd64 ./cmd/ft-server
       - uses: actions/upload-artifact@v4
         with:
           name: linux-artifacts
