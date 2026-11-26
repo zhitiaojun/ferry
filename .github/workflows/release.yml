@@ -255,10 +255,20 @@ jobs:
           cd release-assets
           sha256sum ferry-* > SHA256SUMS.txt
           cat SHA256SUMS.txt
+      - name: Generate Release Body
+        run: |
+          python3 tools/gen_release_body.py \
+            --tag "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --changelog CHANGELOG.md \
+            --assets-dir release-assets \
+            --out /tmp/RELEASE_BODY.md
+          cat /tmp/RELEASE_BODY.md
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             release-assets/*
-          generate_release_notes: true
+          body_path: /tmp/RELEASE_BODY.md
+          generate_release_notes: false
           prerelease: ${{ contains(github.ref_name, '-') }}
