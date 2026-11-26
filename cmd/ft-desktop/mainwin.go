@@ -295,6 +295,7 @@ type mainWin struct {
 	netRetryR       rectT
 	targetPillRects []rectT
 	targetPillItems []sendTarget
+	targetPillSpecs []targetPillSpec
 	dropZoneR       rectT
 	clipBarR        rectT
 	latestBarR      rectT
@@ -1100,6 +1101,15 @@ func targetsEqual(a, b sendTarget) bool {
 	return a.peer.ID == b.peer.ID
 }
 
+const maxTargetPillRefName = "REDMI K90 Ultra"
+
+type targetPillSpec struct {
+	pillW     int32
+	nameSlotW int32
+	suffixW   int32
+	showLAN   bool
+}
+
 func (w *mainWin) measureText(font syscall.Handle, s string) int32 {
 	if s == "" {
 		return 0
@@ -1109,7 +1119,71 @@ func (w *mainWin) measureText(font syscall.Handle, s string) int32 {
 		return int32(len([]rune(s))) * w.px(13)
 	}
 	defer procDeleteDC.Call(dc)
+	if cx := textWidthDT(dc, font, s); cx > 0 {
+		return cx
+	}
 	return textWidth(dc, font, s)
+}
+
+func (w *mainWin) maxTargetPillNameWidth() int32 {
+	refFont := w.fontBold
+	if refFont == 0 {
+		refFont = w.fontSm
+	}
+	refW := w.measureText(refFont, maxTargetPillRefName)
+	if refW <= 0 {
+		return w.px(124)
+	}
+	maxW := (refW*105 + 99) / 100
+	if minW := w.px(60); maxW < minW {
+		return minW
+	}
+	return maxW
+}
+
+func (w *mainWin) computeTargetPillSpec(t sendTarget, selected bool, maxRowW int32) targetPillSpec {
+	p := w.px
+	padW := p(36) // left 11 + dot 7 + gap 7 + right 11
+	nameFont := w.fontSm
+	if selected && w.fontBold != 0 {
+		nameFont = w.fontBold
+	}
+	rawNameW := w.measureText(nameFont, t.label())
+	nameSlotW := rawNameW + p(2)
+	maxNameW := w.maxTargetPillNameWidth()
+	if nameSlotW > maxNameW {
+		nameSlotW = maxNameW
+	}
+
+	var suffixW int32
+	showLAN := w.targetReachability(t) == "lan"
+	if showLAN {
+		suffixW = w.measureText(w.fontSm, " · 局域网") + p(1)
+	}
+
+	pw := padW + nameSlotW + suffixW
+	if maxRowW > 0 && pw > maxRowW {
+		avail := maxRowW - padW - suffixW
+		if avail < p(40) && showLAN {
+			showLAN = false
+			suffixW = 0
+			avail = maxRowW - padW
+		}
+		if avail < nameSlotW {
+			nameSlotW = avail
+			if minSlot := p(24); nameSlotW < minSlot {
+				nameSlotW = minSlot
+			}
+			pw = padW + nameSlotW + suffixW
+		}
+	}
+
+	return targetPillSpec{
+		pillW:     pw,
+		nameSlotW: nameSlotW,
+		suffixW:   suffixW,
+		showLAN:   showLAN,
+	}
 }
 
 func (w *mainWin) syncTimer(hwnd syscall.Handle) {
@@ -1240,6 +1314,7 @@ func (w *mainWin) layout(cw, ch int32) {
 	w.netBannerR, w.netRetryR = rectT{}, rectT{}
 	w.targetPillRects = w.targetPillRects[:0]
 	w.targetPillItems = w.targetPillItems[:0]
+	w.targetPillSpecs = w.targetPillSpecs[:0]
 	w.dropZoneR, w.clipBarR, w.latestBarR, w.allHistoryLinkR = rectT{}, rectT{}, rectT{}, rectT{}
 	w.coldReadyR, w.coldLeftCardR, w.coldRightCardR = rectT{}, rectT{}, rectT{}
 	w.tileFilesR, w.tileFolderR, w.queueBoxR, w.queueClearR = rectT{}, rectT{}, rectT{}, rectT{}
@@ -1313,6 +1388,8 @@ func (w *mainWin) layout(cw, ch int32) {
 		tempLabel := "+ 临时扫码传"
 		tempW := w.measureText(w.fontSm, tempLabel) + p(22)
 
+		curTarget, hasCur := w.activeTarget()
+		maxRowW := paneR - (paneL + p(36))
 		var allTargets []sendTarget
 		for _, peer := range w.peers {
 			allTargets = append(allTargets, sendTarget{peer: peer})
@@ -1321,19 +1398,15 @@ func (w *mainWin) layout(cw, ch int32) {
 			allTargets = append(allTargets, sendTarget{isLAN: true, lan: lp})
 		}
 		for _, t := range allTargets {
-			lbl := t.label()
-			if w.targetReachability(t) == "lan" {
-				lbl += " · 局域网"
-			}
-			pw := w.measureText(w.fontSm, lbl) + p(34)
-			if pw > p(250) {
-				pw = p(250)
-			}
+			selected := hasCur && targetsEqual(curTarget, t)
+			spec := w.computeTargetPillSpec(t, selected, maxRowW)
+			pw := spec.pillW
 			if pillX+pw > paneR && pillX > paneL+p(36) {
 				pillX = paneL + p(36)
 				pillRowY += pillH + p(8)
 			}
 			w.targetPillItems = append(w.targetPillItems, t)
+			w.targetPillSpecs = append(w.targetPillSpecs, spec)
 			w.targetPillRects = append(w.targetPillRects, rectT{pillX, pillRowY, pillX + pw, pillRowY + pillH})
 			pillX += pw + pillGap
 		}
@@ -1917,16 +1990,32 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 		dotY := pr.top + (pr.bottom-pr.top-dotSz)/2
 		cv.drawAlphaRoundRect(rectT{dotX, dotY, dotX + dotSz, dotY + dotSz}, float64(dotSz)/2.0, dotCol, 255, 0, 0, 0)
 
-		lbl := t.label()
-		if reach == "lan" {
-			lbl += " · 局域网"
-		}
+		nameL := dotX + dotSz + p(7)
 		font := w.fontSm
 		if selected {
 			font = w.fontBold
 		}
-		cv.drawAlphaText(font, lbl, rectT{dotX + dotSz + p(7), pr.top, pr.right - p(10), pr.bottom},
-			dtSingleLine|dtVCenter|dtEndEllipsis, fg)
+		var spec targetPillSpec
+		if i < len(w.targetPillSpecs) {
+			spec = w.targetPillSpecs[i]
+		} else {
+			spec = w.computeTargetPillSpec(t, selected, pr.right-pr.left)
+		}
+		nameR := nameL + spec.nameSlotW
+		maxTextR := pr.right - p(11)
+		if spec.showLAN {
+			if limit := maxTextR - spec.suffixW; nameR > limit {
+				nameR = limit
+			}
+		} else if nameR > maxTextR {
+			nameR = maxTextR
+		}
+		cv.drawAlphaText(font, t.label(), rectT{nameL, pr.top, nameR, pr.bottom},
+			dtSingleLine|dtVCenter|dtEndEllipsis|dtNoPrefix, fg)
+		if spec.showLAN && spec.suffixW > 0 && nameR < maxTextR {
+			cv.drawAlphaText(w.fontSm, " · 局域网", rectT{nameR, pr.top, maxTextR, pr.bottom},
+				dtSingleLine|dtVCenter|dtNoPrefix, fg)
+		}
 	}
 
 	tsFill, tsEdge, tsFg := w.pal.paper, w.pal.line, w.pal.ink2
@@ -1934,7 +2023,7 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 		tsFill, tsEdge, tsFg = w.pal.accentSoft, w.pal.accent, w.pal.accent
 	}
 	cv.drawAlphaRoundRect(w.tempShareBtnR, float64(p(15)), tsFill, tileA, tsEdge, w.surfaceAlpha(200), 1.0)
-	cv.drawAlphaText(w.fontSm, "+ 临时扫码传", w.tempShareBtnR, dtCenter|dtSingleLine|dtVCenter, tsFg)
+	cv.drawAlphaText(w.fontSm, "+ 临时扫码传", w.tempShareBtnR, dtCenter|dtSingleLine|dtVCenter|dtNoPrefix, tsFg)
 
 	// 4. Active Transfer Focus
 	if tx != nil && w.activeTxR.bottom > w.activeTxR.top {
@@ -3928,4 +4017,18 @@ func textWidth(hdc uintptr, font syscall.Handle, s string) int32 {
 	}
 	procTextExtent.Call(hdc, uintptr(unsafe.Pointer(&u[0])), uintptr(len(u)-1), uintptr(unsafe.Pointer(&sz)))
 	return sz.cx
+}
+
+func textWidthDT(hdc uintptr, font syscall.Handle, s string) int32 {
+	if s == "" {
+		return 0
+	}
+	if font != 0 {
+		procSelectObject.Call(hdc, uintptr(font))
+	}
+	const dtCalcRect = 0x0400
+	var rc rectT
+	p := utf16Ptr(s)
+	procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(p)), ^uintptr(0), uintptr(unsafe.Pointer(&rc)), dtCalcRect|dtSingleLine|dtNoPrefix)
+	return rc.right - rc.left
 }

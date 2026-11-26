@@ -4,9 +4,12 @@ package main
 
 import (
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
+	"github.com/zhitiaojun/ferry/core/client"
 	"github.com/zhitiaojun/ferry/core/transfer"
 )
 
@@ -236,5 +239,83 @@ func TestTriggerLANScanNoDeadlock(t *testing.T) {
 
 	if got := a.deviceName(); got != "TestPC" {
 		t.Fatalf("deviceName() = %q, want TestPC", got)
+	}
+}
+
+func drawTextTruncatedCheck(font syscall.Handle, text string, width int32) string {
+	dc, _, _ := procCompatDC.Call(0)
+	if dc == 0 {
+		return text
+	}
+	defer procDeleteDC.Call(dc)
+	if font != 0 {
+		procSelectObject.Call(dc, uintptr(font))
+	}
+	const dtModifyString = 0x00010000
+	const dtEndEllipsis = 0x00008000
+	u := syscall.StringToUTF16(text)
+	buf := make([]uint16, len(u)+8)
+	copy(buf, u)
+	rc := rectT{0, 0, width, 40}
+	procDrawTextW.Call(dc, uintptr(unsafe.Pointer(&buf[0])), ^uintptr(0), uintptr(unsafe.Pointer(&rc)),
+		dtSingleLine|dtVCenter|dtEndEllipsis|dtNoPrefix|dtModifyString)
+	return syscall.UTF16ToString(buf)
+}
+
+func TestTargetPillAdaptiveWidthAndK90UCap(t *testing.T) {
+	for _, dpi := range []int32{96, 144} {
+		mw := &mainWin{dpi: dpi}
+		mw.makeFonts()
+
+		shortT := sendTarget{peer: client.Peer{ID: "p1", Name: "Pixel"}}
+		k90uT := sendTarget{peer: client.Peer{ID: "p2", Name: maxTargetPillRefName}}
+		longT := sendTarget{peer: client.Peer{ID: "p3", Name: "REDMI K90 Ultra Pro Max Collector Edition 2026"}}
+
+		shortSpec := mw.computeTargetPillSpec(shortT, true, 0)
+		k90uSelSpec := mw.computeTargetPillSpec(k90uT, true, 0)
+		k90uUnselSpec := mw.computeTargetPillSpec(k90uT, false, 0)
+		longSpec := mw.computeTargetPillSpec(longT, true, 0)
+
+		if !(shortSpec.pillW < k90uSelSpec.pillW) {
+			mw.freeFonts()
+			t.Fatalf("dpi=%d: short pill %d should be narrower than K90U pill %d", dpi, shortSpec.pillW, k90uSelSpec.pillW)
+		}
+		if got := drawTextTruncatedCheck(mw.fontBold, maxTargetPillRefName, k90uSelSpec.nameSlotW); got != maxTargetPillRefName {
+			mw.freeFonts()
+			t.Fatalf("dpi=%d: selected %q truncated to %q in width %d", dpi, maxTargetPillRefName, got, k90uSelSpec.nameSlotW)
+		}
+		if got := drawTextTruncatedCheck(mw.fontSm, maxTargetPillRefName, k90uUnselSpec.nameSlotW); got != maxTargetPillRefName {
+			mw.freeFonts()
+			t.Fatalf("dpi=%d: unselected %q truncated to %q in width %d", dpi, maxTargetPillRefName, got, k90uUnselSpec.nameSlotW)
+		}
+
+		maxAllowed := mw.maxTargetPillNameWidth()
+		refW := mw.measureText(mw.fontBold, maxTargetPillRefName)
+		wantCap := (refW*105 + 99) / 100
+		if maxAllowed != wantCap {
+			mw.freeFonts()
+			t.Fatalf("dpi=%d: maxTargetPillNameWidth() = %d, want %d (105%% of %d)", dpi, maxAllowed, wantCap, refW)
+		}
+		if longSpec.nameSlotW != maxAllowed {
+			mw.freeFonts()
+			t.Fatalf("dpi=%d: long name slot width = %d, want capped %d", dpi, longSpec.nameSlotW, maxAllowed)
+		}
+		if got := drawTextTruncatedCheck(mw.fontBold, longT.peer.Name, longSpec.nameSlotW); !strings.HasSuffix(got, "...") {
+			mw.freeFonts()
+			t.Fatalf("dpi=%d: long device name should ellipsize at cap %d, got %q", dpi, longSpec.nameSlotW, got)
+		}
+
+		// Also verify LAN suffix never causes K90U name truncation on home layout.
+		mw.app = newApp(t.TempDir(), 18898)
+		mw.app.lanPeers = map[string]lanPeerEntry{
+			"p2": {id: "p2", name: maxTargetPillRefName, addr: "192.168.1.9:18800", lastSeen: time.Now()},
+		}
+		lanSpec := mw.computeTargetPillSpec(k90uT, true, 0)
+		if !lanSpec.showLAN || lanSpec.nameSlotW != k90uSelSpec.nameSlotW {
+			mw.freeFonts()
+			t.Fatalf("dpi=%d: LAN spec %+v should keep full nameSlotW %d", dpi, lanSpec, k90uSelSpec.nameSlotW)
+		}
+
+		mw.freeFonts()
 	}
 }
