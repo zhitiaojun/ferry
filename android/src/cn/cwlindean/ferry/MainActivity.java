@@ -1309,7 +1309,7 @@ public class MainActivity extends Activity {
 
         homeLatestCard = new LinearLayout(this);
         homeLatestCard.setOrientation(LinearLayout.VERTICAL);
-        homeLatestCard.setPadding(dp(14), dp(12), dp(14), dp(12));
+        homeLatestCard.setPadding(dp(16), dp(16), dp(16), dp(16));
         homeLatestCard.setBackground(roundBox(cCard, cBorder, 16));
         homeLatestCard.setVisibility(View.GONE);
 
@@ -1400,6 +1400,7 @@ public class MainActivity extends Activity {
         LinearLayout listCard = new LinearLayout(this);
         listCard.setOrientation(LinearLayout.VERTICAL);
         listCard.setBackground(roundBox(cCard, cBorder, 16));
+        listCard.setPadding(dp(4), dp(4), dp(4), dp(4));
 
         recentListView = new LinearLayout(this);
         recentListView.setOrientation(LinearLayout.VERTICAL);
@@ -2128,7 +2129,7 @@ public class MainActivity extends Activity {
                     }
                     final String finalName = n;
                     deviceName = finalName;
-                    getPreferences(MODE_PRIVATE).edit().putString("deviceName", finalName).apply();
+                    TransferService.prefs(this).edit().putString("deviceName", finalName).apply();
                     refreshSettingsInfo();
                     if (recvRunning) {
                         new Thread(() -> {
@@ -4416,8 +4417,8 @@ public class MainActivity extends Activity {
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(dp(2), dp(12), dp(2), dp(12));
-            row.setBackground(ripple(roundBox(Color.TRANSPARENT, 0, 10), 10));
+            row.setPadding(dp(12), dp(12), dp(12), dp(12));
+            row.setBackground(ripple(roundBox(Color.TRANSPARENT, 0, 12), 12));
             if (isSpecialOutcome) {
                 final String clickMsg;
                 if ("peer_cancelled".equals(r.status)) {
@@ -4492,7 +4493,10 @@ public class MainActivity extends Activity {
 
             recentListView.addView(row, new LinearLayout.LayoutParams(MATCH, WRAP));
             if (i < visible.size() - 1) {
-                recentListView.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
+                LinearLayout.LayoutParams divLp = new LinearLayout.LayoutParams(MATCH, 1);
+                divLp.leftMargin = dp(12);
+                divLp.rightMargin = dp(12);
+                recentListView.addView(hairline(), divLp);
             }
         }
     }

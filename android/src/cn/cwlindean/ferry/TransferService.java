@@ -272,17 +272,51 @@ public class TransferService extends Service implements EventListener {
     }
 
     public static String defaultDeviceName(Context ctx) {
-        try {
-            if (Build.VERSION.SDK_INT >= 25 && ctx != null) {
-                String g = Settings.Global.getString(ctx.getContentResolver(), Settings.Global.DEVICE_NAME);
-                if (g != null && !g.trim().isEmpty()) {
-                    return trimToUtf8Bytes(g.trim(), 64);
+        String model = Build.MODEL == null ? "" : Build.MODEL.trim();
+        String globalName = "";
+        if (ctx != null) {
+            List<String> candidates = new ArrayList<>();
+            try {
+                if (Build.VERSION.SDK_INT >= 25) {
+                    String g = Settings.Global.getString(ctx.getContentResolver(), Settings.Global.DEVICE_NAME);
+                    if (g != null && !g.trim().isEmpty()) {
+                        globalName = g.trim();
+                        candidates.add(globalName);
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+            try {
+                String bt = Settings.Secure.getString(ctx.getContentResolver(), "bluetooth_name");
+                if (bt != null && !bt.trim().isEmpty()) {
+                    candidates.add(bt.trim());
+                }
+            } catch (Exception ignored) {
+            }
+            try {
+                String sysDev = Settings.System.getString(ctx.getContentResolver(), "device_name");
+                if (sysDev != null && !sysDev.trim().isEmpty()) {
+                    candidates.add(sysDev.trim());
+                }
+            } catch (Exception ignored) {
+            }
+            try {
+                String mkt = Settings.System.getString(ctx.getContentResolver(), "market_name");
+                if (mkt != null && !mkt.trim().isEmpty()) {
+                    candidates.add(mkt.trim());
+                }
+            } catch (Exception ignored) {
+            }
+            for (String cand : candidates) {
+                if (model.isEmpty() || !cand.equalsIgnoreCase(model)) {
+                    return trimToUtf8Bytes(cand, 64);
                 }
             }
-        } catch (Exception ignored) {
+            if (!globalName.isEmpty()) {
+                return trimToUtf8Bytes(globalName, 64);
+            }
         }
         String brand = Build.MANUFACTURER == null ? "" : Build.MANUFACTURER.trim();
-        String model = Build.MODEL == null ? "" : Build.MODEL.trim();
         String raw = model;
         if (!brand.isEmpty() && !model.toLowerCase(Locale.US).startsWith(brand.toLowerCase(Locale.US))) {
             raw = model.isEmpty() ? brand : brand + " " + model;

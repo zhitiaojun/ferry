@@ -130,6 +130,15 @@ func (a *app) notifyMainPaint() {
 	}
 }
 
+func (a *app) notifyPeersReload() {
+	if thePanel != nil {
+		thePanel.reloadPeers()
+	}
+	if h := existingMainWindow(); h != 0 {
+		procPostMessageW.Call(uintptr(h), wmAppReload, 0, 0)
+	}
+}
+
 func (a *app) peerReachability(id string) string {
 	if a == nil || id == "" {
 		return "offline"
@@ -698,6 +707,7 @@ func (a *app) receiveOneAuto(
 				a.note(fmt.Sprintf("%s  ← %s · %s", time.Now().Format("15:04"), sanitizeLedgerText(peerName), status))
 			}
 			a.notifyMainPaint()
+			a.notifyPeersReload()
 		}
 		if ctrl.IsCancelled() {
 			a.event("desktop.auto_recv_cancelled", map[string]any{"peer": truncID(req.FromDevice)})
@@ -721,12 +731,7 @@ func (a *app) receiveOneAuto(
 	}
 	if res.PeerName != "" && res.PeerName != peerName {
 		peerName = res.PeerName
-		if thePanel != nil {
-			thePanel.reloadPeers()
-		}
-		if h := existingMainWindow(); h != 0 {
-			procPostMessageW.Call(uintptr(h), wmAppReload, 0, 0)
-		}
+		a.notifyPeersReload()
 		a.updateTransfer(txID, "", "", peerName, "", 0, 0, -1, 0)
 	}
 	chLabel := res.Channel

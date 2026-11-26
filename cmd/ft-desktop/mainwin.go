@@ -654,6 +654,7 @@ func mainWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintpt
 		return 0
 	case wmActivate:
 		if w != nil && loword(wParam) != 0 {
+			w.loadPeers()
 			w.refreshClipboard()
 			w.ensureSmartDefaultTarget()
 			procInvalidateRect.Call(uintptr(hwnd), 0, 0)
@@ -662,6 +663,7 @@ func mainWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintpt
 	case wmShowWindow:
 		if w != nil {
 			if wParam != 0 {
+				w.loadPeers()
 				w.refreshClipboard()
 				w.ensureSmartDefaultTarget()
 				if w.app != nil {
@@ -1324,8 +1326,8 @@ func (w *mainWin) layout(cw, ch int32) {
 				lbl += " · 局域网"
 			}
 			pw := w.measureText(w.fontSm, lbl) + p(34)
-			if pw > p(210) {
-				pw = p(210)
+			if pw > p(250) {
+				pw = p(250)
 			}
 			if pillX+pw > paneR && pillX > paneL+p(36) {
 				pillX = paneL + p(36)

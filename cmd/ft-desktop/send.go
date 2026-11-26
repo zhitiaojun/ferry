@@ -180,28 +180,26 @@ func sendToPeer(a *app, files []string, peer client.Peer) (client.Result, error)
 			a.event("desktop.send_cancelled", map[string]any{"to": truncID(peer.ID)})
 			a.note(fmt.Sprintf("%s  → %s · %s · 已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeItems(items)))
 			a.notifyMainPaint()
+			a.notifyPeersReload()
 			return client.Result{}, fmt.Errorf("已取消传输")
 		}
 		if transfer.IsCancelled(err) {
 			a.event("desktop.send_peer_cancelled", map[string]any{"to": truncID(peer.ID)})
 			a.note(fmt.Sprintf("%s  → %s · %s · 对方已取消", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeItems(items)))
 			a.notifyMainPaint()
+			a.notifyPeersReload()
 			return client.Result{}, fmt.Errorf("对方已取消传输")
 		}
 		a.event("desktop.send_error", map[string]any{"to": truncID(peer.ID), "error": err.Error()})
 		a.note(fmt.Sprintf("%s  → %s · %s · 失败", time.Now().Format("15:04"), sanitizeLedgerText(peerLabel(peer)), summarizeItems(items)))
 		a.notifyMainPaint()
+		a.notifyPeersReload()
 		return client.Result{}, err
 	}
 	if res.PeerName != "" && res.PeerName != peer.Name {
 		peer.Name = res.PeerName
 		a.updateTransfer(txID, "", "", res.PeerName, "", 0, 0, -1, 0)
-		if thePanel != nil {
-			thePanel.reloadPeers()
-		}
-		if h := existingMainWindow(); h != 0 {
-			procPostMessageW.Call(uintptr(h), wmAppReload, 0, 0)
-		}
+		a.notifyPeersReload()
 	}
 	chLabel := res.Channel
 	if chLabel == "" {
