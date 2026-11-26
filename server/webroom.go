@@ -7,7 +7,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/cwlindean/filetransfer/core/logging"
+	"github.com/zhitiaojun/ferry/core/logging"
 )
 
 var errRoomClosed = errors.New("room closed")

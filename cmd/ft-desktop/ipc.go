@@ -14,11 +14,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/client"
-	"github.com/cwlindean/filetransfer/core/discovery"
-	"github.com/cwlindean/filetransfer/core/identity"
-	"github.com/cwlindean/filetransfer/core/ipc"
-	"github.com/cwlindean/filetransfer/core/transfer"
+	"github.com/zhitiaojun/ferry/core/client"
+	"github.com/zhitiaojun/ferry/core/discovery"
+	"github.com/zhitiaojun/ferry/core/identity"
+	"github.com/zhitiaojun/ferry/core/ipc"
+	"github.com/zhitiaojun/ferry/core/transfer"
 )
 
 type pickPeerRequest struct {

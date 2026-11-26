@@ -17,9 +17,9 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/cwlindean/filetransfer/core/lanweb"
-	"github.com/cwlindean/filetransfer/core/logging"
-	"github.com/cwlindean/filetransfer/core/transfer"
+	"github.com/zhitiaojun/ferry/core/lanweb"
+	"github.com/zhitiaojun/ferry/core/logging"
+	"github.com/zhitiaojun/ferry/core/transfer"
 )
 
 const webChunk = 256 << 10

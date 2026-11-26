@@ -8,11 +8,11 @@ import (
 	"net"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/discovery"
-	"github.com/cwlindean/filetransfer/core/identity"
-	"github.com/cwlindean/filetransfer/core/pairing"
-	"github.com/cwlindean/filetransfer/core/session"
-	"github.com/cwlindean/filetransfer/core/transfer"
+	"github.com/zhitiaojun/ferry/core/discovery"
+	"github.com/zhitiaojun/ferry/core/identity"
+	"github.com/zhitiaojun/ferry/core/pairing"
+	"github.com/zhitiaojun/ferry/core/session"
+	"github.com/zhitiaojun/ferry/core/transfer"
 )
 
 // ErrLANHijacked reports that an outbound LAN socket left through a TUN fake-ip

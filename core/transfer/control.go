@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/proto"
-	"github.com/cwlindean/filetransfer/core/session"
+	"github.com/zhitiaojun/ferry/core/proto"
+	"github.com/zhitiaojun/ferry/core/session"
 )
 
 // ErrCancelled is returned when a transfer is cancelled locally or by the peer.

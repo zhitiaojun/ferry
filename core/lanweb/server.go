@@ -29,8 +29,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/logging"
-	"github.com/cwlindean/filetransfer/core/transfer"
+	"github.com/zhitiaojun/ferry/core/logging"
+	"github.com/zhitiaojun/ferry/core/transfer"
 )
 
 // MaxUpload bounds one browser upload (single file) to keep a hostile page

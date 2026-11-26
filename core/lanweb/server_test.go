@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cwlindean/filetransfer/core/logging"
+	"github.com/zhitiaojun/ferry/core/logging"
 )
 
 func newTestServer(t *testing.T) (*Server, string) {

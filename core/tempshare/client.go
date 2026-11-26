@@ -19,8 +19,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/cwlindean/filetransfer/core/lanweb"
-	"github.com/cwlindean/filetransfer/core/transfer"
+	"github.com/zhitiaojun/ferry/core/lanweb"
+	"github.com/zhitiaojun/ferry/core/transfer"
 )
 
 // ResolvedSession describes a temporary transfer session resolved from a URL or 6-digit code.

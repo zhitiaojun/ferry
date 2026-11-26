@@ -14,10 +14,10 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/cwlindean/filetransfer/core/client"
-	"github.com/cwlindean/filetransfer/core/identity"
-	"github.com/cwlindean/filetransfer/core/pairing"
-	"github.com/cwlindean/filetransfer/core/proto"
+	"github.com/zhitiaojun/ferry/core/client"
+	"github.com/zhitiaojun/ferry/core/identity"
+	"github.com/zhitiaojun/ferry/core/pairing"
+	"github.com/zhitiaojun/ferry/core/proto"
 )
 
 const (

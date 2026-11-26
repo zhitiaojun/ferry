@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/identity"
-	"github.com/cwlindean/filetransfer/core/proto"
-	"github.com/cwlindean/filetransfer/core/session"
-	"github.com/cwlindean/filetransfer/core/transfer"
+	"github.com/zhitiaojun/ferry/core/identity"
+	"github.com/zhitiaojun/ferry/core/proto"
+	"github.com/zhitiaojun/ferry/core/session"
+	"github.com/zhitiaojun/ferry/core/transfer"
 )
 
 func TestIsVerifiedPairedAndSendLAN(t *testing.T) {

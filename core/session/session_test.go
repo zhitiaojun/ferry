@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/proto"
+	"github.com/zhitiaojun/ferry/core/proto"
 )
 
 func TestHandshakeAndPing(t *testing.T) {

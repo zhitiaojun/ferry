@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/identity"
-	"github.com/cwlindean/filetransfer/core/proto"
+	"github.com/zhitiaojun/ferry/core/identity"
+	"github.com/zhitiaojun/ferry/core/proto"
 )
 
 func TestServeMCPInitializeListWhoamiPairAndPeers(t *testing.T) {

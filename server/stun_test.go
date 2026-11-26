@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/punch"
+	"github.com/zhitiaojun/ferry/core/punch"
 )
 
 func TestSTUNServerAnswersClient(t *testing.T) {

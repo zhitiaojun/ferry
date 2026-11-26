@@ -10,7 +10,7 @@ import (
 
 	"golang.org/x/net/ipv4"
 
-	"github.com/cwlindean/filetransfer/core/logging"
+	"github.com/zhitiaojun/ferry/core/logging"
 )
 
 // Device is a peer seen on the LAN.

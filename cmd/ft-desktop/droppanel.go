@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"unsafe"
 
-	"github.com/cwlindean/filetransfer/core/client"
+	"github.com/zhitiaojun/ferry/core/client"
 )
 
 // The drop panel is the "only while dragging" surface: it appears in the

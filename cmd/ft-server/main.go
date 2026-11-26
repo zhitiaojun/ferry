@@ -14,8 +14,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/logging"
-	"github.com/cwlindean/filetransfer/server"
+	"github.com/zhitiaojun/ferry/core/logging"
+	"github.com/zhitiaojun/ferry/server"
 )
 
 var version = "1.0.0"

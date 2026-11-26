@@ -10,10 +10,10 @@ import (
 	"net"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/identity"
-	"github.com/cwlindean/filetransfer/core/relay"
-	"github.com/cwlindean/filetransfer/core/session"
-	"github.com/cwlindean/filetransfer/core/signaling"
+	"github.com/zhitiaojun/ferry/core/identity"
+	"github.com/zhitiaojun/ferry/core/relay"
+	"github.com/zhitiaojun/ferry/core/session"
+	"github.com/zhitiaojun/ferry/core/signaling"
 )
 
 // PairedPeer returns the pinned public key of a peer from the trusted table.

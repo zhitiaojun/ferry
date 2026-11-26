@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/pathmgr"
-	"github.com/cwlindean/filetransfer/core/session"
+	"github.com/zhitiaojun/ferry/core/pathmgr"
+	"github.com/zhitiaojun/ferry/core/session"
 )
 
 // Debugf receives punch diagnostics when a caller installs it.

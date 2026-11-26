@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/discovery"
+	"github.com/zhitiaojun/ferry/core/discovery"
 )
 
 const (

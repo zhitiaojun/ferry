@@ -9,10 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/identity"
-	"github.com/cwlindean/filetransfer/core/lanweb"
-	"github.com/cwlindean/filetransfer/core/tempshare"
-	"github.com/cwlindean/filetransfer/core/transfer"
+	"github.com/zhitiaojun/ferry/core/identity"
+	"github.com/zhitiaojun/ferry/core/lanweb"
+	"github.com/zhitiaojun/ferry/core/tempshare"
+	"github.com/zhitiaojun/ferry/core/transfer"
 )
 
 var (

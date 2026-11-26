@@ -28,7 +28,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/cwlindean/filetransfer/core/logging"
+	"github.com/zhitiaojun/ferry/core/logging"
 )
 
 //go:embed assets/*

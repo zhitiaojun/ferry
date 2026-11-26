@@ -8,8 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/cwlindean/filetransfer/core/client"
-	"github.com/cwlindean/filetransfer/core/identity"
+	"github.com/zhitiaojun/ferry/core/client"
+	"github.com/zhitiaojun/ferry/core/identity"
 )
 
 func defaultPairedPath() string { return client.DefaultPairedPath() }

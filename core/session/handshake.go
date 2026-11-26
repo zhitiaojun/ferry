@@ -8,7 +8,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/proto"
+	"github.com/zhitiaojun/ferry/core/proto"
 )
 
 func authTranscript(sid, helloNonce, challenge [16]byte, senderID, receiverID [32]byte) []byte {

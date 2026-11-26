@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/cwlindean/filetransfer/core/proto"
+	"github.com/zhitiaojun/ferry/core/proto"
 )
 
 // The golden vectors in docs/spec/vectors are produced by the independent

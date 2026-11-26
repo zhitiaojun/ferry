@@ -8,13 +8,13 @@ import (
 	"net"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/discovery"
-	"github.com/cwlindean/filetransfer/core/identity"
-	"github.com/cwlindean/filetransfer/core/logging"
-	"github.com/cwlindean/filetransfer/core/pathmgr"
-	"github.com/cwlindean/filetransfer/core/proto"
-	"github.com/cwlindean/filetransfer/core/session"
-	"github.com/cwlindean/filetransfer/core/transfer"
+	"github.com/zhitiaojun/ferry/core/discovery"
+	"github.com/zhitiaojun/ferry/core/identity"
+	"github.com/zhitiaojun/ferry/core/logging"
+	"github.com/zhitiaojun/ferry/core/pathmgr"
+	"github.com/zhitiaojun/ferry/core/proto"
+	"github.com/zhitiaojun/ferry/core/session"
+	"github.com/zhitiaojun/ferry/core/transfer"
 )
 
 // lanResult is what a LAN send produced, plus how many attempts it took.

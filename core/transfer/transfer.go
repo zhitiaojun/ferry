@@ -13,8 +13,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/logging"
-	"github.com/cwlindean/filetransfer/core/proto"
+	"github.com/zhitiaojun/ferry/core/logging"
+	"github.com/zhitiaojun/ferry/core/proto"
 )
 
 // ErrSlowPath is returned by Send when MinBytesPerSec is configured and

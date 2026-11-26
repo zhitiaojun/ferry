@@ -12,10 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/identity"
-	"github.com/cwlindean/filetransfer/core/logging"
-	"github.com/cwlindean/filetransfer/core/pathmgr"
-	"github.com/cwlindean/filetransfer/core/session"
+	"github.com/zhitiaojun/ferry/core/identity"
+	"github.com/zhitiaojun/ferry/core/logging"
+	"github.com/zhitiaojun/ferry/core/pathmgr"
+	"github.com/zhitiaojun/ferry/core/session"
 )
 
 const (

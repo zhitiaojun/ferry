@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/identity"
-	"github.com/cwlindean/filetransfer/core/punch"
-	"github.com/cwlindean/filetransfer/core/signaling"
+	"github.com/zhitiaojun/ferry/core/identity"
+	"github.com/zhitiaojun/ferry/core/punch"
+	"github.com/zhitiaojun/ferry/core/signaling"
 )
 
 func runGather(stunList string) {

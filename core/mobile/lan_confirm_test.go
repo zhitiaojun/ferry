@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/discovery"
-	"github.com/cwlindean/filetransfer/core/identity"
+	"github.com/zhitiaojun/ferry/core/discovery"
+	"github.com/zhitiaojun/ferry/core/identity"
 )
 
 type testConfirmListener struct {

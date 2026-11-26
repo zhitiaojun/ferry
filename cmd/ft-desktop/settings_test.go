@@ -9,7 +9,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/cwlindean/filetransfer/core/proto"
+	"github.com/zhitiaojun/ferry/core/proto"
 )
 
 func TestDefaultReceiveDirHasNoFerrySubdir(t *testing.T) {

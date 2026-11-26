@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/lanweb"
-	"github.com/cwlindean/filetransfer/core/logging"
+	"github.com/zhitiaojun/ferry/core/lanweb"
+	"github.com/zhitiaojun/ferry/core/logging"
 )
 
 var (

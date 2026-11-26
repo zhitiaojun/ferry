@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cwlindean/filetransfer/core/proto"
+	"github.com/zhitiaojun/ferry/core/proto"
 )
 
 // Empty files (size=0) are supported since G0 (2026-11-07): the sender emits no

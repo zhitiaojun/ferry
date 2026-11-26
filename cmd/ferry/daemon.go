@@ -16,16 +16,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/client"
-	"github.com/cwlindean/filetransfer/core/discovery"
-	"github.com/cwlindean/filetransfer/core/identity"
-	"github.com/cwlindean/filetransfer/core/ipc"
-	"github.com/cwlindean/filetransfer/core/logging"
-	"github.com/cwlindean/filetransfer/core/pairing"
-	"github.com/cwlindean/filetransfer/core/proto"
-	"github.com/cwlindean/filetransfer/core/session"
-	"github.com/cwlindean/filetransfer/core/signaling"
-	"github.com/cwlindean/filetransfer/core/transfer"
+	"github.com/zhitiaojun/ferry/core/client"
+	"github.com/zhitiaojun/ferry/core/discovery"
+	"github.com/zhitiaojun/ferry/core/identity"
+	"github.com/zhitiaojun/ferry/core/ipc"
+	"github.com/zhitiaojun/ferry/core/logging"
+	"github.com/zhitiaojun/ferry/core/pairing"
+	"github.com/zhitiaojun/ferry/core/proto"
+	"github.com/zhitiaojun/ferry/core/session"
+	"github.com/zhitiaojun/ferry/core/signaling"
+	"github.com/zhitiaojun/ferry/core/transfer"
 )
 
 type daemonState struct {

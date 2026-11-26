@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/client"
-	"github.com/cwlindean/filetransfer/core/pairing"
+	"github.com/zhitiaojun/ferry/core/client"
+	"github.com/zhitiaojun/ferry/core/pairing"
 )
 
 type desktopSettings struct {

@@ -7,8 +7,8 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/discovery"
-	"github.com/cwlindean/filetransfer/core/logging"
+	"github.com/zhitiaojun/ferry/core/discovery"
+	"github.com/zhitiaojun/ferry/core/logging"
 )
 
 // Candidate is one way a peer might be reachable. The kinds match the

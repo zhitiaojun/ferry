@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/cwlindean/filetransfer/core/identity"
+	"github.com/zhitiaojun/ferry/core/identity"
 )
 
 func TestPairedPeersEmptyAndPopulated(t *testing.T) {

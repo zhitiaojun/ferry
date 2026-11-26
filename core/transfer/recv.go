@@ -12,8 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/proto"
-	"github.com/cwlindean/filetransfer/core/session"
+	"github.com/zhitiaojun/ferry/core/proto"
+	"github.com/zhitiaojun/ferry/core/session"
 )
 
 // recvFile is one file being written to <out>/<relpath>.ftpart.

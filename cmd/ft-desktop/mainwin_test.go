@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/transfer"
+	"github.com/zhitiaojun/ferry/core/transfer"
 )
 
 func TestFmtDur(t *testing.T) {

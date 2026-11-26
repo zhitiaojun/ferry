@@ -1,4 +1,4 @@
-module github.com/cwlindean/filetransfer
+module github.com/zhitiaojun/ferry
 
 go 1.27.0
 

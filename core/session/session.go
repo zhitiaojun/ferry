@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/proto"
+	"github.com/zhitiaojun/ferry/core/proto"
 )
 
 const (

@@ -7,8 +7,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/identity"
-	"github.com/cwlindean/filetransfer/core/pairing"
+	"github.com/zhitiaojun/ferry/core/identity"
+	"github.com/zhitiaojun/ferry/core/pairing"
 )
 
 // GeneratePairCode returns a random 6-digit one-time pairing code.

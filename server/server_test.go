@@ -14,10 +14,10 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/cwlindean/filetransfer/core/identity"
-	"github.com/cwlindean/filetransfer/core/pairing"
-	"github.com/cwlindean/filetransfer/core/relay"
-	"github.com/cwlindean/filetransfer/core/signaling"
+	"github.com/zhitiaojun/ferry/core/identity"
+	"github.com/zhitiaojun/ferry/core/pairing"
+	"github.com/zhitiaojun/ferry/core/relay"
+	"github.com/zhitiaojun/ferry/core/signaling"
 )
 
 func wsURL(t *testing.T, ts *httptest.Server, path string) string {

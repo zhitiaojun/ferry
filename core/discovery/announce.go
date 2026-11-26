@@ -12,7 +12,7 @@ import (
 
 	"golang.org/x/net/ipv4"
 
-	"github.com/cwlindean/filetransfer/core/logging"
+	"github.com/zhitiaojun/ferry/core/logging"
 )
 
 const (

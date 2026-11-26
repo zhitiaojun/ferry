@@ -14,13 +14,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/identity"
-	"github.com/cwlindean/filetransfer/core/pathmgr"
-	"github.com/cwlindean/filetransfer/core/proto"
-	"github.com/cwlindean/filetransfer/core/punch"
-	"github.com/cwlindean/filetransfer/core/signaling"
-	"github.com/cwlindean/filetransfer/core/transfer"
-	"github.com/cwlindean/filetransfer/server"
+	"github.com/zhitiaojun/ferry/core/identity"
+	"github.com/zhitiaojun/ferry/core/pathmgr"
+	"github.com/zhitiaojun/ferry/core/proto"
+	"github.com/zhitiaojun/ferry/core/punch"
+	"github.com/zhitiaojun/ferry/core/signaling"
+	"github.com/zhitiaojun/ferry/core/transfer"
+	"github.com/zhitiaojun/ferry/server"
 )
 
 func setupPairedKeys(t *testing.T, dir string) (sendKeyPath, recvKeyPath, sendPairedPath, recvPairedPath string, sendKey, recvKey *identity.Key) {

@@ -11,8 +11,8 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/cwlindean/filetransfer/core/client"
-	"github.com/cwlindean/filetransfer/core/transfer"
+	"github.com/zhitiaojun/ferry/core/client"
+	"github.com/zhitiaojun/ferry/core/transfer"
 )
 
 // sendFiles is the drop window's action: choose the receiver (one paired device

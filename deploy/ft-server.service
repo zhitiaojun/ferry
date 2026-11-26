@@ -1,5 +1,5 @@
 [Unit]
-Description=filetransfer signaling and relay server (ft-server)
+Description=Ferry signaling and relay server (ft-server)
 After=network-online.target
 Wants=network-online.target
 

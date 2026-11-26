@@ -18,7 +18,7 @@ static void step(const char *name, HRESULT hr) {
 
 int wmain(int argc, wchar_t **argv) {
     const wchar_t *dll = argc > 1 ? argv[1] : L"ftmenu.dll";
-    const wchar_t *file = argc > 2 ? argv[2] : L"C:\\project\\filetransfer\\.tools\\menutest\\hello.txt";
+    const wchar_t *file = argc > 2 ? argv[2] : L"hello.txt";
 
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
 

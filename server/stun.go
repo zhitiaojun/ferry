@@ -6,8 +6,8 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/logging"
-	"github.com/cwlindean/filetransfer/core/punch"
+	"github.com/zhitiaojun/ferry/core/logging"
+	"github.com/zhitiaojun/ferry/core/punch"
 )
 
 // STUN binds one or more UDP sockets and answers STUN binding requests. It is

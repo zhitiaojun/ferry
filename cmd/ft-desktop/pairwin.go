@@ -11,8 +11,8 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/cwlindean/filetransfer/core/identity"
-	"github.com/cwlindean/filetransfer/core/pairing"
+	"github.com/zhitiaojun/ferry/core/identity"
+	"github.com/zhitiaojun/ferry/core/pairing"
 	qrcode "github.com/skip2/go-qrcode"
 )
 

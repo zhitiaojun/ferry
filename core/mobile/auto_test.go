@@ -10,14 +10,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/identity"
-	"github.com/cwlindean/filetransfer/core/pairing"
-	"github.com/cwlindean/filetransfer/core/proto"
-	"github.com/cwlindean/filetransfer/core/relay"
-	"github.com/cwlindean/filetransfer/core/session"
-	"github.com/cwlindean/filetransfer/core/signaling"
-	"github.com/cwlindean/filetransfer/core/transfer"
-	"github.com/cwlindean/filetransfer/server"
+	"github.com/zhitiaojun/ferry/core/identity"
+	"github.com/zhitiaojun/ferry/core/pairing"
+	"github.com/zhitiaojun/ferry/core/proto"
+	"github.com/zhitiaojun/ferry/core/relay"
+	"github.com/zhitiaojun/ferry/core/session"
+	"github.com/zhitiaojun/ferry/core/signaling"
+	"github.com/zhitiaojun/ferry/core/transfer"
+	"github.com/zhitiaojun/ferry/server"
 )
 
 type connSnapshot struct {

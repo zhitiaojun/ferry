@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cwlindean/filetransfer/core/pairing"
+	"github.com/zhitiaojun/ferry/core/pairing"
 )
 
 func TestQRGenerateAndDecodeRoundTrip(t *testing.T) {

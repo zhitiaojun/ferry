@@ -33,7 +33,7 @@ echo "== go build =="
 
 echo "== gomobile bind =="
 mkdir -p "$OUT"
-(cd "$ROOT" && CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384" gomobile.exe bind -target=android/arm64 -androidapi 21 -ldflags="-X github.com/cwlindean/filetransfer/core/mobile.Version=${VER_NAME}" -o android/ft.aar ./core/mobile)
+(cd "$ROOT" && CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384" gomobile.exe bind -target=android/arm64 -androidapi 21 -ldflags="-X github.com/zhitiaojun/ferry/core/mobile.Version=${VER_NAME}" -o android/ft.aar ./core/mobile)
 
 echo "== extract AAR =="
 rm -rf "$WORK"
