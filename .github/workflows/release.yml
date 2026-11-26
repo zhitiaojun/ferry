@@ -169,8 +169,8 @@ jobs:
 
           mkdir -p "$OUT" "$WORK/aar" "$WORK/classes" "$WORK/dex"
           CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384" \
-            gomobile bind -target=android/arm64 -androidapi 21 -ldflags="-X github.com/zhitiaojun/ferry/core/mobile.Version=${VER_NAME}" -o "$WORK/ft-arm64.aar" ./core/mobile
-          gomobile bind -target=android/arm -androidapi 21 -ldflags="-X github.com/zhitiaojun/ferry/core/mobile.Version=${VER_NAME}" -o "$WORK/ft-armv7a.aar" ./core/mobile
+            gomobile bind -target=android/arm64 -androidapi 21 -ldflags="-s -w -X github.com/zhitiaojun/ferry/core/mobile.Version=${VER_NAME}" -o "$WORK/ft-arm64.aar" ./core/mobile
+          gomobile bind -target=android/arm -androidapi 21 -ldflags="-s -w -X github.com/zhitiaojun/ferry/core/mobile.Version=${VER_NAME}" -o "$WORK/ft-armv7a.aar" ./core/mobile
 
           python3 - "$WORK/ft-arm64.aar" "$WORK/ft-armv7a.aar" "$WORK/aar" "$WORK" <<'PY'
           import sys, zipfile
@@ -264,11 +264,26 @@ jobs:
             --assets-dir release-assets \
             --out /tmp/RELEASE_BODY.md
           cat /tmp/RELEASE_BODY.md
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            release-assets/*
-          body_path: /tmp/RELEASE_BODY.md
-          generate_release_notes: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          test -s /tmp/RELEASE_BODY.md
+          PRE_ARGS=()
+          if [[ "$TAG" == *-* ]]; then
+            PRE_ARGS=(--prerelease)
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" \
+              --title "$TAG" \
+              --notes-file /tmp/RELEASE_BODY.md \
+              --draft=false
+            gh release upload "$TAG" release-assets/* --clobber
+          else
+            gh release create "$TAG" release-assets/* \
+              --title "$TAG" \
+              --notes-file /tmp/RELEASE_BODY.md \
+              "${PRE_ARGS[@]}"
+          fi

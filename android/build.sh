@@ -36,8 +36,8 @@ echo "== go build =="
 
 echo "== gomobile bind (arm64-v8a & armeabi-v7a) =="
 mkdir -p "$OUT"
-(cd "$ROOT" && CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384" gomobile.exe bind -target=android/arm64 -androidapi 21 -ldflags="-X github.com/zhitiaojun/ferry/core/mobile.Version=${VER_NAME}" -o android/ft-arm64.aar ./core/mobile)
-(cd "$ROOT" && gomobile.exe bind -target=android/arm -androidapi 21 -ldflags="-X github.com/zhitiaojun/ferry/core/mobile.Version=${VER_NAME}" -o android/ft-armv7a.aar ./core/mobile)
+(cd "$ROOT" && CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384" gomobile.exe bind -target=android/arm64 -androidapi 21 -ldflags="-s -w -X github.com/zhitiaojun/ferry/core/mobile.Version=${VER_NAME}" -o android/ft-arm64.aar ./core/mobile)
+(cd "$ROOT" && gomobile.exe bind -target=android/arm -androidapi 21 -ldflags="-s -w -X github.com/zhitiaojun/ferry/core/mobile.Version=${VER_NAME}" -o android/ft-armv7a.aar ./core/mobile)
 
 echo "== extract AAR =="
 rm -rf "$WORK"
