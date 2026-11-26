@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"image"
 	"image/draw"
 	_ "image/gif"
@@ -25,12 +26,19 @@ import (
 )
 
 const (
-	cfDIB       = 8
-	cfHDROP     = 15
-	gmemMove    = 0x0002
-	maxImgBytes = 50 << 20
-	maxImgPx    = int64(64_000_000)
+	cfUnicodeText = 13
+	cfDIB         = 8
+	cfHDROP       = 15
+	gmemMove      = 0x0002
+	maxImgBytes   = 50 << 20
+	maxImgPx      = int64(64_000_000)
 )
+
+type clipboardPreview struct {
+	kind  string // "", "image", "text"
+	title string
+	sub   string
+}
 
 var clipboardMu sync.Mutex
 
@@ -446,4 +454,269 @@ func (a *app) maybeCopySingleImagePathsToClipboard(paths []string) bool {
 		})
 	}
 	return true
+}
+
+func readClipboardFormatBytes(format uint32, maxBytes int) ([]byte, bool) {
+	if format == 0 || maxBytes <= 0 {
+		return nil, false
+	}
+	h, _, _ := procGetClipboardData.Call(uintptr(format))
+	if h == 0 {
+		return nil, false
+	}
+	sz, _, _ := procGlobalSize.Call(h)
+	if sz == 0 || sz > uintptr(maxBytes) {
+		return nil, false
+	}
+	p, _, _ := procGlobalLock.Call(h)
+	if p == 0 {
+		return nil, false
+	}
+	defer procGlobalUnlock.Call(h)
+	out := make([]byte, int(sz))
+	copy(out, unsafe.Slice((*byte)(ptrAt(p)), int(sz)))
+	return out, true
+}
+
+func readClipboardTextUnlocked() (string, bool) {
+	h, _, _ := procGetClipboardData.Call(cfUnicodeText)
+	if h == 0 {
+		return "", false
+	}
+	p, _, _ := procGlobalLock.Call(h)
+	if p == 0 {
+		return "", false
+	}
+	defer procGlobalUnlock.Call(h)
+	const maxChars = 512 * 1024
+	u := unsafe.Slice((*uint16)(ptrAt(p)), maxChars)
+	n := 0
+	for n < maxChars && u[n] != 0 {
+		n++
+	}
+	if n == 0 {
+		return "", false
+	}
+	return syscall.UTF16ToString(u[:n]), true
+}
+
+func dibDimensions(dib []byte) (int, int, bool) {
+	if len(dib) < 40 {
+		return 0, 0, false
+	}
+	hdrSize := int(binary.LittleEndian.Uint32(dib[0:4]))
+	if hdrSize < 40 || hdrSize > len(dib) {
+		return 0, 0, false
+	}
+	w := int(int32(binary.LittleEndian.Uint32(dib[4:8])))
+	h := int(int32(binary.LittleEndian.Uint32(dib[8:12])))
+	if h < 0 {
+		h = -h
+	}
+	if w <= 0 || h <= 0 || int64(w)*int64(h) > maxImgPx {
+		return 0, 0, false
+	}
+	return w, h, true
+}
+
+// decodeDIBToPNG decodes an uncompressed (BI_RGB) 24-bit or 32-bit Windows CF_DIB
+// payload into PNG bytes, supporting both bottom-up and top-down scanline order.
+func decodeDIBToPNG(dib []byte) ([]byte, bool) {
+	w, h, ok := dibDimensions(dib)
+	if !ok {
+		return nil, false
+	}
+	hdrSize := int(binary.LittleEndian.Uint32(dib[0:4]))
+	planes := binary.LittleEndian.Uint16(dib[12:14])
+	bpp := int(binary.LittleEndian.Uint16(dib[14:16]))
+	comp := binary.LittleEndian.Uint32(dib[16:20])
+	if planes != 1 || comp != 0 || (bpp != 24 && bpp != 32) {
+		return nil, false
+	}
+	rawH := int(int32(binary.LittleEndian.Uint32(dib[8:12])))
+	topDown := rawH < 0
+
+	var rowStride int
+	if bpp == 24 {
+		rowStride = ((w*3 + 3) / 4) * 4
+	} else {
+		rowStride = w * 4
+	}
+	need := hdrSize + rowStride*h
+	if need > len(dib) {
+		return nil, false
+	}
+
+	rgba := image.NewRGBA(image.Rect(0, 0, w, h))
+	pixData := dib[hdrSize:]
+
+	hasAlpha := false
+	if bpp == 32 {
+		for y := 0; y < h && !hasAlpha; y++ {
+			row := y * rowStride
+			for x := 0; x < w; x++ {
+				if pixData[row+x*4+3] != 0 {
+					hasAlpha = true
+					break
+				}
+			}
+		}
+	}
+
+	for y := 0; y < h; y++ {
+		srcY := h - 1 - y
+		if topDown {
+			srcY = y
+		}
+		srcRow := srcY * rowStride
+		dstRow := y * rgba.Stride
+		for x := 0; x < w; x++ {
+			d := dstRow + x*4
+			if bpp == 24 {
+				s := srcRow + x*3
+				rgba.Pix[d] = pixData[s+2]   // R
+				rgba.Pix[d+1] = pixData[s+1] // G
+				rgba.Pix[d+2] = pixData[s]   // B
+				rgba.Pix[d+3] = 255
+			} else {
+				s := srcRow + x*4
+				rgba.Pix[d] = pixData[s+2]   // R
+				rgba.Pix[d+1] = pixData[s+1] // G
+				rgba.Pix[d+2] = pixData[s]   // B
+				if hasAlpha {
+					rgba.Pix[d+3] = pixData[s+3]
+				} else {
+					rgba.Pix[d+3] = 255
+				}
+			}
+		}
+	}
+
+	var out bytes.Buffer
+	enc := png.Encoder{CompressionLevel: png.BestSpeed}
+	if err := enc.Encode(&out, rgba); err != nil {
+		return nil, false
+	}
+	return out.Bytes(), true
+}
+
+func summarizeClipboardTextSnippet(raw string) string {
+	collapsed := strings.Join(strings.Fields(strings.TrimSpace(raw)), " ")
+	if collapsed == "" {
+		return ""
+	}
+	runes := []rune(collapsed)
+	if len(runes) > 26 {
+		return string(runes[:25]) + "…"
+	}
+	return collapsed
+}
+
+// inspectClipboardPreview performs a non-blocking single-attempt inspection of the
+// Windows clipboard so UI chrome can offer a contextual one-click send action.
+func inspectClipboardPreview() clipboardPreview {
+	pngFmt := registerClipboardFormat("PNG")
+	hasPNG := pngFmt != 0 && formatAvailable(pngFmt)
+	hasDIB := formatAvailable(cfDIB)
+	hasText := formatAvailable(cfUnicodeText)
+	if !hasPNG && !hasDIB && !hasText {
+		return clipboardPreview{}
+	}
+
+	clipboardMu.Lock()
+	defer clipboardMu.Unlock()
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	ok, _, _ := procOpenClipboard.Call(0)
+	if ok == 0 {
+		return clipboardPreview{}
+	}
+	defer procCloseClipboard.Call()
+
+	if hasPNG || hasDIB {
+		title := "检测到剪贴板截图"
+		if hasDIB {
+			if dib, ok := readClipboardFormatBytes(cfDIB, maxImgBytes); ok {
+				if w, h, dok := dibDimensions(dib); dok {
+					title = fmt.Sprintf("检测到剪贴板截图（%d×%d）", w, h)
+				}
+			}
+		} else if pngFmt != 0 {
+			if raw, ok := readClipboardFormatBytes(pngFmt, maxImgBytes); ok {
+				if cfg, err := png.DecodeConfig(bytes.NewReader(raw)); err == nil && cfg.Width > 0 && cfg.Height > 0 {
+					title = fmt.Sprintf("检测到剪贴板截图（%d×%d）", cfg.Width, cfg.Height)
+				}
+			}
+		}
+		return clipboardPreview{
+			kind:  "image",
+			title: title,
+			sub:   "免存桌面，点右侧直接发送",
+		}
+	}
+
+	if hasText {
+		if txt, ok := readClipboardTextUnlocked(); ok {
+			if sn := summarizeClipboardTextSnippet(txt); sn != "" {
+				return clipboardPreview{
+					kind:  "text",
+					title: "剪贴板：" + sn,
+					sub:   "点右侧一键发往对方剪贴板",
+				}
+			}
+		}
+	}
+	return clipboardPreview{}
+}
+
+func formatAvailable(fmtID uint32) bool {
+	if fmtID == 0 {
+		return false
+	}
+	r, _, _ := procIsClipboardFormatAvailable.Call(uintptr(fmtID))
+	return r != 0
+}
+
+// readClipboardImageAsPNG reads an image from the Windows clipboard, preferring
+// the registered "PNG" format and falling back to CF_DIB decoding.
+func readClipboardImageAsPNG() ([]byte, bool) {
+	pngFmt := registerClipboardFormat("PNG")
+	hasPNG := pngFmt != 0 && formatAvailable(pngFmt)
+	hasDIB := formatAvailable(cfDIB)
+	if !hasPNG && !hasDIB {
+		return nil, false
+	}
+
+	clipboardMu.Lock()
+	defer clipboardMu.Unlock()
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	var opened bool
+	for i := 0; i < 6; i++ {
+		if ok, _, _ := procOpenClipboard.Call(0); ok != 0 {
+			opened = true
+			break
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	if !opened {
+		return nil, false
+	}
+	defer procCloseClipboard.Call()
+
+	if hasPNG {
+		if raw, ok := readClipboardFormatBytes(pngFmt, maxImgBytes); ok {
+			if _, err := png.DecodeConfig(bytes.NewReader(raw)); err == nil {
+				return raw, true
+			}
+		}
+	}
+	if hasDIB {
+		if dib, ok := readClipboardFormatBytes(cfDIB, maxImgBytes); ok {
+			return decodeDIBToPNG(dib)
+		}
+	}
+	return nil, false
 }

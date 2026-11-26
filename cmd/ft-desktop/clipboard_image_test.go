@@ -367,3 +367,66 @@ func TestBuildDropFilesBytes(t *testing.T) {
 		t.Errorf("decoded path = %q, want %q", got, wantAbs)
 	}
 }
+
+func TestDecodeDIBToPNGRoundTrip(t *testing.T) {
+	src := image.NewRGBA(image.Rect(0, 0, 3, 2))
+	src.SetRGBA(0, 0, color.RGBA{210, 20, 30, 255})
+	src.SetRGBA(1, 0, color.RGBA{10, 180, 90, 255})
+	src.SetRGBA(2, 0, color.RGBA{40, 80, 240, 255})
+	src.SetRGBA(0, 1, color.RGBA{255, 255, 0, 255})
+	src.SetRGBA(1, 1, color.RGBA{0, 255, 255, 255})
+	src.SetRGBA(2, 1, color.RGBA{128, 64, 32, 255})
+
+	dib24 := buildDIB24(src)
+	pngOut, ok := decodeDIBToPNG(dib24)
+	if !ok {
+		t.Fatal("decodeDIBToPNG(24bpp) returned false")
+	}
+	decoded, err := png.Decode(bytes.NewReader(pngOut))
+	if err != nil {
+		t.Fatalf("png.Decode: %v", err)
+	}
+	if decoded.Bounds().Dx() != 3 || decoded.Bounds().Dy() != 2 {
+		t.Fatalf("decoded bounds = %v, want 3x2", decoded.Bounds())
+	}
+	for y := 0; y < 2; y++ {
+		for x := 0; x < 3; x++ {
+			got := color.RGBAModel.Convert(decoded.At(x, y)).(color.RGBA)
+			want := src.RGBAAt(x, y)
+			if got != want {
+				t.Fatalf("pixel (%d,%d) = %+v, want %+v", x, y, got, want)
+			}
+		}
+	}
+
+	// Verify 32-bit BI_RGB DIB with zero alpha channel (typical Windows screenshot bitblt).
+	dib32 := make([]byte, 40+3*2*4)
+	binary.LittleEndian.PutUint32(dib32[0:4], 40)
+	binary.LittleEndian.PutUint32(dib32[4:8], 3)
+	negTwo := int32(-2)
+	binary.LittleEndian.PutUint32(dib32[8:12], uint32(negTwo)) // top-down
+	binary.LittleEndian.PutUint16(dib32[12:14], 1)
+	binary.LittleEndian.PutUint16(dib32[14:16], 32)
+	for y := 0; y < 2; y++ {
+		for x := 0; x < 3; x++ {
+			c := src.RGBAAt(x, y)
+			off := 40 + (y*3+x)*4
+			dib32[off] = c.B
+			dib32[off+1] = c.G
+			dib32[off+2] = c.R
+			dib32[off+3] = 0
+		}
+	}
+	pngOut32, ok := decodeDIBToPNG(dib32)
+	if !ok {
+		t.Fatal("decodeDIBToPNG(32bpp top-down) returned false")
+	}
+	decoded32, err := png.Decode(bytes.NewReader(pngOut32))
+	if err != nil {
+		t.Fatalf("png.Decode 32bpp: %v", err)
+	}
+	gotTL := color.RGBAModel.Convert(decoded32.At(0, 0)).(color.RGBA)
+	if wantTL := src.RGBAAt(0, 0); gotTL != wantTL {
+		t.Fatalf("32bpp pixel (0,0) = %+v, want %+v", gotTL, wantTL)
+	}
+}

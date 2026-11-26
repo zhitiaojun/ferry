@@ -68,12 +68,27 @@ func TestRenderVectorSDFSquareAspectInNonSquareRect(t *testing.T) {
 func TestDrawAllVectorIconsNonEmpty(t *testing.T) {
 	cv := newTestCanvas(64, 64)
 	r := rectT{left: 10, top: 10, right: 42, bottom: 42}
-	for kind := 0; kind <= 2; kind++ {
+	for kind := 0; kind <= 3; kind++ {
 		clear(cv.pix)
 		drawNavIconSDF(cv, r, kind, col(15, 118, 110))
 		if !hasPartialAlpha(cv.pix) {
 			t.Fatalf("nav icon %d did not produce anti-aliased coverage", kind)
 		}
+	}
+	clear(cv.pix)
+	drawUploadSDF(cv, r, col(15, 118, 110))
+	if !hasPartialAlpha(cv.pix) {
+		t.Fatal("upload icon did not produce anti-aliased coverage")
+	}
+	clear(cv.pix)
+	drawSendSDF(cv, r, col(15, 118, 110))
+	if !hasPartialAlpha(cv.pix) {
+		t.Fatal("send icon did not produce anti-aliased coverage")
+	}
+	clear(cv.pix)
+	drawClipSDF(cv, r, col(15, 118, 110))
+	if !hasPartialAlpha(cv.pix) {
+		t.Fatal("clip icon did not produce anti-aliased coverage")
 	}
 	clear(cv.pix)
 	drawBrandBoatSDF(cv, r, col(255, 255, 255))

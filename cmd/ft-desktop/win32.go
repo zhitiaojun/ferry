@@ -58,11 +58,13 @@ var (
 	procEmptyClipboard           = user32.NewProc("EmptyClipboard")
 	procSetClipboardData         = user32.NewProc("SetClipboardData")
 	procGetClipboardData         = user32.NewProc("GetClipboardData")
+	procIsClipboardFormatAvailable = user32.NewProc("IsClipboardFormatAvailable")
 	procRegisterClipboardFormatW = user32.NewProc("RegisterClipboardFormatW")
 	procGlobalAlloc              = kernel32.NewProc("GlobalAlloc")
 	procGlobalLock               = kernel32.NewProc("GlobalLock")
 	procGlobalUnlock             = kernel32.NewProc("GlobalUnlock")
 	procGlobalFree               = kernel32.NewProc("GlobalFree")
+	procGlobalSize               = kernel32.NewProc("GlobalSize")
 	procSHBrowseForFolderW       = shell32.NewProc("SHBrowseForFolderW")
 	procSHGetPathFromIDListW     = shell32.NewProc("SHGetPathFromIDListW")
 	procCoInitializeEx           = ole32.NewProc("CoInitializeEx")
@@ -99,6 +101,7 @@ const (
 	wsExAppWindow  = 0x00040000
 
 	wmDestroy    = 0x0002
+	wmActivate   = 0x0006
 	wmClose      = 0x0010
 	wmPaint      = 0x000F
 	wmNcCalcSize = 0x0083

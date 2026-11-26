@@ -62,8 +62,9 @@ const (
 	psSolid = 0
 
 	pageHome     = 0
-	pageDevices  = 1
-	pageSettings = 2
+	pageHistory  = 1
+	pageDevices  = 2
+	pageSettings = 3
 
 	fltAll  = 0
 	fltSend = 1
@@ -74,8 +75,11 @@ const (
 	hoverCapMax
 	hoverCapClose
 	hoverNavHome
+	hoverNavHistory
 	hoverNavDevices
 	hoverNavSettings
+	hoverNetRetry
+	hoverTargetPill
 	hoverTileFiles
 	hoverTileFolder
 	hoverQueueClear
@@ -86,6 +90,7 @@ const (
 	hoverSendText
 	hoverSendClip
 	hoverTempShare
+	hoverAllHistory
 	hoverFltAll
 	hoverFltSend
 	hoverFltRecv
@@ -250,26 +255,30 @@ func appsUseDarkTheme() bool {
 }
 
 type mainWin struct {
-	app         *app
-	hwnd        syscall.Handle
-	peers       []client.Peer
-	lanTargets  []lanPeerEntry
-	selectedLAN lanPeerEntry
-	sel         int
-	page     int
-	filter   int
-	queued   []string
-	status   string
-	hostName string
-	fullID   string
-	pal      palette
-	dark     bool
-	acrylic  bool
-	dpi      int32
-	hover    int
-	hoverIdx int
-	tracking bool
-	timer    uintptr
+	app              *app
+	hwnd             syscall.Handle
+	peers            []client.Peer
+	lanTargets       []lanPeerEntry
+	selectedLAN      lanPeerEntry
+	sel              int
+	userPickedTarget bool
+	clipPreview      clipboardPreview
+	unreadHistory    bool
+	lastLedgerHead   string
+	page             int
+	filter           int
+	queued           []string
+	status           string
+	hostName         string
+	fullID           string
+	pal              palette
+	dark             bool
+	acrylic          bool
+	dpi              int32
+	hover            int
+	hoverIdx         int
+	tracking         bool
+	timer            uintptr
 
 	// Hit-test rectangles updated on every layout() pass.
 	titleBarR   rectT
@@ -278,8 +287,21 @@ type mainWin struct {
 	capCloseR   rectT
 	railR       rectT
 	navHomeR    rectT
+	navHistoryR rectT
 	navDevicesR rectT
 	navSetR     rectT
+
+	netBannerR      rectT
+	netRetryR       rectT
+	targetPillRects []rectT
+	targetPillItems []sendTarget
+	dropZoneR       rectT
+	clipBarR        rectT
+	latestBarR      rectT
+	allHistoryLinkR rectT
+	coldReadyR      rectT
+	coldLeftCardR   rectT
+	coldRightCardR  rectT
 
 	sendColR      rectT
 	sendCardR     rectT
@@ -491,7 +513,12 @@ func openMainWindow(a *app) {
 		procSetForegroundWindow.Call(uintptr(h))
 		if mw := currentWin(h); mw != nil {
 			mw.loadPeers()
+			mw.ensureSmartDefaultTarget()
+			mw.refreshClipboard()
 			mw.syncTimer(h)
+		}
+		if a != nil {
+			a.triggerLANScan(nil)
 		}
 		procInvalidateRect.Call(uintptr(h), 0, 1)
 		return
@@ -584,7 +611,12 @@ func mainWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintpt
 		mw.acrylic = enableAcrylicBackdrop(hwnd, dark)
 		mw.makeFonts()
 		mw.loadPeers()
+		mw.ensureSmartDefaultTarget()
 		mw.refreshLocalMeta()
+		mw.refreshClipboard()
+		if trayApp != nil {
+			trayApp.triggerLANScan(nil)
+		}
 		mainMu.Lock()
 		mainWins[hwnd] = mw
 		mainMu.Unlock()
@@ -620,9 +652,21 @@ func mainWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintpt
 		}
 		procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 		return 0
+	case wmActivate:
+		if w != nil && loword(wParam) != 0 {
+			w.refreshClipboard()
+			w.ensureSmartDefaultTarget()
+			procInvalidateRect.Call(uintptr(hwnd), 0, 0)
+		}
+		return 0
 	case wmShowWindow:
 		if w != nil {
 			if wParam != 0 {
+				w.refreshClipboard()
+				w.ensureSmartDefaultTarget()
+				if w.app != nil {
+					w.app.triggerLANScan(nil)
+				}
 				w.syncTimer(hwnd)
 			} else {
 				cancelPendingIncomingConfirm("对方关闭了主界面")
@@ -695,7 +739,9 @@ func mainWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintpt
 	case wmAppReload:
 		if w != nil {
 			w.loadPeers()
+			w.ensureSmartDefaultTarget()
 			w.refreshLocalMeta()
+			w.refreshClipboard()
 			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 		}
 		return 0
@@ -965,6 +1011,105 @@ func (w *mainWin) syncLANTargets() {
 	}
 }
 
+func (w *mainWin) refreshClipboard() {
+	w.clipPreview = inspectClipboardPreview()
+}
+
+func (w *mainWin) syncUnreadHistory() {
+	if w.app == nil {
+		return
+	}
+	lines := w.app.recentLines(1)
+	if len(lines) == 0 {
+		return
+	}
+	head := lines[0]
+	if w.lastLedgerHead == "" {
+		w.lastLedgerHead = head
+		return
+	}
+	if head != w.lastLedgerHead {
+		w.lastLedgerHead = head
+		if w.page != pageHistory {
+			w.unreadHistory = true
+		}
+	}
+}
+
+func (w *mainWin) ensureSmartDefaultTarget() {
+	if w.app == nil {
+		return
+	}
+	w.syncLANTargets()
+	if w.userPickedTarget {
+		if w.selectedLAN.id != "" && w.selectedLAN.addr != "" {
+			return
+		}
+		if w.sel >= 0 && w.sel < len(w.peers) {
+			return
+		}
+		w.userPickedTarget = false
+	}
+	// Prefer a paired peer currently reachable on LAN, then cloud-online paired peer,
+	// then the first paired peer, and finally an auto-discovered LAN peer.
+	for i, p := range w.peers {
+		if w.app.peerReachability(p.ID) == "lan" {
+			w.sel = i
+			w.selectedLAN = lanPeerEntry{}
+			return
+		}
+	}
+	for i, p := range w.peers {
+		if w.app.peerReachability(p.ID) == "cloud" {
+			w.sel = i
+			w.selectedLAN = lanPeerEntry{}
+			return
+		}
+	}
+	if len(w.peers) > 0 {
+		if w.sel < 0 || w.sel >= len(w.peers) {
+			w.sel = 0
+		}
+		w.selectedLAN = lanPeerEntry{}
+		return
+	}
+	if len(w.lanTargets) > 0 {
+		w.selectedLAN = w.lanTargets[0]
+	}
+}
+
+func (w *mainWin) targetReachability(t sendTarget) string {
+	if t.isLAN {
+		return "lan"
+	}
+	if w.app == nil {
+		return "offline"
+	}
+	return w.app.peerReachability(t.peer.ID)
+}
+
+func targetsEqual(a, b sendTarget) bool {
+	if a.isLAN != b.isLAN {
+		return false
+	}
+	if a.isLAN {
+		return a.lan.id == b.lan.id && a.lan.addr == b.lan.addr
+	}
+	return a.peer.ID == b.peer.ID
+}
+
+func (w *mainWin) measureText(font syscall.Handle, s string) int32 {
+	if s == "" {
+		return 0
+	}
+	dc, _, _ := procCompatDC.Call(0)
+	if dc == 0 {
+		return int32(len([]rune(s))) * w.px(13)
+	}
+	defer procDeleteDC.Call(dc)
+	return textWidth(dc, font, s)
+}
+
 func (w *mainWin) syncTimer(hwnd syscall.Handle) {
 	// Keep timer off when idle in v2; redraws happen on user/network events.
 	if w.timer != 0 {
@@ -1083,15 +1228,21 @@ func (w *mainWin) layout(cw, ch int32) {
 	navW := rw - p(16)
 	navH := p(50)
 	w.navHomeR = rectT{navX, topH + p(12), navX + navW, topH + p(12) + navH}
-	w.navDevicesR = rectT{navX, w.navHomeR.bottom + p(6), navX + navW, w.navHomeR.bottom + p(6) + navH}
+	w.navHistoryR = rectT{navX, w.navHomeR.bottom + p(6), navX + navW, w.navHomeR.bottom + p(6) + navH}
+	w.navDevicesR = rectT{navX, w.navHistoryR.bottom + p(6), navX + navW, w.navHistoryR.bottom + p(6) + navH}
 	w.navSetR = rectT{navX, w.navDevicesR.bottom + p(6), navX + navW, w.navDevicesR.bottom + p(6) + navH}
 
 	w.syncLANTargets()
 
 	// Reset page-specific rects
+	w.netBannerR, w.netRetryR = rectT{}, rectT{}
+	w.targetPillRects = w.targetPillRects[:0]
+	w.targetPillItems = w.targetPillItems[:0]
+	w.dropZoneR, w.clipBarR, w.latestBarR, w.allHistoryLinkR = rectT{}, rectT{}, rectT{}, rectT{}
+	w.coldReadyR, w.coldLeftCardR, w.coldRightCardR = rectT{}, rectT{}, rectT{}
 	w.tileFilesR, w.tileFolderR, w.queueBoxR, w.queueClearR = rectT{}, rectT{}, rectT{}, rectT{}
 	w.homeScanLanR, w.addDevLinkR, w.peerPickerR, w.sendBtnR, w.sendTextR, w.sendClipR, w.tempShareBtnR = rectT{}, rectT{}, rectT{}, rectT{}, rectT{}, rectT{}, rectT{}
-	w.fltAllR, w.fltSendR, w.fltRecvR, w.openDirR, w.activeTxR = rectT{}, rectT{}, rectT{}, rectT{}, rectT{}
+	w.fltAllR, w.fltSendR, w.fltRecvR, w.openDirR, w.activeTxR, w.txPauseBtnR, w.txCancelBtnR = rectT{}, rectT{}, rectT{}, rectT{}, rectT{}, rectT{}, rectT{}
 	w.ledgerRowsR = w.ledgerRowsR[:0]
 	w.devScanLanBtnR, w.devAddBtnR = rectT{}, rectT{}
 	w.devSendBtnsR = w.devSendBtnsR[:0]
@@ -1099,66 +1250,202 @@ func (w *mainWin) layout(cw, ch int32) {
 	w.devDeleteBtnsR = w.devDeleteBtnsR[:0]
 	w.devLanSendBtnsR = w.devLanSendBtnsR[:0]
 	w.devLanSelectBtnsR = w.devLanSelectBtnsR[:0]
-	w.setRecvBtnR, w.setResetDirR, w.setChangeDirR, w.setOpenDirR, w.setAutoBtnR, w.setRenameBtnR, w.setCopyIDRowR = rectT{}, rectT{}, rectT{}, rectT{}, rectT{}, rectT{}, rectT{}
+	w.setRecvBtnR, w.setResetDirR, w.setChangeDirR, w.setOpenDirR, w.setAutoBtnR, w.setResetSrvR, w.setChangeSrvR, w.setRenameBtnR, w.setCopyIDRowR, w.aboutRepoR = rectT{}, rectT{}, rectT{}, rectT{}, rectT{}, rectT{}, rectT{}, rectT{}, rectT{}, rectT{}
 
 	switch w.page {
 	case pageHome:
-		colW := p(sendColW)
-		if colW > (cw-rw)/2 {
-			colW = (cw - rw) / 2
+		pad := p(28)
+		paneL := rw + pad
+		paneR := cw - pad
+		maxW := p(780)
+		if paneR-paneL > maxW {
+			extra := (paneR - paneL - maxW) / 2
+			paneL += extra
+			paneR -= extra
 		}
-		w.sendColR = rectT{rw, topH, rw + colW, ch}
-		pad := p(22)
-		cardW := colW - pad*2
-		cardH := p(252)
+
+		topY := topH + p(20)
+		sigKind := "offline"
+		if w.app != nil {
+			_, sigKind = w.app.signalHomeStatus()
+		}
+		if sigKind != "online" {
+			w.netBannerR = rectT{paneL, topY, paneR, topY + p(36)}
+			w.netRetryR = rectT{paneR - p(82), topY + p(5), paneR - p(8), topY + p(31)}
+			topY = w.netBannerR.bottom + p(12)
+		}
+
+		var tx *activeTransfer
+		if w.app != nil {
+			tx = w.app.currentTransfer()
+		}
+
+		if !w.hasPeers() && tx == nil {
+			// Cold Start: Readiness pill + Value-first Temp Share / LAN Left + Pairing Right
+			w.coldReadyR = rectT{paneL, topY, paneR, topY + p(32)}
+			cardsTop := w.coldReadyR.bottom + p(14)
+			cardsBot := ch - p(36)
+			if cardsBot < cardsTop+p(200) {
+				cardsBot = cardsTop + p(200)
+			}
+			gap := p(16)
+			leftW := (paneR - paneL - gap) * 56 / 100
+			w.coldLeftCardR = rectT{paneL, cardsTop, paneL + leftW, cardsBot}
+			w.coldRightCardR = rectT{w.coldLeftCardR.right + gap, cardsTop, paneR, cardsBot}
+
+			btnY := cardsBot - p(54)
+			btnB := cardsBot - p(18)
+			inPad := p(18)
+			scanW := p(98)
+			w.homeScanLanR = rectT{w.coldLeftCardR.right - inPad - scanW, btnY, w.coldLeftCardR.right - inPad, btnB}
+			w.tempShareBtnR = rectT{w.coldLeftCardR.left + inPad, btnY, w.homeScanLanR.left - p(10), btnB}
+			w.addDevLinkR = rectT{w.coldRightCardR.left + inPad, btnY, w.coldRightCardR.right - inPad, btnB}
+			break
+		}
+
+		// Target device pill bar
+		pillRowY := topY
+		pillH := p(30)
+		pillX := paneL + p(36)
+		pillGap := p(8)
+		tempLabel := "+ 临时扫码传"
+		tempW := w.measureText(w.fontSm, tempLabel) + p(22)
+
+		var allTargets []sendTarget
+		for _, peer := range w.peers {
+			allTargets = append(allTargets, sendTarget{peer: peer})
+		}
+		for _, lp := range w.lanTargets {
+			allTargets = append(allTargets, sendTarget{isLAN: true, lan: lp})
+		}
+		for _, t := range allTargets {
+			lbl := t.label()
+			if w.targetReachability(t) == "lan" {
+				lbl += " · 局域网"
+			}
+			pw := w.measureText(w.fontSm, lbl) + p(34)
+			if pw > p(210) {
+				pw = p(210)
+			}
+			if pillX+pw > paneR && pillX > paneL+p(36) {
+				pillX = paneL + p(36)
+				pillRowY += pillH + p(8)
+			}
+			w.targetPillItems = append(w.targetPillItems, t)
+			w.targetPillRects = append(w.targetPillRects, rectT{pillX, pillRowY, pillX + pw, pillRowY + pillH})
+			pillX += pw + pillGap
+		}
+		if pillX+tempW > paneR && pillX > paneL+p(36) {
+			pillX = paneL + p(36)
+			pillRowY += pillH + p(8)
+		}
+		w.tempShareBtnR = rectT{pillX, pillRowY, pillX + tempW, pillRowY + pillH}
+		stageTop := pillRowY + pillH + p(14)
+
+		if tx != nil {
+			// Active Transfer takes center stage
+			showPause := tx.canPause && tx.stage != "verifying"
+			txH := p(116)
+			if showPause || tx.canCancel {
+				txH = p(144)
+			}
+			availH := ch - p(36) - stageTop
+			ty := stageTop + (availH-txH)/3
+			if ty < stageTop {
+				ty = stageTop
+			}
+			w.activeTxR = rectT{paneL, ty, paneR, ty + txH}
+			btnY := w.activeTxR.bottom - p(40)
+			btnB := w.activeTxR.bottom - p(14)
+			curR := paneR - p(16)
+			if tx.canCancel {
+				cwBtn := p(76)
+				w.txCancelBtnR = rectT{curR - cwBtn, btnY, curR, btnB}
+				curR = w.txCancelBtnR.left - p(8)
+			}
+			if showPause {
+				pwBtn := p(76)
+				if !tx.paused && (tx.peerPaused || tx.stage == "peer_paused") {
+					pwBtn = p(94)
+				}
+				w.txPauseBtnR = rectT{curR - pwBtn, btnY, curR, btnB}
+			}
+			break
+		}
+
+		// Idle Hero Stage: Drop Zone + Single-Purpose Clipboard Bar + Latest-1 Footer
+		bottomEdge := ch - p(32)
+		hasRecent := w.app != nil && len(w.app.recentLines(1)) > 0
+		aboveLatest := bottomEdge
+		if hasRecent {
+			w.latestBarR = rectT{paneL, bottomEdge - p(34), paneR, bottomEdge}
+			w.allHistoryLinkR = rectT{paneR - p(74), w.latestBarR.top, paneR, w.latestBarR.bottom}
+			w.openDirR = rectT{w.allHistoryLinkR.left - p(92), w.latestBarR.top, w.allHistoryLinkR.left - p(10), w.latestBarR.bottom}
+			aboveLatest = w.latestBarR.top - p(10)
+		}
+
+		clipH := p(54)
+		w.clipBarR = rectT{paneL, aboveLatest - clipH, paneR, aboveLatest}
+		clipBtnLbl := "发送剪贴板"
+		if w.clipPreview.kind == "image" {
+			clipBtnLbl = "发送截图"
+		}
+		clipBtnW := w.measureText(w.fontBold, clipBtnLbl) + p(42)
+		if clipBtnW < p(108) {
+			clipBtnW = p(108)
+		}
+		w.sendClipR = rectT{paneR - p(14) - clipBtnW, w.clipBarR.top + p(11), paneR - p(14), w.clipBarR.bottom - p(11)}
+
+		dzBottom := w.clipBarR.top - p(12)
+		if dzBottom < stageTop+p(180) {
+			dzBottom = stageTop + p(180)
+		}
+		w.dropZoneR = rectT{paneL, stageTop, paneR, dzBottom}
+
+		dzMidX := (w.dropZoneR.left + w.dropZoneR.right) / 2
+		dzH := w.dropZoneR.bottom - w.dropZoneR.top
+		contentH := p(148)
 		if len(w.queued) > 0 {
-			cardH = p(292)
+			contentH = p(190)
 		}
-		cy := topH + (ch-topH-cardH)/2
-		if cy < topH+p(20) {
-			cy = topH + p(20)
+		innerTop := w.dropZoneR.top + (dzH-contentH)/2
+		if innerTop < w.dropZoneR.top+p(14) {
+			innerTop = w.dropZoneR.top + p(14)
 		}
-		w.sendCardR = rectT{rw + pad, cy, rw + pad + cardW, cy + cardH}
-
-		inPad := p(16)
-		inL := w.sendCardR.left + inPad
-		inR := w.sendCardR.right - inPad
-		gap := p(10)
-		tileW := (inR - inL - gap) / 2
-		tileTop := w.sendCardR.top + inPad
-		tileH := p(76)
-		w.tileFilesR = rectT{inL, tileTop, inL + tileW, tileTop + tileH}
-		w.tileFolderR = rectT{w.tileFilesR.right + gap, tileTop, inR, tileTop + tileH}
-
-		y := w.tileFilesR.bottom + p(12)
+		btnRowTop := innerTop + p(112)
 		if len(w.queued) > 0 {
-			w.queueBoxR = rectT{inL, y, inR, y + p(32)}
-			w.queueClearR = rectT{inR - p(42), y, inR, y + p(32)}
-			y = w.queueBoxR.bottom + p(12)
+			qw := p(360)
+			if qw > (w.dropZoneR.right-w.dropZoneR.left)-p(40) {
+				qw = (w.dropZoneR.right - w.dropZoneR.left) - p(40)
+			}
+			qy := innerTop + p(106)
+			w.queueBoxR = rectT{dzMidX - qw/2, qy, dzMidX + qw/2, qy + p(30)}
+			w.queueClearR = rectT{w.queueBoxR.right - p(46), qy, w.queueBoxR.right, qy + p(30)}
+			btnRowTop = w.queueBoxR.bottom + p(14)
 		}
-		w.addDevLinkR = rectT{inR - p(56), y, inR, y + p(22)}
-		w.homeScanLanR = rectT{w.addDevLinkR.left - p(78), y, w.addDevLinkR.left - p(8), y + p(22)}
-		y += p(24)
-		w.peerPickerR = rectT{inL, y, inR, y + p(34)}
-		y = w.peerPickerR.bottom + p(14)
-		w.sendBtnR = rectT{inL, y, inR, y + p(38)}
-		footY := w.sendCardR.bottom + p(10)
-		w.sendTextR = rectT{w.sendCardR.left + p(2), footY, w.sendCardR.left + p(56), footY + p(22)}
-		w.sendClipR = rectT{w.sendTextR.right + p(12), footY, w.sendTextR.right + p(78), footY + p(22)}
-		w.tempShareBtnR = rectT{w.sendCardR.left, footY + p(32), w.sendCardR.right, footY + p(68)}
 
-		// Right transfers pane
-		rPad := p(28)
-		paneL := w.sendColR.right + rPad
-		paneR := cw - rPad
+		b1W := p(138)
+		b2W := p(98)
+		b3W := p(86)
+		bGap := p(10)
+		totalBW := b1W + b2W + b3W + bGap*2
+		bx := dzMidX - totalBW/2
+		btnH := p(36)
+		w.sendBtnR = rectT{bx, btnRowTop, bx + b1W, btnRowTop + btnH}
+		w.tileFolderR = rectT{w.sendBtnR.right + bGap, btnRowTop, w.sendBtnR.right + bGap + b2W, btnRowTop + btnH}
+		w.sendTextR = rectT{w.tileFolderR.right + bGap, btnRowTop, w.tileFolderR.right + bGap + b3W, btnRowTop + btnH}
+
+	case pageHistory:
+		pad := p(28)
+		paneL := rw + pad
+		paneR := cw - pad
+		w.openDirR = rectT{paneR - p(108), topH + p(24), paneR, topH + p(52)}
 		tabY := topH + p(62)
 		w.fltAllR = rectT{paneL, tabY, paneL + p(42), tabY + p(28)}
 		w.fltSendR = rectT{w.fltAllR.right + p(16), tabY, w.fltAllR.right + p(68), tabY + p(28)}
 		w.fltRecvR = rectT{w.fltSendR.right + p(16), tabY, w.fltSendR.right + p(68), tabY + p(28)}
-		w.openDirR = rectT{paneR - p(104), tabY, paneR, tabY + p(28)}
 
 		ry := w.fltAllR.bottom + p(8)
-		w.activeTxR, w.txPauseBtnR, w.txCancelBtnR = rectT{}, rectT{}, rectT{}
 		if w.app != nil {
 			if tx := w.app.currentTransfer(); tx != nil {
 				showPause := tx.canPause && tx.stage != "verifying"
@@ -1318,6 +1605,7 @@ func (w *mainWin) drawScene(cv *glassCanvas, cr rectT) {
 	cv.fillColorAlpha(w.titleBarR, w.pal.paper2, barA)
 	cv.fillColorAlpha(w.railR, w.pal.paper2, barA)
 	w.drawTitleBar(cv)
+	w.syncUnreadHistory()
 	w.drawRail(cv)
 
 	// Hairline dividers separating workspace from top bar and left rail.
@@ -1336,6 +1624,8 @@ func (w *mainWin) drawScene(cv *glassCanvas, cr rectT) {
 	switch w.page {
 	case pageHome:
 		w.drawHome(cv, cr)
+	case pageHistory:
+		w.drawHistory(cv, cr)
 	case pageDevices:
 		w.drawDevices(cv, cr)
 	case pageSettings:
@@ -1427,8 +1717,9 @@ func (w *mainWin) drawRail(cv *glassCanvas) {
 		kind  int
 	}{
 		{w.navHomeR, pageHome, hoverNavHome, "传输", 0},
-		{w.navDevicesR, pageDevices, hoverNavDevices, "设备", 1},
-		{w.navSetR, pageSettings, hoverNavSettings, "设置", 2},
+		{w.navHistoryR, pageHistory, hoverNavHistory, "记录", 1},
+		{w.navDevicesR, pageDevices, hoverNavDevices, "设备", 2},
+		{w.navSetR, pageSettings, hoverNavSettings, "设置", 3},
 	}
 	for _, it := range items {
 		active := w.page == it.page
@@ -1448,6 +1739,12 @@ func (w *mainWin) drawRail(cv *glassCanvas) {
 		iconX := (it.r.left + it.r.right - iconSz) / 2
 		iconR := rectT{iconX, it.r.top + w.px(6), iconX + iconSz, it.r.top + w.px(6) + iconSz}
 		w.drawNavIcon(cv, iconR, it.kind, fg)
+		if it.page == pageHistory && w.unreadHistory && !active {
+			ds := w.px(6)
+			dx := iconR.right - w.px(2)
+			dy := iconR.top
+			cv.drawAlphaRoundRect(rectT{dx, dy, dx + ds, dy + ds}, float64(ds)/2.0, col(0x10, 0xB9, 0x81), 255, 0, 0, 0)
+		}
 		lblR := rectT{it.r.left, it.r.top + w.px(28), it.r.right, it.r.bottom - w.px(4)}
 		cv.drawAlphaText(w.fontSm, it.label, lblR, dtCenter|dtSingleLine|dtVCenter, fg)
 	}
@@ -1459,168 +1756,374 @@ func (w *mainWin) drawNavIcon(cv *glassCanvas, r rectT, kind int, color uint32) 
 
 func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 	p := w.px
-	topH := w.titleBarR.bottom
-	// Left send card gutter
-	colAlpha := byte(198)
-	if w.dark {
-		colAlpha = 208
-	}
-	cv.fillColorAlpha(w.sendColR, w.pal.paper2, w.surfaceAlpha(colAlpha))
-	cv.fillColorAlpha(rectT{w.sendColR.right - 1, topH, w.sendColR.right, cr.bottom}, w.pal.line, w.surfaceAlpha(175))
-
-	// Compact Send Card
-	cardA := w.surfaceAlpha(185)
 	tileA := w.surfaceAlpha(205)
-	cv.drawAlphaRoundRect(w.sendCardR, float64(p(12)), w.pal.paper, cardA, w.pal.line, w.surfaceAlpha(210), 1.0)
 
-	// Dual tiles: 添加文件 / 添加文件夹
-	fEdge := w.pal.line
-	if w.hover == hoverTileFiles {
-		fEdge = w.pal.accent
+	// Determine pane horizontal bounds matching layout()
+	paneL := w.railR.right + p(28)
+	paneR := cr.right - p(28)
+	maxW := p(780)
+	if paneR-paneL > maxW {
+		extra := (paneR - paneL - maxW) / 2
+		paneL += extra
+		paneR -= extra
 	}
-	cv.drawAlphaRoundRect(w.tileFilesR, float64(p(8)), w.pal.paper, tileA, fEdge, w.surfaceAlpha(220), 1.0)
-	plusR := rectT{(w.tileFilesR.left+w.tileFilesR.right)/2 - p(13), w.tileFilesR.top + p(12),
-		(w.tileFilesR.left+w.tileFilesR.right)/2 + p(13), w.tileFilesR.top + p(38)}
-	cv.drawAlphaRoundRect(plusR, float64(p(13)), w.pal.accent, 255, 0, 0, 0)
-	cv.drawAlphaText(w.fontH2, "+", plusR, dtCenter|dtSingleLine|dtVCenter, w.pal.accentInk)
-	cv.drawAlphaText(w.fontSm, "添加文件",
-		rectT{w.tileFilesR.left, plusR.bottom + p(4), w.tileFilesR.right, w.tileFilesR.bottom - p(6)},
-		dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
 
-	dEdge := w.pal.line
-	if w.hover == hoverTileFolder {
-		dEdge = w.pal.accent
+	// 1. Progressive Disclosure Network Banner (shown ONLY when signaling != online)
+	if w.netBannerR.bottom > w.netBannerR.top {
+		warnBg := col(0xFE, 0xF3, 0xC7)
+		if w.dark {
+			warnBg = col(0x45, 0x1A, 0x03)
+		}
+		cv.drawAlphaRoundRect(w.netBannerR, float64(p(10)), warnBg, w.surfaceAlpha(235), w.pal.amber, w.surfaceAlpha(120), 1.0)
+		msg := "云端信令未连接，同局域网设备仍可高速直传"
+		if w.app != nil {
+			if _, kind := w.app.signalHomeStatus(); kind == "connecting" {
+				msg = "正在连接云端信令服务器，同局域网设备仍可直传"
+			}
+		}
+		cv.drawAlphaText(w.fontSm, msg,
+			rectT{w.netBannerR.left + p(14), w.netBannerR.top, w.netRetryR.left - p(10), w.netBannerR.bottom},
+			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.amber)
+
+		rBg := w.pal.paper
+		if w.hover == hoverNetRetry {
+			rBg = w.pal.paper2
+		}
+		cv.drawAlphaRoundRect(w.netRetryR, float64(p(7)), rBg, 255, w.pal.amber, 160, 1.0)
+		cv.drawAlphaText(w.fontBold, "重试连接", w.netRetryR, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
 	}
-	cv.drawAlphaRoundRect(w.tileFolderR, float64(p(8)), w.pal.paper, tileA, dEdge, w.surfaceAlpha(220), 1.0)
-	fldIconR := rectT{(w.tileFolderR.left+w.tileFolderR.right)/2 - p(13), w.tileFolderR.top + p(12),
-		(w.tileFolderR.left+w.tileFolderR.right)/2 + p(13), w.tileFolderR.top + p(38)}
-	cv.drawAlphaRoundRect(fldIconR, float64(p(13)), w.pal.paper, tileA, w.pal.line, w.surfaceAlpha(220), 1.0)
-	w.drawFolderGlyph(cv, fldIconR, w.pal.ink2)
-	cv.drawAlphaText(w.fontSm, "添加文件夹",
-		rectT{w.tileFolderR.left, fldIconR.bottom + p(4), w.tileFolderR.right, w.tileFolderR.bottom - p(6)},
-		dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
 
-	// Queued summary row
+	var tx *activeTransfer
+	if w.app != nil {
+		tx = w.app.currentTransfer()
+	}
+
+	// 2. Cold Start State (no paired/LAN devices discovered yet and no active transfer)
+	if !w.hasPeers() && tx == nil {
+		// Readiness pill (Goal Gradient: never 0%)
+		readyTxt := fmt.Sprintf("本机已就绪（%s · 加密通道与局域网监听已开启）", w.hostName)
+		pillW := textWidth(cv.memDC, w.fontSm, readyTxt) + p(38)
+		if pillW > paneR-paneL {
+			pillW = paneR - paneL
+		}
+		readyR := rectT{paneL, w.coldReadyR.top, paneL + pillW, w.coldReadyR.bottom}
+		cv.drawAlphaRoundRect(readyR, float64(p(16)), w.pal.accentSoft, w.surfaceAlpha(240), 0, 0, 0)
+		dotSz := p(7)
+		dotX := readyR.left + p(12)
+		dotY := readyR.top + (readyR.bottom-readyR.top-dotSz)/2
+		cv.drawAlphaRoundRect(rectT{dotX, dotY, dotX + dotSz, dotY + dotSz}, float64(dotSz)/2.0, col(0x10, 0xB9, 0x81), 255, 0, 0, 0)
+		cv.drawAlphaText(w.fontSm, readyTxt,
+			rectT{dotX + dotSz + p(8), readyR.top, readyR.right - p(10), readyR.bottom},
+			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.accent)
+
+		// Left Card: Value Before Wall (Temp Share & LAN Discovery)
+		cv.drawAlphaRoundRect(w.coldLeftCardR, float64(p(14)), w.pal.paper2, tileA, w.pal.line, w.surfaceAlpha(210), 1.0)
+		lMidX := (w.coldLeftCardR.left + w.coldLeftCardR.right) / 2
+		iconBox := rectT{lMidX - p(24), w.coldLeftCardR.top + p(28), lMidX + p(24), w.coldLeftCardR.top + p(76)}
+		cv.drawAlphaRoundRect(iconBox, float64(p(14)), w.pal.accentSoft, w.surfaceAlpha(240), 0, 0, 0)
+		drawUploadSDF(cv, rectT{iconBox.left + p(10), iconBox.top + p(10), iconBox.right - p(10), iconBox.bottom - p(10)}, w.pal.accent)
+
+		cv.drawAlphaText(w.fontH2, "免配对直接体验",
+			rectT{w.coldLeftCardR.left + p(18), iconBox.bottom + p(14), w.coldLeftCardR.right - p(18), iconBox.bottom + p(38)},
+			dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
+		cv.drawAlphaText(w.fontSm, "直接拖入文件，或生成临时网页二维码让对方浏览器扫码下载，也可以搜索同 Wi-Fi 设备免配对互传。",
+			rectT{w.coldLeftCardR.left + p(24), iconBox.bottom + p(44), w.coldLeftCardR.right - p(24), w.tempShareBtnR.top - p(14)},
+			dtCenter|dtWordBreak, w.pal.ink2)
+
+		tsFill := w.pal.accent
+		if w.hover == hoverTempShare {
+			tsFill = shade(tsFill, w.dark, 0.12)
+		}
+		cv.drawAlphaRoundRect(w.tempShareBtnR, float64(p(10)), tsFill, 255, 0, 0, 0)
+		cv.drawAlphaText(w.fontBold, "临时快传（二维码 / 网页）", w.tempShareBtnR, dtCenter|dtSingleLine|dtVCenter, w.pal.accentInk)
+
+		scanFill := w.pal.paper
+		scanEdge := w.pal.line
+		if w.hover == hoverHomeScanLan {
+			scanFill = w.pal.paper3
+			scanEdge = w.pal.accent
+		}
+		scanLbl := "搜索局域网"
+		if w.app != nil && w.app.isLANScanning() {
+			scanLbl = "搜索中…"
+		}
+		cv.drawAlphaRoundRect(w.homeScanLanR, float64(p(10)), scanFill, 255, scanEdge, 220, 1.0)
+		cv.drawAlphaText(w.fontSm, scanLbl, w.homeScanLanR, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
+
+		// Right Card: Pair Device
+		cv.drawAlphaRoundRect(w.coldRightCardR, float64(p(14)), w.pal.paper2, tileA, w.pal.line, w.surfaceAlpha(210), 1.0)
+		rMidX := (w.coldRightCardR.left + w.coldRightCardR.right) / 2
+		rIconBox := rectT{rMidX - p(24), w.coldRightCardR.top + p(28), rMidX + p(24), w.coldRightCardR.top + p(76)}
+		cv.drawAlphaRoundRect(rIconBox, float64(p(14)), w.pal.paper, 255, w.pal.line, 220, 1.0)
+		drawNavIconSDF(cv, rectT{rIconBox.left + p(10), rIconBox.top + p(10), rIconBox.right - p(10), rIconBox.bottom - p(10)}, 2, w.pal.ink2)
+
+		cv.drawAlphaText(w.fontH2, "添加常用设备",
+			rectT{w.coldRightCardR.left + p(18), rIconBox.bottom + p(14), w.coldRightCardR.right - p(18), rIconBox.bottom + p(38)},
+			dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
+		cv.drawAlphaText(w.fontSm, "与自己的手机或其他电脑配对一次，后续支持跨网络加密穿透与后台免确认自动接收。",
+			rectT{w.coldRightCardR.left + p(20), rIconBox.bottom + p(44), w.coldRightCardR.right - p(20), w.addDevLinkR.top - p(14)},
+			dtCenter|dtWordBreak, w.pal.ink2)
+
+		addFill := w.pal.paper
+		addEdge := w.pal.accent
+		addFg := w.pal.accent
+		if w.hover == hoverAddDevice {
+			addFill = w.pal.accentSoft
+		}
+		cv.drawAlphaRoundRect(w.addDevLinkR, float64(p(10)), addFill, 255, addEdge, 220, 1.0)
+		cv.drawAlphaText(w.fontBold, "扫码配对设备", w.addDevLinkR, dtCenter|dtSingleLine|dtVCenter, addFg)
+
+		if w.status != "" {
+			cv.drawAlphaText(w.fontSm, w.status, rectT{paneL, cr.bottom - p(30), paneR, cr.bottom - p(8)},
+				dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
+		}
+		return
+	}
+
+	// 3. Target Device Pill Row
+	if len(w.targetPillRects) > 0 || w.tempShareBtnR.right > w.tempShareBtnR.left {
+		rowTop := w.tempShareBtnR.top
+		if len(w.targetPillRects) > 0 {
+			rowTop = w.targetPillRects[0].top
+		}
+		cv.drawAlphaText(w.fontSm, "发给", rectT{paneL, rowTop, paneL + p(34), rowTop + p(30)},
+			dtSingleLine|dtVCenter, w.pal.ink2)
+	}
+	curTarget, hasCur := w.activeTarget()
+	for i, pr := range w.targetPillRects {
+		t := w.targetPillItems[i]
+		selected := hasCur && targetsEqual(curTarget, t)
+		hovered := w.hover == hoverTargetPill && w.hoverIdx == i
+		bg, edge, fg := w.pal.paper2, w.pal.line, w.pal.ink
+		if selected {
+			bg, edge, fg = w.pal.accentSoft, w.pal.accent, w.pal.accent
+		} else if hovered {
+			bg = w.pal.paper3
+		}
+		cv.drawAlphaRoundRect(pr, float64(p(15)), bg, tileA, edge, w.surfaceAlpha(220), 1.0)
+
+		reach := w.targetReachability(t)
+		dotCol := w.pal.ink3
+		switch reach {
+		case "lan":
+			dotCol = col(0x10, 0xB9, 0x81)
+		case "cloud":
+			dotCol = w.pal.accent
+		}
+		dotSz := p(7)
+		dotX := pr.left + p(11)
+		dotY := pr.top + (pr.bottom-pr.top-dotSz)/2
+		cv.drawAlphaRoundRect(rectT{dotX, dotY, dotX + dotSz, dotY + dotSz}, float64(dotSz)/2.0, dotCol, 255, 0, 0, 0)
+
+		lbl := t.label()
+		if reach == "lan" {
+			lbl += " · 局域网"
+		}
+		font := w.fontSm
+		if selected {
+			font = w.fontBold
+		}
+		cv.drawAlphaText(font, lbl, rectT{dotX + dotSz + p(7), pr.top, pr.right - p(10), pr.bottom},
+			dtSingleLine|dtVCenter|dtEndEllipsis, fg)
+	}
+
+	tsFill, tsEdge, tsFg := w.pal.paper, w.pal.line, w.pal.ink2
+	if w.hover == hoverTempShare {
+		tsFill, tsEdge, tsFg = w.pal.accentSoft, w.pal.accent, w.pal.accent
+	}
+	cv.drawAlphaRoundRect(w.tempShareBtnR, float64(p(15)), tsFill, tileA, tsEdge, w.surfaceAlpha(200), 1.0)
+	cv.drawAlphaText(w.fontSm, "+ 临时扫码传", w.tempShareBtnR, dtCenter|dtSingleLine|dtVCenter, tsFg)
+
+	// 4. Active Transfer Focus
+	if tx != nil && w.activeTxR.bottom > w.activeTxR.top {
+		w.drawActiveTransferCard(cv, w.activeTxR, tx)
+		if w.status != "" {
+			cv.drawAlphaText(w.fontSm, w.status, rectT{paneL, cr.bottom - p(30), paneR, cr.bottom - p(8)},
+				dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
+		}
+		return
+	}
+
+	// 5. Idle Hero Dashed Drop Zone
+	cv.drawAlphaRoundRect(w.dropZoneR, float64(p(16)), w.pal.paper2, w.surfaceAlpha(185), 0, 0, 0)
+	drawDashedRoundRect(cv, w.dropZoneR, float64(p(16)), w.pal.line, w.surfaceAlpha(240), 1.5, float64(p(7)), float64(p(5)))
+
+	dzMidX := (w.dropZoneR.left + w.dropZoneR.right) / 2
+	dzH := w.dropZoneR.bottom - w.dropZoneR.top
+	contentH := p(148)
 	if len(w.queued) > 0 {
-		cv.drawAlphaRoundRect(w.queueBoxR, float64(p(6)), w.pal.paper2, tileA, w.pal.line, w.surfaceAlpha(210), 1.0)
-		label := fmt.Sprintf("已选 %s", summarizeFiles(w.queued))
-		cv.drawAlphaText(w.fontSm, label,
-			rectT{w.queueBoxR.left + p(8), w.queueBoxR.top, w.queueClearR.left - p(4), w.queueBoxR.bottom},
-			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink)
-		cv.drawAlphaText(w.fontSm, "清除", w.queueClearR, dtCenter|dtSingleLine|dtVCenter, w.pal.ink2)
+		contentH = p(190)
+	}
+	innerTop := w.dropZoneR.top + (dzH-contentH)/2
+	if innerTop < w.dropZoneR.top+p(14) {
+		innerTop = w.dropZoneR.top + p(14)
 	}
 
-	// Recipient row
-	lblTop := w.addDevLinkR.top
-	cv.drawAlphaText(w.fontSm, "发给", rectT{w.tileFilesR.left, lblTop, w.homeScanLanR.left, w.addDevLinkR.bottom},
-		dtSingleLine|dtVCenter, w.pal.ink2)
-	scanLbl := "搜索局域网"
-	if w.app != nil && w.app.isLANScanning() {
-		scanLbl = "搜索中…"
-	}
-	scanColor := w.pal.ink2
-	if w.hover == hoverHomeScanLan {
-		scanColor = w.pal.accent
-	}
-	cv.drawAlphaText(w.fontSm, scanLbl, w.homeScanLanR, dtRight|dtSingleLine|dtVCenter, scanColor)
-	cv.drawAlphaText(w.fontSm, "添加设备", w.addDevLinkR, dtRight|dtSingleLine|dtVCenter, w.pal.accent)
+	iconBox := rectT{dzMidX - p(23), innerTop, dzMidX + p(23), innerTop + p(46)}
+	cv.drawAlphaRoundRect(iconBox, float64(p(13)), w.pal.accentSoft, w.surfaceAlpha(240), 0, 0, 0)
+	drawUploadSDF(cv, rectT{iconBox.left + p(10), iconBox.top + p(10), iconBox.right - p(10), iconBox.bottom - p(10)}, w.pal.accent)
 
-	pEdge := w.pal.line
-	if w.hover == hoverPeerPicker {
-		pEdge = w.pal.accent
+	headline := "拖入文件或文件夹，直接发送"
+	subline := "端到端加密传输"
+	if hasCur {
+		headline = "拖入文件或文件夹，发往 " + curTarget.label()
+		switch w.targetReachability(curTarget) {
+		case "lan":
+			subline = "端到端加密 · 已自动就绪同局域网高速直连"
+		case "cloud":
+			subline = "端到端加密 · 云端在线，将自动协商最优路径"
+		default:
+			subline = "对方当前离线 · 上线后可送达，或使用「临时扫码传」"
+		}
 	}
-	cv.drawAlphaRoundRect(w.peerPickerR, float64(p(8)), w.pal.paper, tileA, pEdge, w.surfaceAlpha(220), 1.0)
-	if target, ok := w.activeTarget(); ok {
-		txt := target.label()
-		if target.isLAN {
-			txt += " · 局域网临时"
-		}
-		if w.targetCount() > 1 {
-			txt += "  ▾"
-		}
-		cv.drawAlphaText(w.fontBold, txt,
-			rectT{w.peerPickerR.left + p(10), w.peerPickerR.top, w.peerPickerR.right - p(10), w.peerPickerR.bottom},
+	cv.drawAlphaText(w.fontH2, headline,
+		rectT{w.dropZoneR.left + p(24), iconBox.bottom + p(10), w.dropZoneR.right - p(24), iconBox.bottom + p(36)},
+		dtCenter|dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink)
+	cv.drawAlphaText(w.fontSm, subline,
+		rectT{w.dropZoneR.left + p(24), iconBox.bottom + p(36), w.dropZoneR.right - p(24), iconBox.bottom + p(58)},
+		dtCenter|dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
+
+	if len(w.queued) > 0 && w.queueBoxR.bottom > w.queueBoxR.top {
+		cv.drawAlphaRoundRect(w.queueBoxR, float64(p(8)), w.pal.paper, 255, w.pal.line, 220, 1.0)
+		qLbl := fmt.Sprintf("已选 %s", summarizeFiles(w.queued))
+		cv.drawAlphaText(w.fontSm, qLbl,
+			rectT{w.queueBoxR.left + p(10), w.queueBoxR.top, w.queueClearR.left - p(6), w.queueBoxR.bottom},
 			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink)
-	} else {
-		cv.drawAlphaText(w.fontSm, "未配对，点此扫码或搜局域网",
-			rectT{w.peerPickerR.left + p(10), w.peerPickerR.top, w.peerPickerR.right - p(10), w.peerPickerR.bottom},
+		clrFg := w.pal.ink2
+		if w.hover == hoverQueueClear {
+			clrFg = w.pal.danger
+		}
+		cv.drawAlphaText(w.fontSm, "清除", w.queueClearR, dtCenter|dtSingleLine|dtVCenter, clrFg)
+	}
+
+	// Action Row inside Hero Drop Zone: [选择文件并发送] [发文件夹] [发文字]
+	sendFill := w.pal.accent
+	if w.hover == hoverSendBtn {
+		sendFill = shade(sendFill, w.dark, 0.12)
+	}
+	cv.drawAlphaRoundRect(w.sendBtnR, float64(p(10)), sendFill, 255, 0, 0, 0)
+	sendLbl := "选择文件并发送"
+	if len(w.queued) > 0 {
+		sendLbl = "立即发送"
+	}
+	cv.drawAlphaText(w.fontBold, sendLbl, w.sendBtnR, dtCenter|dtSingleLine|dtVCenter, w.pal.accentInk)
+
+	fldFill, fldEdge := w.pal.paper, w.pal.line
+	if w.hover == hoverTileFolder {
+		fldFill, fldEdge = w.pal.paper3, w.pal.accent
+	}
+	cv.drawAlphaRoundRect(w.tileFolderR, float64(p(10)), fldFill, 255, fldEdge, 220, 1.0)
+	cv.drawAlphaText(w.fontSm, "发文件夹", w.tileFolderR, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
+
+	txtFill, txtEdge := w.pal.paper, w.pal.line
+	if w.hover == hoverSendText {
+		txtFill, txtEdge = w.pal.paper3, w.pal.accent
+	}
+	cv.drawAlphaRoundRect(w.sendTextR, float64(p(10)), txtFill, 255, txtEdge, 220, 1.0)
+	cv.drawAlphaText(w.fontSm, "发文字", w.sendTextR, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
+
+	// 6. Single-Purpose Smart Clipboard Bar (NO arrows, NO unrelated buttons)
+	cv.drawAlphaRoundRect(w.clipBarR, float64(p(12)), w.pal.paper2, tileA, w.pal.line, w.surfaceAlpha(210), 1.0)
+	cIconR := rectT{w.clipBarR.left + p(12), w.clipBarR.top + p(11), w.clipBarR.left + p(44), w.clipBarR.bottom - p(11)}
+	cv.drawAlphaRoundRect(cIconR, float64(p(8)), w.pal.accentSoft, w.surfaceAlpha(235), 0, 0, 0)
+	drawClipSDF(cv, rectT{cIconR.left + p(6), cIconR.top + p(6), cIconR.right - p(6), cIconR.bottom - p(6)}, w.pal.accent)
+
+	clipTitle := "剪贴板快捷发送"
+	clipSub := "复制截图或文本后，点右侧一键发往对方"
+	clipActionLbl := "发送剪贴板"
+	if w.clipPreview.kind != "" {
+		clipTitle = w.clipPreview.title
+		clipSub = w.clipPreview.sub
+		if w.clipPreview.kind == "image" {
+			clipActionLbl = "发送截图"
+		}
+	}
+	cv.drawAlphaText(w.fontBold, clipTitle,
+		rectT{cIconR.right + p(10), w.clipBarR.top + p(7), w.sendClipR.left - p(10), w.clipBarR.top + p(27)},
+		dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink)
+	cv.drawAlphaText(w.fontSm, clipSub,
+		rectT{cIconR.right + p(10), w.clipBarR.top + p(27), w.sendClipR.left - p(10), w.clipBarR.bottom - p(7)},
+		dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink3)
+
+	cbFill := w.pal.accentSoft
+	cbFg := w.pal.accent
+	if w.hover == hoverSendClip {
+		cbFill = w.pal.accent
+		cbFg = w.pal.accentInk
+	}
+	cv.drawAlphaRoundRect(w.sendClipR, float64(p(9)), cbFill, 255, 0, 0, 0)
+	sendIconR := rectT{w.sendClipR.left + p(11), w.sendClipR.top + p(8), w.sendClipR.left + p(27), w.sendClipR.bottom - p(8)}
+	drawSendSDF(cv, sendIconR, cbFg)
+	cv.drawAlphaText(w.fontBold, clipActionLbl,
+		rectT{sendIconR.right + p(4), w.sendClipR.top, w.sendClipR.right - p(10), w.sendClipR.bottom},
+		dtCenter|dtSingleLine|dtVCenter, cbFg)
+
+	// 7. Compact Latest-1 Activity Footer (no table!)
+	if w.latestBarR.bottom > w.latestBarR.top && w.app != nil {
+		if lines := w.app.recentLines(1); len(lines) > 0 {
+			r := parseLedgerLine(lines[0])
+			cv.fillColorAlpha(rectT{paneL, w.latestBarR.top - p(4), paneR, w.latestBarR.top - p(3)}, w.pal.lineSoft, w.surfaceAlpha(200))
+			tagR := rectT{paneL, w.latestBarR.top + p(6), paneL + p(38), w.latestBarR.bottom - p(6)}
+			cv.drawAlphaRoundRect(tagR, float64(p(5)), w.pal.paper3, 255, 0, 0, 0)
+			cv.drawAlphaText(w.fontSm, "最近", tagR, dtCenter|dtSingleLine|dtVCenter, w.pal.ink2)
+
+			verb := "刚收到"
+			if r.dir == "发" {
+				verb = "刚发出"
+			}
+			fname := r.files
+			if fname == "" {
+				fname = r.peer
+			}
+			summary := fmt.Sprintf("%s · %s", verb, fname)
+			if r.size != "" || r.peer != "" {
+				var meta []string
+				if r.size != "" {
+					meta = append(meta, r.size)
+				}
+				if r.peer != "" {
+					meta = append(meta, r.peer)
+				}
+				summary += "（" + strings.Join(meta, " · ") + "）"
+			}
+			cv.drawAlphaText(w.fontSm, summary,
+				rectT{tagR.right + p(8), w.latestBarR.top, w.openDirR.left - p(8), w.latestBarR.bottom},
+				dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink)
+
+			openClr := w.pal.ink2
+			if w.hover == hoverOpenDir {
+				openClr = w.pal.accent
+			}
+			cv.drawAlphaText(w.fontSm, "打开接收目录", w.openDirR, dtRight|dtSingleLine|dtVCenter, openClr)
+
+			allClr := w.pal.accent
+			if w.hover == hoverAllHistory {
+				allClr = shade(allClr, w.dark, 0.14)
+			}
+			cv.drawAlphaText(w.fontBold, "全部记录 ›", w.allHistoryLinkR, dtRight|dtSingleLine|dtVCenter, allClr)
+		}
+	}
+
+	if w.status != "" {
+		cv.drawAlphaText(w.fontSm, w.status, rectT{paneL, cr.bottom - p(28), paneR, cr.bottom - p(6)},
 			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
 	}
+}
 
-	// Primary Send button
-	btnFill := w.pal.accent
-	if w.hover == hoverSendBtn {
-		btnFill = shade(btnFill, w.dark, 0.12)
-	}
-	cv.drawAlphaRoundRect(w.sendBtnR, float64(p(8)), btnFill, 255, btnFill, 255, 0)
-	btnLbl := "发送"
-	if len(w.queued) == 0 && w.hasPeers() {
-		btnLbl = "选择文件并发送"
-	} else if !w.hasPeers() {
-		btnLbl = "扫码配对设备"
-	}
-	cv.drawAlphaText(w.fontBold, btnLbl, w.sendBtnR, dtCenter|dtSingleLine|dtVCenter, w.pal.accentInk)
-
-	// Footer links under Send Card
-	textColor := w.pal.ink2
-	if w.hover == hoverSendText {
-		textColor = w.pal.accent
-	}
-	cv.drawAlphaText(w.fontSm, "发送文字", w.sendTextR, dtSingleLine|dtVCenter, textColor)
-	cv.drawAlphaText(w.fontSm, "·",
-		rectT{w.sendTextR.right, w.sendTextR.top, w.sendClipR.left, w.sendTextR.bottom},
-		dtCenter|dtSingleLine|dtVCenter, w.pal.ink3)
-
-	clipColor := w.pal.ink2
-	if w.hover == hoverSendClip {
-		clipColor = w.pal.accent
-	}
-	cv.drawAlphaText(w.fontSm, "发送剪贴板", w.sendClipR, dtSingleLine|dtVCenter, clipColor)
-	cv.drawAlphaText(w.fontSm, "支持直接拖入文件",
-		rectT{w.sendClipR.right + p(4), w.sendClipR.top, w.sendCardR.right - p(2), w.sendClipR.bottom},
-		dtRight|dtSingleLine|dtVCenter, w.pal.ink3)
-
-	tsFill := w.pal.paper
-	tsEdge := w.pal.line
-	tsFg := w.pal.ink
-	if w.hover == hoverTempShare {
-		tsFill = w.pal.accentSoft
-		tsEdge = w.pal.accent
-		tsFg = w.pal.accent
-	}
-	cv.drawAlphaRoundRect(w.tempShareBtnR, float64(p(9)), tsFill, tileA, tsEdge, w.surfaceAlpha(220), 1.0)
-	cv.drawAlphaText(w.fontSm, "临时快传（生成二维码 / 网页直传）", w.tempShareBtnR, dtCenter|dtSingleLine|dtVCenter, tsFg)
-
-	// Right Transfers Pane
-	paneL := w.sendColR.right + p(28)
+func (w *mainWin) drawHistory(cv *glassCanvas, cr rectT) {
+	p := w.px
+	topH := w.titleBarR.bottom
+	paneL := w.railR.right + p(28)
 	paneR := cr.right - p(28)
-	sigLbl, sigKind := "信令服务器：未连接", "offline"
-	if w.app != nil {
-		sigLbl, sigKind = w.app.signalHomeStatus()
+
+	cv.drawAlphaText(w.fontH1, "传输记录", rectT{paneL, topH + p(20), w.openDirR.left - p(12), topH + p(54)},
+		dtSingleLine|dtVCenter, w.pal.ink)
+
+	openClr := w.pal.ink2
+	if w.hover == hoverOpenDir {
+		openClr = w.pal.accent
 	}
-	pillBg, pillFg, dotCol := w.pal.paper3, w.pal.ink2, w.pal.ink3
-	switch sigKind {
-	case "online":
-		pillBg, pillFg, dotCol = w.pal.accentSoft, w.pal.accent, w.pal.accent
-	case "connecting":
-		if w.dark {
-			pillBg = col(0x45, 0x1A, 0x03)
-		} else {
-			pillBg = col(0xFE, 0xF3, 0xC7)
-		}
-		pillFg, dotCol = w.pal.amber, w.pal.amber
-	}
-	pillW := textWidth(cv.memDC, w.fontSm, sigLbl) + p(36)
-	pillH := p(24)
-	pillY := topH + p(25)
-	pillR := rectT{paneR - pillW, pillY, paneR, pillY + pillH}
-	cv.drawAlphaText(w.fontH1, "传输记录", rectT{paneL, topH + p(20), pillR.left - p(12), topH + p(54)}, dtSingleLine|dtVCenter, w.pal.ink)
-	cv.drawAlphaRoundRect(pillR, float64(p(12)), pillBg, w.surfaceAlpha(235), 0, 0, 0)
-	dotSz := p(6)
-	dotX := pillR.left + p(9)
-	dotY := pillY + (pillH-dotSz)/2
-	cv.drawAlphaRoundRect(rectT{dotX, dotY, dotX + dotSz, dotY + dotSz}, float64(dotSz)/2.0, dotCol, 255, 0, 0, 0)
-	cv.drawAlphaText(w.fontSm, sigLbl, rectT{dotX + dotSz + p(6), pillY, pillR.right - p(8), pillR.bottom}, dtSingleLine|dtVCenter, pillFg)
+	cv.drawAlphaText(w.fontSm, "打开接收文件夹", w.openDirR, dtRight|dtSingleLine|dtVCenter, openClr)
 
 	// Underlined filter tabs
 	tabItems := []struct {
@@ -1641,11 +2144,6 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 		}
 		cv.drawAlphaText(w.fontBold, tb.label, tb.r, dtSingleLine|dtVCenter, c)
 	}
-	openClr := w.pal.ink2
-	if w.hover == hoverOpenDir {
-		openClr = w.pal.accent
-	}
-	cv.drawAlphaText(w.fontSm, "打开接收文件夹", w.openDirR, dtRight|dtSingleLine|dtVCenter, openClr)
 
 	if tx := w.app.currentTransfer(); tx != nil && w.activeTxR.bottom > w.activeTxR.top {
 		w.drawActiveTransferCard(cv, w.activeTxR, tx)
@@ -2546,12 +3044,14 @@ func (w *mainWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
 		kind = hoverCapClose
 	case ptIn(w.navHomeR, x, y):
 		kind = hoverNavHome
+	case ptIn(w.navHistoryR, x, y):
+		kind = hoverNavHistory
 	case ptIn(w.navDevicesR, x, y):
 		kind = hoverNavDevices
 	case ptIn(w.navSetR, x, y):
 		kind = hoverNavSettings
-	case w.page == pageHome && ptIn(w.tileFilesR, x, y):
-		kind = hoverTileFiles
+	case w.page == pageHome && ptIn(w.netRetryR, x, y):
+		kind = hoverNetRetry
 	case w.page == pageHome && ptIn(w.tileFolderR, x, y):
 		kind = hoverTileFolder
 	case w.page == pageHome && len(w.queued) > 0 && ptIn(w.queueClearR, x, y):
@@ -2560,8 +3060,6 @@ func (w *mainWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
 		kind = hoverHomeScanLan
 	case w.page == pageHome && ptIn(w.addDevLinkR, x, y):
 		kind = hoverAddDevice
-	case w.page == pageHome && ptIn(w.peerPickerR, x, y):
-		kind = hoverPeerPicker
 	case w.page == pageHome && ptIn(w.sendBtnR, x, y):
 		kind = hoverSendBtn
 	case w.page == pageHome && ptIn(w.sendTextR, x, y):
@@ -2570,21 +3068,25 @@ func (w *mainWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
 		kind = hoverSendClip
 	case w.page == pageHome && ptIn(w.tempShareBtnR, x, y):
 		kind = hoverTempShare
-	case w.page == pageHome && ptIn(w.fltAllR, x, y):
-		kind = hoverFltAll
-	case w.page == pageHome && ptIn(w.fltSendR, x, y):
-		kind = hoverFltSend
-	case w.page == pageHome && ptIn(w.fltRecvR, x, y):
-		kind = hoverFltRecv
+	case w.page == pageHome && ptIn(w.allHistoryLinkR, x, y):
+		kind = hoverAllHistory
 	case w.page == pageHome && ptIn(w.openDirR, x, y):
 		kind = hoverOpenDir
-	case w.page == pageHome && ptIn(w.txPauseBtnR, x, y):
+	case w.page == pageHistory && ptIn(w.fltAllR, x, y):
+		kind = hoverFltAll
+	case w.page == pageHistory && ptIn(w.fltSendR, x, y):
+		kind = hoverFltSend
+	case w.page == pageHistory && ptIn(w.fltRecvR, x, y):
+		kind = hoverFltRecv
+	case w.page == pageHistory && ptIn(w.openDirR, x, y):
+		kind = hoverOpenDir
+	case (w.page == pageHome || w.page == pageHistory) && ptIn(w.txPauseBtnR, x, y):
 		if w.app != nil {
 			if tx := w.app.currentTransfer(); tx != nil && (tx.paused || !tx.peerPaused) {
 				kind = hoverTxPause
 			}
 		}
-	case w.page == pageHome && ptIn(w.txCancelBtnR, x, y):
+	case (w.page == pageHome || w.page == pageHistory) && ptIn(w.txCancelBtnR, x, y):
 		kind = hoverTxCancel
 	case w.page == pageDevices && ptIn(w.devScanLanBtnR, x, y):
 		kind = hoverDevScanLanBtn
@@ -2612,6 +3114,13 @@ func (w *mainWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
 		kind = hoverAboutRepo
 	default:
 		if w.page == pageHome {
+			for i, pr := range w.targetPillRects {
+				if ptIn(pr, x, y) {
+					kind, idx = hoverTargetPill, i
+					break
+				}
+			}
+		} else if w.page == pageHistory {
 			for i, rr := range w.ledgerRowsR {
 				if ptIn(rr, x, y) {
 					kind, idx = hoverLedgerRow, i
@@ -2700,6 +3209,13 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 	case ptIn(w.navHomeR, x, y):
 		w.page = pageHome
 		w.status = ""
+		w.refreshClipboard()
+		procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+		return
+	case ptIn(w.navHistoryR, x, y):
+		w.page = pageHistory
+		w.unreadHistory = false
+		w.status = ""
 		procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 		return
 	case ptIn(w.navDevicesR, x, y):
@@ -2719,10 +3235,10 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 	switch w.page {
 	case pageHome:
 		switch {
-		case ptIn(w.tileFilesR, x, y):
-			if files := openFileDialog(uintptr(hwnd)); len(files) > 0 {
-				w.queued = files
-				w.status = ""
+		case ptIn(w.netRetryR, x, y):
+			if w.app != nil {
+				w.app.restartSignaling()
+				w.status = "正在重连云端信令服务器…"
 				procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 			}
 		case ptIn(w.tileFolderR, x, y):
@@ -2730,11 +3246,15 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 				items, _, _, err := describeDesktopPaths([]string{dir})
 				if err != nil || len(items) == 0 {
 					w.status = "所选文件夹内没有文件"
+					procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+				} else if target, ok := w.activeTarget(); ok {
+					w.queued = nil
+					w.sendAsyncTarget(hwnd, target, []string{dir})
 				} else {
 					w.queued = []string{dir}
 					w.status = ""
+					procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 				}
-				procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 			}
 		case len(w.queued) > 0 && ptIn(w.queueClearR, x, y):
 			w.queued = nil
@@ -2745,13 +3265,6 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 			w.scanLAN(hwnd)
 		case ptIn(w.addDevLinkR, x, y):
 			openPairWindow(hwnd, w.app)
-		case ptIn(w.peerPickerR, x, y):
-			if w.targetCount() == 0 {
-				openPairWindow(hwnd, w.app)
-			} else if w.targetCount() > 1 {
-				w.cycleTarget()
-				procInvalidateRect.Call(uintptr(hwnd), 0, 1)
-			}
 		case ptIn(w.sendBtnR, x, y):
 			target, ok := w.activeTarget()
 			if !ok {
@@ -2771,6 +3284,48 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 			w.sendClipboard(hwnd)
 		case ptIn(w.tempShareBtnR, x, y):
 			openTempShareWindow(hwnd, w.app)
+		case ptIn(w.allHistoryLinkR, x, y):
+			w.page = pageHistory
+			w.unreadHistory = false
+			w.status = ""
+			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+		case ptIn(w.openDirR, x, y):
+			if w.app != nil {
+				shellOpen(w.app.receiveDir())
+			}
+		case ptIn(w.txPauseBtnR, x, y):
+			if w.app != nil && w.app.togglePauseTransfer() {
+				procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+			}
+		case ptIn(w.txCancelBtnR, x, y):
+			if w.app != nil && w.app.cancelTransfer() {
+				procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+			}
+		default:
+			for i, pr := range w.targetPillRects {
+				if ptIn(pr, x, y) && i < len(w.targetPillItems) {
+					picked := w.targetPillItems[i]
+					w.userPickedTarget = true
+					if picked.isLAN {
+						w.selectedLAN = picked.lan
+					} else {
+						w.selectedLAN = lanPeerEntry{}
+						for pi, peer := range w.peers {
+							if peer.ID == picked.peer.ID {
+								w.sel = pi
+								break
+							}
+						}
+					}
+					w.status = ""
+					procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+					return
+				}
+			}
+		}
+
+	case pageHistory:
+		switch {
 		case ptIn(w.fltAllR, x, y):
 			w.filter = fltAll
 			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
@@ -2922,9 +3477,55 @@ func (w *mainWin) sendClipboard(hwnd syscall.Handle) {
 		openPairWindow(hwnd, w.app)
 		return
 	}
+	if pngBytes, hasImg := readClipboardImageAsPNG(); hasImg && len(pngBytes) > 0 {
+		tmpDir, err := os.MkdirTemp("", "ferry-clip-*")
+		if err != nil {
+			w.status = "创建临时截图失败：" + err.Error()
+			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+			return
+		}
+		imgPath := filepath.Join(tmpDir, fmt.Sprintf("clipboard-%s.png", time.Now().Format("150405")))
+		if err := os.WriteFile(imgPath, pngBytes, 0o600); err != nil {
+			os.RemoveAll(tmpDir)
+			w.status = "写入临时截图失败：" + err.Error()
+			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+			return
+		}
+		label := target.label()
+		w.status = fmt.Sprintf("正在将剪贴板截图发往 %s…", label)
+		procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+		go func() {
+			defer os.RemoveAll(tmpDir)
+			var res client.Result
+			var serr error
+			if target.isLAN {
+				res, serr = sendToLANTarget(w.app, []string{imgPath}, label, target.lan.addr)
+			} else {
+				res, serr = sendToPeer(w.app, []string{imgPath}, target.peer)
+			}
+			msg := fmt.Sprintf("已将剪贴板截图发给 %s（%s）", label, humanBytes(res.Bytes))
+			if serr != nil {
+				switch {
+				case strings.Contains(serr.Error(), "对方已取消"):
+					msg = "对方已取消传输"
+				case strings.Contains(serr.Error(), "已取消"):
+					msg = "已取消发送"
+				default:
+					msg = "发送失败：" + serr.Error()
+				}
+			}
+			mainMu.Lock()
+			if mw := mainWins[hwnd]; mw != nil {
+				mw.status = msg
+			}
+			mainMu.Unlock()
+			procPostMessageW.Call(uintptr(hwnd), wmAppPaint, 0, 0)
+		}()
+		return
+	}
 	txt, ok := readClipboardText()
 	if !ok || strings.TrimSpace(txt) == "" {
-		w.status = "剪贴板中没有文本内容"
+		w.status = "剪贴板中没有文本或截图"
 		procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 		return
 	}
