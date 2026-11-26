@@ -175,7 +175,7 @@ public class MainActivity extends Activity {
     private String signalState = "offline";
     private final Set<String> cloudOnlineSet = new HashSet<>();
     private final Set<String> lanOnlineSet = new HashSet<>();
-    private int activePage; // 0 = 传输, 1 = 设备, 2 = 设置, 3 = 关于
+    private int activePage; // 0 = 传输, 1 = 设备, 2 = 设置
     private String lanPort = "";
     private String selectedTarget = "";
     private String activeFilter = "all"; // "all" | "recv" | "send"
@@ -190,15 +190,14 @@ public class MainActivity extends Activity {
     private TextView topTitleView;
     private View topActionsWrap;
     private LinearLayout bottomNavWrap;
-    private final LinearLayout[] navTabs = new LinearLayout[4];
-    private final ImageView[] navIcons = new ImageView[4];
-    private final TextView[] navLabels = new TextView[4];
+    private final LinearLayout[] navTabs = new LinearLayout[3];
+    private final ImageView[] navIcons = new ImageView[3];
+    private final TextView[] navLabels = new TextView[3];
 
     // Pages
     private ScrollView pageHome;
     private ScrollView pageDevices;
     private ScrollView pageSettings;
-    private ScrollView pageAbout;
 
     // Live transfer card & progress polling state
     private LinearLayout activeTransferCard;
@@ -773,12 +772,9 @@ public class MainActivity extends Activity {
         pageDevices.setVisibility(View.GONE);
         pageSettings = buildSettingsPage();
         pageSettings.setVisibility(View.GONE);
-        pageAbout = buildAboutPage();
-        pageAbout.setVisibility(View.GONE);
         contentHost.addView(pageHome, new FrameLayout.LayoutParams(MATCH, MATCH));
         contentHost.addView(pageDevices, new FrameLayout.LayoutParams(MATCH, MATCH));
         contentHost.addView(pageSettings, new FrameLayout.LayoutParams(MATCH, MATCH));
-        contentHost.addView(pageAbout, new FrameLayout.LayoutParams(MATCH, MATCH));
 
         scaffold.addView(contentHost, new LinearLayout.LayoutParams(MATCH, 0, 1f));
         scaffold.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
@@ -837,9 +833,9 @@ public class MainActivity extends Activity {
         nav.setBackgroundColor(cCard);
         nav.setPadding(dp(12), dp(4), dp(12), dp(4));
 
-        int[] icons = {IconDrawable.TRANSFER, IconDrawable.DEVICES, IconDrawable.SETTINGS, IconDrawable.INFO};
-        String[] titles = {"传输", "设备", "设置", "关于"};
-        for (int i = 0; i < 4; i++) {
+        int[] icons = {IconDrawable.TRANSFER, IconDrawable.DEVICES, IconDrawable.SETTINGS};
+        String[] titles = {"传输", "设备", "设置"};
+        for (int i = 0; i < 3; i++) {
             final int idx = i;
             LinearLayout tab = new LinearLayout(this);
             tab.setOrientation(LinearLayout.VERTICAL);
@@ -860,7 +856,7 @@ public class MainActivity extends Activity {
             navIcons[i] = iv;
             navLabels[i] = tv;
             LinearLayout.LayoutParams tabLp = new LinearLayout.LayoutParams(0, MATCH, 1f);
-            if (i < 3) {
+            if (i < 2) {
                 tabLp.rightMargin = dp(6);
             }
             nav.addView(tab, tabLp);
@@ -883,16 +879,13 @@ public class MainActivity extends Activity {
         pageHome.setVisibility(page == 0 ? View.VISIBLE : View.GONE);
         pageDevices.setVisibility(page == 1 ? View.VISIBLE : View.GONE);
         pageSettings.setVisibility(page == 2 ? View.VISIBLE : View.GONE);
-        if (pageAbout != null) {
-            pageAbout.setVisibility(page == 3 ? View.VISIBLE : View.GONE);
-        }
         backBtn.setVisibility(View.GONE);
         brandMarkView.setVisibility(View.VISIBLE);
-        topActionsWrap.setVisibility(page >= 2 ? View.GONE : View.VISIBLE);
-        topTitleView.setText(page == 0 ? "轻渡" : (page == 1 ? "设备" : (page == 2 ? "设置" : "关于")));
+        topActionsWrap.setVisibility(page == 2 ? View.GONE : View.VISIBLE);
+        topTitleView.setText(page == 0 ? "轻渡" : (page == 1 ? "设备" : "设置"));
 
-        int[] icons = {IconDrawable.TRANSFER, IconDrawable.DEVICES, IconDrawable.SETTINGS, IconDrawable.INFO};
-        for (int i = 0; i < 4; i++) {
+        int[] icons = {IconDrawable.TRANSFER, IconDrawable.DEVICES, IconDrawable.SETTINGS};
+        for (int i = 0; i < 3; i++) {
             boolean sel = (i == page);
             if (navIcons[i] != null) {
                 navIcons[i].setImageDrawable(new IconDrawable(icons[i], sel ? cPrimary : cOnSurfaceVariant));
@@ -1676,16 +1669,61 @@ public class MainActivity extends Activity {
         setPortVal.setTypeface(Typeface.MONOSPACE);
         grp2.addView(settingInfoRow("本地监听端口", setPortVal, null),
                 new LinearLayout.LayoutParams(MATCH, WRAP));
-        grp2.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
-
-        TextView verVal = label(Mobile.getVersion(), 13, cOnSurfaceVariant, false);
-        verVal.setTypeface(Typeface.MONOSPACE);
-        grp2.addView(settingInfoRow("版本", verVal, null),
-                new LinearLayout.LayoutParams(MATCH, WRAP));
 
         LinearLayout.LayoutParams g2Lp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        g2Lp.bottomMargin = dp(18);
+        g2Lp.bottomMargin = dp(22);
         root.addView(grp2, g2Lp);
+
+        // Group 3: 关于
+        TextView aboutHdr = label("关于", 12, cOnSurfaceVariant, true);
+        aboutHdr.setPadding(dp(4), 0, dp(4), dp(8));
+        root.addView(aboutHdr, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        LinearLayout grp3 = new LinearLayout(this);
+        grp3.setOrientation(LinearLayout.VERTICAL);
+        grp3.setBackground(roundBox(cCard, cBorder, 16));
+
+        LinearLayout aboutRow = new LinearLayout(this);
+        aboutRow.setOrientation(LinearLayout.HORIZONTAL);
+        aboutRow.setGravity(Gravity.CENTER_VERTICAL);
+        aboutRow.setPadding(dp(16), dp(14), dp(16), dp(14));
+
+        ImageView mark = new ImageView(this);
+        mark.setImageDrawable(new FerryMarkDrawable());
+        LinearLayout.LayoutParams mkLp = new LinearLayout.LayoutParams(dp(40), dp(40));
+        mkLp.rightMargin = dp(12);
+        aboutRow.addView(mark, mkLp);
+
+        LinearLayout aboutCol = new LinearLayout(this);
+        aboutCol.setOrientation(LinearLayout.VERTICAL);
+        aboutCol.addView(label("轻渡 Ferry", 15, cOnSurface, true), new LinearLayout.LayoutParams(WRAP, WRAP));
+        String rawVer = Mobile.getVersion();
+        String verText = (rawVer != null && !rawVer.trim().isEmpty())
+                ? (rawVer.trim().startsWith("v") ? ("版本 " + rawVer.trim()) : ("版本 v" + rawVer.trim()))
+                : "版本 v1.0.0";
+        TextView verView = label(verText, 12, cOnSurfaceVariant, false);
+        verView.setTypeface(Typeface.MONOSPACE);
+        LinearLayout.LayoutParams vLp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        vLp.topMargin = dp(2);
+        aboutCol.addView(verView, vLp);
+        aboutRow.addView(aboutCol, new LinearLayout.LayoutParams(0, WRAP, 1f));
+        grp3.addView(aboutRow, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        grp3.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
+
+        final String repoUrl = "https://github.com/zhitiaojun/filetransfer";
+        TextView repoVal = label("github.com/zhitiaojun/filetransfer", 12, cPrimary, true);
+        grp3.addView(settingInfoRow("项目地址", repoVal, v -> {
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(repoUrl)));
+            } catch (Exception e) {
+                copyText("项目地址", repoUrl, "已复制项目地址");
+            }
+        }), new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        LinearLayout.LayoutParams g3Lp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        g3Lp.bottomMargin = dp(18);
+        root.addView(grp3, g3Lp);
 
         // Legacy pair file import fallback
         TextView importLegacyBtn = label("导入旧版配对文件 (.txt)", 12, cOnSurfaceVariant, false);
@@ -1697,58 +1735,6 @@ public class MainActivity extends Activity {
 
         refreshDownloadDirUi();
         refreshServerUi();
-        sv.addView(root, new FrameLayout.LayoutParams(MATCH, WRAP));
-        return sv;
-    }
-
-    private ScrollView buildAboutPage() {
-        ScrollView sv = new ScrollView(this);
-        sv.setFillViewport(true);
-
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setGravity(Gravity.CENTER_HORIZONTAL);
-        root.setPadding(dp(20), dp(28), dp(20), dp(32));
-
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setGravity(Gravity.CENTER_HORIZONTAL);
-        card.setBackground(roundBox(cCard, cBorder, 16));
-        card.setPadding(dp(24), dp(32), dp(24), dp(28));
-
-        ImageView mark = new ImageView(this);
-        mark.setImageDrawable(new FerryMarkDrawable());
-        LinearLayout.LayoutParams mkLp = new LinearLayout.LayoutParams(dp(56), dp(56));
-        mkLp.bottomMargin = dp(16);
-        card.addView(mark, mkLp);
-
-        TextView title = label("轻渡 Ferry", 20, cOnSurface, true);
-        card.addView(title, new LinearLayout.LayoutParams(WRAP, WRAP));
-
-        String rawVer = Mobile.getVersion();
-        String verText = (rawVer != null && !rawVer.trim().isEmpty())
-                ? (rawVer.trim().startsWith("v") ? ("版本 " + rawVer.trim()) : ("版本 v" + rawVer.trim()))
-                : "版本 v1.0.0";
-        TextView verView = label(verText, 13, cOnSurfaceVariant, false);
-        LinearLayout.LayoutParams vLp = new LinearLayout.LayoutParams(WRAP, WRAP);
-        vLp.topMargin = dp(6);
-        vLp.bottomMargin = dp(20);
-        card.addView(verView, vLp);
-
-        final String repoUrl = "https://github.com/zhitiaojun/filetransfer";
-        TextView link = label(repoUrl, 13, cPrimary, true);
-        link.setPadding(dp(14), dp(8), dp(14), dp(8));
-        link.setBackground(ripple(roundBox(cPrimaryContainer, 0, 10), 10));
-        link.setOnClickListener(v -> {
-            try {
-                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(repoUrl)));
-            } catch (Exception e) {
-                copyText("项目地址", repoUrl, "已复制项目地址");
-            }
-        });
-        card.addView(link, new LinearLayout.LayoutParams(WRAP, WRAP));
-
-        root.addView(card, new LinearLayout.LayoutParams(MATCH, WRAP));
         sv.addView(root, new FrameLayout.LayoutParams(MATCH, WRAP));
         return sv;
     }

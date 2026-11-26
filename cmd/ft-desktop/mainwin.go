@@ -42,7 +42,7 @@ const (
 	dtWordBreak   = 0x0010
 
 	designW    = 880
-	designH    = 540
+	designH    = 580
 	designMinW = 720
 	designMinH = 440
 
@@ -64,7 +64,6 @@ const (
 	pageHome     = 0
 	pageDevices  = 1
 	pageSettings = 2
-	pageAbout    = 3
 
 	fltAll  = 0
 	fltSend = 1
@@ -77,7 +76,6 @@ const (
 	hoverNavHome
 	hoverNavDevices
 	hoverNavSettings
-	hoverNavAbout
 	hoverTileFiles
 	hoverTileFolder
 	hoverQueueClear
@@ -282,7 +280,6 @@ type mainWin struct {
 	navHomeR    rectT
 	navDevicesR rectT
 	navSetR     rectT
-	navAboutR   rectT
 
 	sendColR      rectT
 	sendCardR     rectT
@@ -1088,7 +1085,6 @@ func (w *mainWin) layout(cw, ch int32) {
 	w.navHomeR = rectT{navX, topH + p(12), navX + navW, topH + p(12) + navH}
 	w.navDevicesR = rectT{navX, w.navHomeR.bottom + p(6), navX + navW, w.navHomeR.bottom + p(6) + navH}
 	w.navSetR = rectT{navX, w.navDevicesR.bottom + p(6), navX + navW, w.navDevicesR.bottom + p(6) + navH}
-	w.navAboutR = rectT{navX, w.navSetR.bottom + p(6), navX + navW, w.navSetR.bottom + p(6) + navH}
 
 	w.syncLANTargets()
 
@@ -1243,12 +1239,12 @@ func (w *mainWin) layout(cw, ch int32) {
 		pad := p(28)
 		paneL := rw + pad
 		paneR := cw - pad
-		rowH := p(58)
-		y := topH + p(86)
-		w.setRecvBtnR = rectT{paneR - p(88), y + p(13), paneR - p(16), y + rowH - p(13)}
+		rowH := p(50)
+		y := topH + p(72)
+		w.setRecvBtnR = rectT{paneR - p(88), y + p(10), paneR - p(16), y + rowH - p(10)}
 		y += rowH
-		btnTop := y + p(13)
-		btnBot := y + rowH - p(13)
+		btnTop := y + p(10)
+		btnBot := y + rowH - p(10)
 		btnGap := p(8)
 		w.setOpenDirR = rectT{paneR - p(72), btnTop, paneR - p(16), btnBot}
 		w.setChangeDirR = rectT{w.setOpenDirR.left - btnGap - p(56), btnTop, w.setOpenDirR.left - btnGap, btnBot}
@@ -1256,27 +1252,24 @@ func (w *mainWin) layout(cw, ch int32) {
 			w.setResetDirR = rectT{w.setChangeDirR.left - btnGap - p(68), btnTop, w.setChangeDirR.left - btnGap, btnBot}
 		}
 		y += rowH
-		w.setAutoBtnR = rectT{paneR - p(88), y + p(13), paneR - p(16), y + rowH - p(13)}
+		w.setAutoBtnR = rectT{paneR - p(88), y + p(10), paneR - p(16), y + rowH - p(10)}
 		y += rowH
-		srvTop := y + p(13)
-		srvBot := y + rowH - p(13)
+		srvTop := y + p(10)
+		srvBot := y + rowH - p(10)
 		w.setChangeSrvR = rectT{paneR - p(56), srvTop, paneR - p(16), srvBot}
 		if w.app != nil && w.app.isCustomServerConfig() {
 			w.setResetSrvR = rectT{w.setChangeSrvR.left - btnGap - p(68), srvTop, w.setChangeSrvR.left - btnGap, srvBot}
 		} else {
 			w.setResetSrvR = rectT{}
 		}
-		infoTop := y + rowH + p(50)
-		infoRowH := p(42)
-		w.setRenameBtnR = rectT{paneR - p(70), infoTop + p(8), paneR - p(16), infoTop + infoRowH - p(8)}
+		infoTop := y + rowH + p(38)
+		infoRowH := p(36)
+		w.setRenameBtnR = rectT{paneR - p(70), infoTop + p(5), paneR - p(16), infoTop + infoRowH - p(5)}
 		infoY := infoTop + infoRowH
 		w.setCopyIDRowR = rectT{paneL, infoY, paneR, infoY + infoRowH}
-	case pageAbout:
-		pad := p(28)
-		paneL := rw + pad
-		paneR := cw - pad
-		cardTop := topH + p(96)
-		w.aboutRepoR = rectT{paneL + p(24), cardTop + p(150), paneR - p(24), cardTop + p(182)}
+		aboutTop := infoTop + infoRowH*3 + p(34)
+		aboutH := p(46)
+		w.aboutRepoR = rectT{paneR - p(240), aboutTop + p(6), paneR - p(16), aboutTop + aboutH - p(6)}
 	}
 }
 
@@ -1347,8 +1340,6 @@ func (w *mainWin) drawScene(cv *glassCanvas, cr rectT) {
 		w.drawDevices(cv, cr)
 	case pageSettings:
 		w.drawSettings(cv, cr)
-	case pageAbout:
-		w.drawAbout(cv, cr)
 	}
 }
 
@@ -1359,22 +1350,7 @@ func (w *mainWin) drawTitleBar(cv *glassCanvas) {
 	my := (w.titleBarR.bottom - mSz) / 2
 	markR := rectT{p(14), my, p(14) + mSz, my + mSz}
 	cv.drawAlphaRoundRect(markR, float64(p(5)), w.pal.accent, 255, 0, 0, 0)
-	cv.drawAlphaGraphic(markR, col(255, 255, 255), func(dc uintptr, rw, rh int32) {
-		pen, _, _ := procCreatePen.Call(psSolid, 1, uintptr(col(255, 255, 255)))
-		oldPen, _, _ := procSelectObject.Call(dc, pen)
-		defer func() {
-			procSelectObject.Call(dc, oldPen)
-			procDeleteObject.Call(pen)
-		}()
-		// Tiny paper-boat hull + water wave
-		procMoveToEx.Call(dc, uintptr(rw*22/100), uintptr(rh*50/100), 0)
-		procLineTo.Call(dc, uintptr(rw*78/100), uintptr(rh*38/100))
-		procLineTo.Call(dc, uintptr(rw*66/100), uintptr(rh*64/100))
-		procLineTo.Call(dc, uintptr(rw*30/100), uintptr(rh*64/100))
-		procLineTo.Call(dc, uintptr(rw*22/100), uintptr(rh*50/100))
-		procMoveToEx.Call(dc, uintptr(rw*24/100), uintptr(rh*76/100), 0)
-		procLineTo.Call(dc, uintptr(rw*76/100), uintptr(rh*76/100))
-	})
+	drawBrandBoatSDF(cv, markR, col(255, 255, 255))
 	cv.drawAlphaText(w.fontSm, "轻渡", rectT{markR.right + p(8), 0, w.capMinR.left, w.titleBarR.bottom},
 		dtSingleLine|dtVCenter, w.pal.ink)
 
@@ -1453,7 +1429,6 @@ func (w *mainWin) drawRail(cv *glassCanvas) {
 		{w.navHomeR, pageHome, hoverNavHome, "传输", 0},
 		{w.navDevicesR, pageDevices, hoverNavDevices, "设备", 1},
 		{w.navSetR, pageSettings, hoverNavSettings, "设置", 2},
-		{w.navAboutR, pageAbout, hoverNavAbout, "关于", 3},
 	}
 	for _, it := range items {
 		active := w.page == it.page
@@ -1469,51 +1444,17 @@ func (w *mainWin) drawRail(cv *glassCanvas) {
 			fg = w.pal.ink
 			cv.drawAlphaRoundRect(it.r, float64(w.px(8)), w.pal.paper3, 180, 0, 0, 0)
 		}
-		iconR := rectT{it.r.left + w.px(16), it.r.top + w.px(7), it.r.right - w.px(16), it.r.top + w.px(25)}
+		iconSz := w.px(20)
+		iconX := (it.r.left + it.r.right - iconSz) / 2
+		iconR := rectT{iconX, it.r.top + w.px(6), iconX + iconSz, it.r.top + w.px(6) + iconSz}
 		w.drawNavIcon(cv, iconR, it.kind, fg)
-		lblR := rectT{it.r.left, it.r.top + w.px(26), it.r.right, it.r.bottom - w.px(4)}
+		lblR := rectT{it.r.left, it.r.top + w.px(28), it.r.right, it.r.bottom - w.px(4)}
 		cv.drawAlphaText(w.fontSm, it.label, lblR, dtCenter|dtSingleLine|dtVCenter, fg)
 	}
 }
 
 func (w *mainWin) drawNavIcon(cv *glassCanvas, r rectT, kind int, color uint32) {
-	cv.drawAlphaGraphic(r, color, func(dc uintptr, rw, rh int32) {
-		penW := int32(math.Max(1.4, float64(w.px(2))*0.8))
-		pen, _, _ := procCreatePen.Call(psSolid, uintptr(penW), uintptr(col(255, 255, 255)))
-		oldPen, _, _ := procSelectObject.Call(dc, pen)
-		nullBr, _, _ := procStock.Call(5) // NULL_BRUSH
-		oldBr, _, _ := procSelectObject.Call(dc, nullBr)
-		defer func() {
-			procSelectObject.Call(dc, oldBr)
-			procSelectObject.Call(dc, oldPen)
-			procDeleteObject.Call(pen)
-		}()
-		move := func(x, y int32) { procMoveToEx.Call(dc, uintptr(x), uintptr(y), 0) }
-		line := func(x, y int32) { procLineTo.Call(dc, uintptr(x), uintptr(y)) }
-
-		switch kind {
-		case 0: // Send arrow
-			move(rw*2/10, rh*8/10)
-			line(rw*8/10, rh*2/10)
-			move(rw*38/100, rh*2/10)
-			line(rw*8/10, rh*2/10)
-			line(rw*8/10, rh*62/100)
-		case 1: // Devices
-			procRoundRect.Call(dc, uintptr(rw*12/100), uintptr(rh*16/100), uintptr(rw*66/100), uintptr(rh*66/100), 3, 3)
-			move(rw*28/100, rh*82/100)
-			line(rw*50/100, rh*82/100)
-			procRoundRect.Call(dc, uintptr(rw*54/100), uintptr(rh*38/100), uintptr(rw*88/100), uintptr(rh*88/100), 3, 3)
-		case 2: // Settings circle + center dot
-			procEllipse.Call(dc, uintptr(rw*18/100), uintptr(rh*18/100), uintptr(rw*82/100), uintptr(rh*82/100))
-			procEllipse.Call(dc, uintptr(rw*40/100), uintptr(rh*40/100), uintptr(rw*60/100), uintptr(rh*60/100))
-		case 3: // About info circle + i
-			procEllipse.Call(dc, uintptr(rw*16/100), uintptr(rh*16/100), uintptr(rw*84/100), uintptr(rh*84/100))
-			move(rw*50/100, rh*33/100)
-			line(rw*50/100, rh*37/100)
-			move(rw*50/100, rh*48/100)
-			line(rw*50/100, rh*72/100)
-		}
-	})
+	drawNavIconSDF(cv, r, kind, color)
 }
 
 func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
@@ -2060,24 +2001,7 @@ func formatETA(elapsed time.Duration, done, total int64) string {
 }
 
 func (w *mainWin) drawFolderGlyph(cv *glassCanvas, r rectT, color uint32) {
-	cv.drawAlphaGraphic(r, color, func(dc uintptr, rw, rh int32) {
-		pen, _, _ := procCreatePen.Call(psSolid, 1, uintptr(col(255, 255, 255)))
-		oldPen, _, _ := procSelectObject.Call(dc, pen)
-		nullBr, _, _ := procStock.Call(5)
-		oldBr, _, _ := procSelectObject.Call(dc, nullBr)
-		defer func() {
-			procSelectObject.Call(dc, oldBr)
-			procSelectObject.Call(dc, oldPen)
-			procDeleteObject.Call(pen)
-		}()
-		procMoveToEx.Call(dc, uintptr(rw*22/100), uintptr(rh*32/100), 0)
-		procLineTo.Call(dc, uintptr(rw*44/100), uintptr(rh*32/100))
-		procLineTo.Call(dc, uintptr(rw*52/100), uintptr(rh*40/100))
-		procLineTo.Call(dc, uintptr(rw*78/100), uintptr(rh*40/100))
-		procLineTo.Call(dc, uintptr(rw*78/100), uintptr(rh*72/100))
-		procLineTo.Call(dc, uintptr(rw*22/100), uintptr(rh*72/100))
-		procLineTo.Call(dc, uintptr(rw*22/100), uintptr(rh*32/100))
-	})
+	drawFolderSDF(cv, r, color)
 }
 
 func (w *mainWin) drawDevices(cv *glassCanvas, cr rectT) {
@@ -2304,12 +2228,12 @@ func (w *mainWin) drawSettings(cv *glassCanvas, cr rectT) {
 	paneL := w.railR.right + pad
 	paneR := cr.right - pad
 
-	cv.drawAlphaText(w.fontH1, "设置", rectT{paneL, topH + p(20), paneR, topH + p(52)}, dtSingleLine|dtVCenter, w.pal.ink)
-	cv.drawAlphaText(w.fontSm, "常规接收选项与本机技术信息。", rectT{paneL, topH + p(54), paneR, topH + p(76)},
+	cv.drawAlphaText(w.fontH1, "设置", rectT{paneL, topH + p(16), paneR, topH + p(44)}, dtSingleLine|dtVCenter, w.pal.ink)
+	cv.drawAlphaText(w.fontSm, "常规接收选项与本机技术信息。", rectT{paneL, topH + p(44), paneR, topH + p(64)},
 		dtSingleLine|dtVCenter, w.pal.ink2)
 
-	rowH := p(58)
-	top := topH + p(86)
+	rowH := p(50)
+	top := topH + p(72)
 	g1 := rectT{paneL, top, paneR, top + rowH*4}
 	cv.drawAlphaRoundRect(g1, float64(p(12)), w.pal.paper, w.surfaceAlpha(195), w.pal.line, w.surfaceAlpha(200), 1.0)
 
@@ -2374,10 +2298,10 @@ func (w *mainWin) drawSettings(cv *glassCanvas, cr rectT) {
 			textRight = r.actions[0].r.left - p(12)
 		}
 		cv.drawAlphaText(w.fontBold, r.title,
-			rectT{paneL + p(16), ry + p(8), textRight, ry + p(30)},
+			rectT{paneL + p(16), ry + p(6), textRight, ry + p(26)},
 			dtSingleLine|dtVCenter, w.pal.ink)
 		cv.drawAlphaText(w.fontSm, r.sub,
-			rectT{paneL + p(16), ry + p(30), textRight, ry + p(50)},
+			rectT{paneL + p(16), ry + p(26), textRight, ry + p(44)},
 			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
 
 		for _, act := range r.actions {
@@ -2389,12 +2313,12 @@ func (w *mainWin) drawSettings(cv *glassCanvas, cr rectT) {
 	}
 
 	// Quiet technical info section
-	lblY := g1.bottom + p(24)
-	cv.drawAlphaText(w.fontBold, "本机信息", rectT{paneL + p(4), lblY, paneR, lblY + p(22)},
+	lblY := g1.bottom + p(16)
+	cv.drawAlphaText(w.fontBold, "本机信息", rectT{paneL + p(4), lblY, paneR, lblY + p(20)},
 		dtSingleLine|dtVCenter, w.pal.ink2)
 
-	infoRowH := p(42)
-	infoTop := lblY + p(26)
+	infoRowH := p(36)
+	infoTop := lblY + p(22)
 	g2 := rectT{paneL, infoTop, paneR, infoTop + infoRowH*3}
 	cv.drawAlphaRoundRect(g2, float64(p(12)), w.pal.paper, w.surfaceAlpha(195), w.pal.line, w.surfaceAlpha(200), 1.0)
 
@@ -2433,63 +2357,44 @@ func (w *mainWin) drawSettings(cv *glassCanvas, cr rectT) {
 		}
 	}
 
-	if w.status != "" {
-		cv.drawAlphaText(w.fontSm, w.status,
-			rectT{paneL, g2.bottom + p(12), paneR, cr.bottom - p(12)},
-			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
-	}
-}
+	// About card tucked neatly inside Settings
+	aboutLblY := g2.bottom + p(14)
+	cv.drawAlphaText(w.fontBold, "关于", rectT{paneL + p(4), aboutLblY, paneR, aboutLblY + p(20)},
+		dtSingleLine|dtVCenter, w.pal.ink2)
 
-const ferryRepoURL = "https://github.com/zhitiaojun/filetransfer"
+	aboutTop := aboutLblY + p(20)
+	aboutH := p(46)
+	g3 := rectT{paneL, aboutTop, paneR, aboutTop + aboutH}
+	cv.drawAlphaRoundRect(g3, float64(p(12)), w.pal.paper, w.surfaceAlpha(195), w.pal.line, w.surfaceAlpha(200), 1.0)
 
-func (w *mainWin) drawAbout(cv *glassCanvas, cr rectT) {
-	p := w.px
-	topH := w.titleBarR.bottom
-	pad := p(28)
-	paneL := w.railR.right + pad
-	paneR := cr.right - pad
-
-	cv.drawAlphaText(w.fontH1, "关于", rectT{paneL, topH + p(20), paneR, topH + p(52)}, dtSingleLine|dtVCenter, w.pal.ink)
-
-	cardTop := topH + p(96)
-	card := rectT{paneL, cardTop, paneR, cardTop + p(214)}
-	cv.drawAlphaRoundRect(card, float64(p(14)), w.pal.paper, w.surfaceAlpha(198), w.pal.line, w.surfaceAlpha(200), 1.0)
-
-	emSz := p(52)
-	emX := (paneL + paneR - emSz) / 2
-	emY := cardTop + p(26)
+	emSz := p(26)
+	emX := paneL + p(16)
+	emY := aboutTop + (aboutH-emSz)/2
 	emR := rectT{emX, emY, emX + emSz, emY + emSz}
-	cv.drawAlphaRoundRect(emR, float64(p(14)), w.pal.accent, 255, 0, 0, 0)
-	cv.drawAlphaGraphic(emR, col(255, 255, 255), func(dc uintptr, rw, rh int32) {
-		penW := int32(math.Max(2, float64(p(2))))
-		pen, _, _ := procCreatePen.Call(psSolid, uintptr(penW), uintptr(col(255, 255, 255)))
-		oldPen, _, _ := procSelectObject.Call(dc, pen)
-		defer func() {
-			procSelectObject.Call(dc, oldPen)
-			procDeleteObject.Call(pen)
-		}()
-		procMoveToEx.Call(dc, uintptr(rw*22/100), uintptr(rh*50/100), 0)
-		procLineTo.Call(dc, uintptr(rw*78/100), uintptr(rh*38/100))
-		procLineTo.Call(dc, uintptr(rw*66/100), uintptr(rh*64/100))
-		procLineTo.Call(dc, uintptr(rw*30/100), uintptr(rh*64/100))
-		procLineTo.Call(dc, uintptr(rw*22/100), uintptr(rh*50/100))
-		procMoveToEx.Call(dc, uintptr(rw*24/100), uintptr(rh*76/100), 0)
-		procLineTo.Call(dc, uintptr(rw*76/100), uintptr(rh*76/100))
-	})
+	cv.drawAlphaRoundRect(emR, float64(p(7)), w.pal.accent, 255, 0, 0, 0)
+	drawBrandBoatSDF(cv, emR, col(255, 255, 255))
 
-	cv.drawAlphaText(w.fontH2, "轻渡 Ferry", rectT{paneL + p(20), emR.bottom + p(14), paneR - p(20), emR.bottom + p(40)},
-		dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
-
-	verTxt := "版本 v" + strings.TrimPrefix(version, "v")
-	cv.drawAlphaText(w.fontMono, verTxt, rectT{paneL + p(20), emR.bottom + p(42), paneR - p(20), emR.bottom + p(64)},
-		dtCenter|dtSingleLine|dtVCenter, w.pal.ink2)
+	cv.drawAlphaText(w.fontBold, "轻渡 Ferry", rectT{emR.right + p(10), aboutTop, emR.right + p(98), aboutTop + aboutH},
+		dtSingleLine|dtVCenter, w.pal.ink)
+	verTxt := "v" + strings.TrimPrefix(version, "v")
+	cv.drawAlphaText(w.fontMono, verTxt, rectT{emR.right + p(98), aboutTop, w.aboutRepoR.left - p(10), aboutTop + aboutH},
+		dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
 
 	repoColor := w.pal.accent
 	if w.hover == hoverAboutRepo {
 		repoColor = shade(w.pal.accent, w.dark, 0.14)
 	}
-	cv.drawAlphaText(w.fontSm, ferryRepoURL, w.aboutRepoR, dtCenter|dtSingleLine|dtVCenter|dtEndEllipsis, repoColor)
+	cv.drawAlphaText(w.fontSm, strings.TrimPrefix(ferryRepoURL, "https://"), w.aboutRepoR,
+		dtRight|dtSingleLine|dtVCenter|dtEndEllipsis, repoColor)
+
+	if w.status != "" {
+		cv.drawAlphaText(w.fontSm, w.status,
+			rectT{paneL, g3.bottom + p(10), paneR, cr.bottom - p(8)},
+			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
+	}
 }
+
+const ferryRepoURL = "https://github.com/zhitiaojun/filetransfer"
 
 // ---------------------------------------------------------------------------
 // Ledger parsing & filtering (compatible with cmd/ft-desktop/mainwin_test.go)
@@ -2645,8 +2550,6 @@ func (w *mainWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
 		kind = hoverNavDevices
 	case ptIn(w.navSetR, x, y):
 		kind = hoverNavSettings
-	case ptIn(w.navAboutR, x, y):
-		kind = hoverNavAbout
 	case w.page == pageHome && ptIn(w.tileFilesR, x, y):
 		kind = hoverTileFiles
 	case w.page == pageHome && ptIn(w.tileFolderR, x, y):
@@ -2705,7 +2608,7 @@ func (w *mainWin) onMouseMove(hwnd syscall.Handle, x, y int32) {
 		kind = hoverSetRename
 	case w.page == pageSettings && ptIn(w.setCopyIDRowR, x, y):
 		kind = hoverSetCopyID
-	case w.page == pageAbout && ptIn(w.aboutRepoR, x, y):
+	case w.page == pageSettings && ptIn(w.aboutRepoR, x, y):
 		kind = hoverAboutRepo
 	default:
 		if w.page == pageHome {
@@ -2809,11 +2712,6 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 		w.page = pageSettings
 		w.status = ""
 		w.refreshLocalMeta()
-		procInvalidateRect.Call(uintptr(hwnd), 0, 1)
-		return
-	case ptIn(w.navAboutR, x, y):
-		w.page = pageAbout
-		w.status = ""
 		procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 		return
 	}
@@ -3012,10 +2910,7 @@ func (w *mainWin) click(hwnd syscall.Handle, x, y int32) {
 				w.status = "已复制本机设备 ID"
 				procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 			}
-		}
-
-	case pageAbout:
-		if ptIn(w.aboutRepoR, x, y) {
+		case ptIn(w.aboutRepoR, x, y):
 			shellOpen(ferryRepoURL)
 		}
 	}

@@ -438,28 +438,5 @@ func (g *glassCanvas) drawAlphaGraphic(r rectT, color uint32, fn func(dc uintptr
 }
 
 func drawCloseGlyph(cv *glassCanvas, r rectT, color uint32) {
-	cv.drawAlphaGraphic(r, color, func(dc uintptr, rw, rh int32) {
-		pen, _, _ := procCreatePen.Call(psSolid, 1, uintptr(col(255, 255, 255)))
-		oldPen, _, _ := procSelectObject.Call(dc, pen)
-		defer func() {
-			procSelectObject.Call(dc, oldPen)
-			procDeleteObject.Call(pen)
-		}()
-		sz := rw
-		if rh < sz {
-			sz = rh
-		}
-		sz = sz * 28 / 100
-		if sz < 8 {
-			sz = 8
-		}
-		x0 := (rw - sz) / 2
-		y0 := (rh - sz) / 2
-		x1 := x0 + sz
-		y1 := y0 + sz
-		procMoveToEx.Call(dc, uintptr(x0), uintptr(y0), 0)
-		procLineTo.Call(dc, uintptr(x1+1), uintptr(y1+1))
-		procMoveToEx.Call(dc, uintptr(x1), uintptr(y0), 0)
-		procLineTo.Call(dc, uintptr(x0-1), uintptr(y1+1))
-	})
+	drawCloseGlyphSDF(cv, r, color)
 }
