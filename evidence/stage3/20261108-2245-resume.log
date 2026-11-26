@@ -1,8 +1,0 @@
-## receiver killed at 2026-11-08T22:45:57+08:00, partial size: 131563520
-## sender summary
-{"ok":true,"path":"lan","topology":"local","peer":"HyperX","transfer_id":"43ac9f60124ddac4969bd60dcd0756cf","files":["test-200m.bin"],"bytes":200000000,"chunks":4178,"duration_ms":743,"attempts":4}
-## receiver events
-{"bytes":200000000,"chunk_size":16384,"event":"transfer.accept","files":1,"peer":"HyperX","resume_file":0,"resume_from":131563520,"ts":"2026-11-08T14:46:00.141647Z"}
-{"bytes":68436480,"chunks":4178,"duration_ms":743,"event":"transfer.done","files":1,"transfer_id":"43ac9f60124ddac4969bd60dcd0756cf","ts":"2026-11-08T14:46:00.8226944Z"}
-## received file
-RESUME_EVIDENCE_DONE

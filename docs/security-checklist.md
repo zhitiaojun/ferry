@@ -1,7 +1,6 @@
-# 安全自查清单（M6，G6 判据）
+# 安全自查清单
 
-> 范围：本项目 M0–M6 已实现的代码路径。每项给出「约束在哪实现 / 用什么证据证明」。改动后须重新跑对应测试或脚本。
-> 最近核对：2026-11-26（对应 `v1.0.0-beta.37` 代码路径）。
+> 范围：轻渡 Ferry `v1.0.0` 已实现的代码路径。每项列出对应安全约束的实现位置与验证测试，改动相关模块后应重新运行 `go test -count=1 ./...`。
 
 ## 1. 文件名与路径
 
@@ -18,7 +17,7 @@
 |---|---|---|
 | 单帧载荷 ≤ 1 MiB | `core/proto/frame.go` `MaxPayload`，`ReadFrame` 超限报错 | `core/proto` 单测与金标向量 `invalid.json`（`frame_too_large`） |
 | 信令信封 ≤ 64 KiB 且版本必须为 1 | `core/signaling/message.go` `Parse` | `core/signaling/message_test.go` |
-| WebSocket 读上限：信令/中继 1 MiB，设备侧 web 房间 4 MiB（浏览器 64 KiB 帧） | `server/server.go` `SetReadLimit`、`core/tempshare/webhost.go` | 中继 10 MB 上传实测（`evidence/stage2/20261108-1521-web-upload10m.log`） |
+| WebSocket 读上限：信令/中继 1 MiB，设备侧 web 房间 4 MiB（浏览器 64 KiB 帧） | `server/server.go` `SetReadLimit`、`core/tempshare/webhost.go` | `server/web_test.go` 与 `core/tempshare/tempshare_test.go` |
 
 ## 3. 清单与内存
 

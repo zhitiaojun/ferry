@@ -1,67 +1,52 @@
-# BJ 部署（M3）
+# `ft-server` 私有化部署指南
 
-权威事实见 `docs/context/infra-bj.md`。本文件只记录部署动作与回滚方式。
+`ft-server` 是轻渡 Ferry 的信令、加密中继、临时快传门户与双端口 UDP STUN 服务端，采用单一 Go 二进制与全内存状态设计，推荐监听本机回环端口并通过 Nginx / OpenResty / Caddy 提供 HTTPS 与 WSS 反向代理。
 
-## 变更清单（全部在 BJ 上）
+## 部署组件清单
 
-| # | 变更 | 说明 |
+| 文件 | 目标位置 | 说明 |
 |---|---|---|
-| 1 | `/opt/ft-server/ft-server` | Linux amd64 二进制（交叉编译，约 7 MB），回环端口 18790 |
-| 2 | `/etc/systemd/system/ft-server.service` | `GOMEMLIMIT=160MiB` + `MemoryMax=256M`，`Restart=on-failure` |
-| 3 | `/var/log/ft-server/` | 服务 JSONL 事件日志 |
-| 4 | `/opt/1panel/www/sites/ft.cwlindean.cn/{index,log,proxy,ssl}` | 站点目录与反代片段 |
-| 5 | `/opt/1panel/www/conf.d/ft.cwlindean.cn.conf` | 80 端口 ACME + 443 站点；**只 `nginx -t` + reload，不 restart** |
-| 6 | 证书 `sites/ft.cwlindean.cn/ssl/{fullchain,privkey}.pem` | 由 Let's Encrypt HTTP-01 签发（域名解析在 ESA，ESA 回源 80） |
-| 7 | 运维仓库回写 | `修改log.md` 与《服务器信息-BJ》 |
+| `ferry-server-linux-amd64` | `/opt/ft-server/ft-server` | Linux amd64 服务端可执行文件 |
+| [`ft-server.service`](ft-server.service) | `/etc/systemd/system/ft-server.service` | systemd 守护单元（默认 `GOMEMLIMIT=160MiB`、`MemoryMax=256M`） |
+| [`logrotate/ft-server`](logrotate/ft-server) | `/etc/logrotate.d/ft-server` | 按天轮转 JSONL 事件日志（保留 14 天并压缩） |
+| [`nginx/ferry.example.conf`](nginx/ferry.example.conf) | `/etc/nginx/conf.d/ferry.conf` | Nginx HTTPS + WSS 站点配置模板 |
+| [`nginx/ft-proxy.conf`](nginx/ft-proxy.conf) | 按需引入 | `/signal` 与 `/relay` WebSocket 代理片段 |
 
-不开新端口：443 由现有 openresty 复用，18790 只绑 127.0.0.1。M3 不需要 UDP（打洞在 M4）。
+## 部署步骤
 
-## 执行顺序
+### 1. 安装二进制与 systemd 服务
 
 ```bash
-# 1. 上传并安装
 install -d /opt/ft-server /var/log/ft-server
-install -m 0755 ft-server /opt/ft-server/ft-server
-install -m 0644 ft-server.service /etc/systemd/system/ft-server.service
-systemctl daemon-reload && systemctl enable --now ft-server
-curl -s http://127.0.0.1:18790/healthz
+install -m 0755 ferry-server-linux-amd64 /opt/ft-server/ft-server
+install -m 0644 deploy/ft-server.service /etc/systemd/system/ft-server.service
+install -m 0644 deploy/logrotate/ft-server /etc/logrotate.d/ft-server
 
-# 2. 站点目录 + 临时自签证书（让 nginx -t 先过）
-install -d /opt/1panel/www/sites/ft.cwlindean.cn/{index,log,proxy,ssl,index/.well-known/acme-challenge}
-openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
-  -subj "/CN=ft.cwlindean.cn" \
-  -keyout .../ssl/privkey.pem -out .../ssl/fullchain.pem
+# 可选：若需要配置服务端门户解锁口令，取消下行注释并写入口令
+# echo 'FT_WEB_PASSWORD=your_strong_password' > /opt/ft-server/web.env
+# chmod 0600 /opt/ft-server/web.env
 
-# 3. 站点配置 + 反代片段，校验并 reload（禁止 restart）
-cp ft.cwlindean.cn.conf /opt/1panel/www/conf.d/
-cp ft-proxy.conf /opt/1panel/www/sites/ft.cwlindean.cn/proxy/
-nginx -t && nginx -s reload
-
-# 4. 申请正式证书（HTTP-01 经 ESA 回源到 80）
-certbot certonly --webroot -w /opt/1panel/www/sites/ft.cwlindean.cn/index \
-  -d ft.cwlindean.cn --agree-tos -m <邮箱> --non-interactive
-cp /etc/letsencrypt/live/ft.cwlindean.cn/fullchain.pem .../ssl/
-cp /etc/letsencrypt/live/ft.cwlindean.cn/privkey.pem   .../ssl/
-nginx -t && nginx -s reload
-
-# 5. 自测（STUN 端口需在安全组放行 40000-40001/udp）
-curl -s https://ferry.cwlindean.cn/healthz
+systemctl daemon-reload
+systemctl enable --now ft-server
+curl -fsS http://127.0.0.1:18790/healthz
 ```
 
-## 回滚
+### 2. 配置反向代理与 TLS 证书
+
+1. 将 [`nginx/ferry.example.conf`](nginx/ferry.example.conf) 中的 `ferry.example.com` 与证书路径替换为你的域名和证书路径。
+2. 确保 `/signal`、`/relay` 与 `/web/` 路由均启用了 `Upgrade` / `Connection "upgrade"`、关闭 `proxy_buffering off;` 并设置较长的 `proxy_read_timeout`（建议 `3600s`）。
+3. 若域名经由 **阿里云 ESA** 等 CDN/边缘安全加速网关接入，请在控制台开启 WebSocket 支持，并注意 **UDP STUN 打洞端口需直连服务器公网 IP**（不经过 HTTP CDN）。
+4. 校验并平滑重载配置：
 
 ```bash
-systemctl disable --now ft-server
-rm -f /opt/1panel/www/conf.d/ft.cwlindean.cn.conf
-rm -rf /opt/1panel/www/sites/ft.cwlindean.cn
 nginx -t && nginx -s reload
-rm -rf /opt/ft-server /var/log/ft-server
 ```
 
-回滚只删本项目新增文件，不触碰任何既有站点配置。
+### 3. 防火墙放行 UDP STUN 端口
 
-## 监控与日志（M8）
+`deploy/ft-server.service` 默认启用双端口 STUN（`0.0.0.0:40000,0.0.0.0:40001`），请在云安全组及本机防火墙放行 `40000-40001/udp`。
 
-- `/metrics`（loopback，经 openresty 不对外）：`version/uptime_s/peers/relay_rooms/relay_bytes/goroutines/heap_mb/sys_mb`。
-- `deploy/logrotate/ft-server` 安装到 `/etc/logrotate.d/ft-server`：daily、14 天、compress、copytruncate。
-- 二进制回滚前先备份：`cp -a /opt/ft-server/ft-server /opt/ft-server/ft-server.bak-$(date +%Y%m%d-%H%M)`。
+### 4. 健康检查与指标观测
+
+- **存活检查**：`https://ferry.example.com/healthz`（返回 HTTP 200）。
+- **运行指标**：`http://127.0.0.1:18790/metrics`（JSON 格式输出 `version`、`uptime_s`、`peers`、`relay_rooms`、`relay_bytes`、`goroutines`、`heap_mb`、`sys_mb`；建议仅限本机或内网访问）。
