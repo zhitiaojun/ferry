@@ -1711,8 +1711,8 @@ public class MainActivity extends Activity {
 
         grp3.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
 
-        final String repoUrl = "https://github.com/zhitiaojun/filetransfer";
-        TextView repoVal = label("github.com/zhitiaojun/filetransfer", 12, cPrimary, true);
+        final String repoUrl = "https://github.com/zhitiaojun/ferry";
+        TextView repoVal = label("github.com/zhitiaojun/ferry", 12, cPrimary, true);
         grp3.addView(settingInfoRow("项目地址", repoVal, v -> {
             try {
                 startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(repoUrl)));

@@ -8,10 +8,10 @@
 
 <p align="center">
   <a href="./LICENSE">
-    <img src="https://img.shields.io/github/license/zhitiaojun/filetransfer?color=brightgreen" alt="license">
+    <img src="https://img.shields.io/github/license/zhitiaojun/ferry?color=brightgreen" alt="license">
   </a><!--
-  --><a href="https://github.com/zhitiaojun/filetransfer/releases/latest">
-    <img src="https://img.shields.io/github/v/release/zhitiaojun/filetransfer?color=brightgreen" alt="release">
+  --><a href="https://github.com/zhitiaojun/ferry/releases/latest">
+    <img src="https://img.shields.io/github/v/release/zhitiaojun/ferry?color=brightgreen" alt="release">
   </a><!--
   --><a href="./go.mod">
     <img src="https://img.shields.io/badge/Go-1.27+-00ADD8?logo=go&logoColor=white" alt="Go">
@@ -19,8 +19,8 @@
   --><a href="https://www.aliyun.com/product/esa" target="_blank">
     <img src="https://img.shields.io/badge/Aliyun%20ESA-%E8%BE%B9%E7%BC%98%E5%AE%89%E5%85%A8%E5%8A%A0%E9%80%9F-FF6A00?logo=alibabacloud&logoColor=white" alt="Aliyun ESA">
   </a><!--
-  --><a href="https://github.com/zhitiaojun/filetransfer/stargazers" target="_blank">
-    <img src="https://img.shields.io/github/stars/zhitiaojun/filetransfer?style=flat&color=orange" alt="GitHub Stars">
+  --><a href="https://github.com/zhitiaojun/ferry/stargazers" target="_blank">
+    <img src="https://img.shields.io/github/stars/zhitiaojun/ferry?style=flat&color=orange" alt="GitHub Stars">
   </a>
 </p>
 
@@ -94,7 +94,7 @@
 
 ### 1. 安装客户端
 
-从 [GitHub Releases](https://github.com/zhitiaojun/filetransfer/releases/latest) 下载对应平台的最新正式构建产物：
+从 [GitHub Releases](https://github.com/zhitiaojun/ferry/releases/latest) 下载对应平台的最新正式构建产物：
 
 - **Windows**：下载并运行 `ferry-setup-windows-amd64.exe`，自动安装桌面端、`ferry.exe` CLI、开机自启与右键菜单；如需卸载可执行：
   ```powershell
@@ -314,7 +314,7 @@ VER_NAME=1.0.0 ./android/build.sh
 | [`docs/security-checklist.md`](./docs/security-checklist.md) | 安全设计与路径/限频/加密自查清单 |
 | [`deploy/README.md`](./deploy/README.md) | `ft-server` 私有化服务端部署指南 |
 | [`CHANGELOG.md`](./CHANGELOG.md) | 版本迭代与更新记录 |
-| [GitHub Issues](https://github.com/zhitiaojun/filetransfer/issues) | 问题反馈与功能建议 |
+| [GitHub Issues](https://github.com/zhitiaojun/ferry/issues) | 问题反馈与功能建议 |
 
 ---
 
@@ -330,7 +330,7 @@ VER_NAME=1.0.0 ./android/build.sh
 
 <div align="center">
 
-[![Star History Chart](https://api.star-history.com/svg?repos=zhitiaojun/filetransfer&type=Date)](https://star-history.com/#zhitiaojun/filetransfer&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=zhitiaojun/ferry&type=Date)](https://star-history.com/#zhitiaojun/ferry&Date)
 
 </div>
 
@@ -342,6 +342,6 @@ VER_NAME=1.0.0 ./android/build.sh
 
 如果这个项目对你有帮助，欢迎点亮右上角 ⭐️ Star 支持！
 
-**[版本下载](https://github.com/zhitiaojun/filetransfer/releases)** • **[问题反馈](https://github.com/zhitiaojun/filetransfer/issues)** • **[协议规范](./docs/spec/protocol.md)**
+**[版本下载](https://github.com/zhitiaojun/ferry/releases)** • **[问题反馈](https://github.com/zhitiaojun/ferry/issues)** • **[协议规范](./docs/spec/protocol.md)**
 
 </div>

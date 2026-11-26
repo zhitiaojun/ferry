@@ -2394,7 +2394,7 @@ func (w *mainWin) drawSettings(cv *glassCanvas, cr rectT) {
 	}
 }
 
-const ferryRepoURL = "https://github.com/zhitiaojun/filetransfer"
+const ferryRepoURL = "https://github.com/zhitiaojun/ferry"
 
 // ---------------------------------------------------------------------------
 // Ledger parsing & filtering (compatible with cmd/ft-desktop/mainwin_test.go)
