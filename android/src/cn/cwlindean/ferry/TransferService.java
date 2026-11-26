@@ -26,6 +26,7 @@ import android.os.IBinder;
 import android.os.PowerManager;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
+import android.provider.Settings;
 import android.util.Log;
 import android.webkit.MimeTypeMap;
 
@@ -42,6 +43,7 @@ import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.InterfaceAddress;
 import java.net.NetworkInterface;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -266,11 +268,52 @@ public class TransferService extends Service implements EventListener {
 
     public static String loadDeviceName(Context ctx) {
         String saved = prefs(ctx).getString("deviceName", "").trim();
-        if (!saved.isEmpty()) {
-            return saved;
+        return saved.isEmpty() ? defaultDeviceName(ctx) : trimToUtf8Bytes(saved, 64);
+    }
+
+    public static String defaultDeviceName(Context ctx) {
+        try {
+            if (Build.VERSION.SDK_INT >= 25 && ctx != null) {
+                String g = Settings.Global.getString(ctx.getContentResolver(), Settings.Global.DEVICE_NAME);
+                if (g != null && !g.trim().isEmpty()) {
+                    return trimToUtf8Bytes(g.trim(), 64);
+                }
+            }
+        } catch (Exception ignored) {
         }
-        String model = Build.MODEL != null ? Build.MODEL.trim() : "";
-        return model.isEmpty() ? "Android" : model;
+        String brand = Build.MANUFACTURER == null ? "" : Build.MANUFACTURER.trim();
+        String model = Build.MODEL == null ? "" : Build.MODEL.trim();
+        String raw = model;
+        if (!brand.isEmpty() && !model.toLowerCase(Locale.US).startsWith(brand.toLowerCase(Locale.US))) {
+            raw = model.isEmpty() ? brand : brand + " " + model;
+        }
+        if (raw.isEmpty()) {
+            raw = "Android";
+        }
+        return trimToUtf8Bytes(raw, 64);
+    }
+
+    public static String trimToUtf8Bytes(String s, int maxBytes) {
+        if (s == null) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder(s.length());
+        int bytes = 0;
+        for (int i = 0; i < s.length(); ) {
+            int cp = s.codePointAt(i);
+            int charLen = Character.charCount(cp);
+            if (cp >= 0x20 && cp != 0x7f) {
+                String ch = new String(Character.toChars(cp));
+                int bLen = ch.getBytes(StandardCharsets.UTF_8).length;
+                if (bytes + bLen > maxBytes) {
+                    break;
+                }
+                sb.append(ch);
+                bytes += bLen;
+            }
+            i += charLen;
+        }
+        return sb.toString().trim();
     }
 
     @Override

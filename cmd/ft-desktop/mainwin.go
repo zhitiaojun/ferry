@@ -3141,7 +3141,11 @@ func (w *mainWin) sendAsyncTarget(hwnd syscall.Handle, target sendTarget, files 
 		} else {
 			res, err = sendToPeer(w.app, files, target.peer)
 		}
-		msg := fmt.Sprintf("已发送给 %s（%s）", label, summarizeFiles(res.Files))
+		doneLabel := label
+		if res.PeerName != "" {
+			doneLabel = res.PeerName
+		}
+		msg := fmt.Sprintf("已发送给 %s（%s）", doneLabel, summarizeFiles(res.Files))
 		if err != nil {
 			switch {
 			case strings.Contains(err.Error(), "对方已取消"):

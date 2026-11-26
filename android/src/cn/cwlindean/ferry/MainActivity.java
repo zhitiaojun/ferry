@@ -5870,54 +5870,15 @@ public class MainActivity extends Activity {
     }
 
     private String loadSavedName() {
-        SharedPreferences sp = getPreferences(MODE_PRIVATE);
-        String saved = sp.getString("deviceName", "").trim();
-        return saved.isEmpty() ? defaultName() : trimToUtf8Bytes(saved, 64);
+        return TransferService.loadDeviceName(this);
     }
 
     private String defaultName() {
-        try {
-            if (Build.VERSION.SDK_INT >= 25) {
-                String g = Settings.Global.getString(getContentResolver(), Settings.Global.DEVICE_NAME);
-                if (g != null && !g.trim().isEmpty()) {
-                    return trimToUtf8Bytes(g.trim(), 64);
-                }
-            }
-        } catch (Exception ignored) {
-        }
-        String brand = Build.MANUFACTURER == null ? "" : Build.MANUFACTURER.trim();
-        String model = Build.MODEL == null ? "" : Build.MODEL.trim();
-        String raw = model;
-        if (!brand.isEmpty() && !model.toLowerCase(Locale.US).startsWith(brand.toLowerCase(Locale.US))) {
-            raw = model.isEmpty() ? brand : brand + " " + model;
-        }
-        if (raw.isEmpty()) {
-            raw = "Android";
-        }
-        return trimToUtf8Bytes(raw, 64);
+        return TransferService.defaultDeviceName(this);
     }
 
     private static String trimToUtf8Bytes(String s, int maxBytes) {
-        if (s == null) {
-            return "";
-        }
-        StringBuilder sb = new StringBuilder(s.length());
-        int bytes = 0;
-        for (int i = 0; i < s.length(); ) {
-            int cp = s.codePointAt(i);
-            int charLen = Character.charCount(cp);
-            if (cp >= 0x20 && cp != 0x7f) {
-                String ch = new String(Character.toChars(cp));
-                int bLen = ch.getBytes(StandardCharsets.UTF_8).length;
-                if (bytes + bLen > maxBytes) {
-                    break;
-                }
-                sb.append(ch);
-                bytes += bLen;
-            }
-            i += charLen;
-        }
-        return sb.toString().trim();
+        return TransferService.trimToUtf8Bytes(s, maxBytes);
     }
 
     // ================= Models & Custom Views =================

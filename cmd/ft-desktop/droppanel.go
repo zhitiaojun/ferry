@@ -433,6 +433,9 @@ func (p *dropPanel) onDrop(hdrop syscall.Handle) {
 			}
 			return
 		}
+		if res.PeerName != "" {
+			peer.Name = res.PeerName
+		}
 		p.app.event("desktop.panel_sent", map[string]any{
 			"peer": peer.Name, "files": len(res.Files), "bytes": res.Bytes,
 		})
