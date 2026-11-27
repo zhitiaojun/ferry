@@ -9,26 +9,27 @@ const pageHTML = `<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>轻渡 Ferry · 浏览器收发</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%2319A389'/%3E%3Cstop offset='1' stop-color='%230B6857'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='url(%23g)'/%3E%3Cpath d='M16 6.8L11.4 16.4L16 15.2Z' fill='%23FFFFFF'/%3E%3Cpath d='M16 6.8L16 15.2L20.6 16.4Z' fill='%23CFEBE3'/%3E%3Cpath d='M5.2 14.8L11.4 16.4L9.2 21.2Z' fill='%23E9F7F3'/%3E%3Cpath d='M5.2 14.8L16 15.2L16 21.6L9.2 21.2Z' fill='%23FFFFFF'/%3E%3Cpath d='M16 15.2L26.8 14.4L22.8 21.2L16 21.6Z' fill='%23D4EFE8'/%3E%3Cpath d='M20.6 16.4L26.8 14.4L16 15.2Z' fill='%23B5E0D5'/%3E%3Cpath d='M5.5 25.4C10.2 22.3 15.5 25.5 21.2 24.4C24 23.8 26.2 22.4 27.6 20.6C25.7 24.4 22.4 26.7 18.2 26.8C13.5 26.9 9.8 24.1 5.5 25.4Z' fill='%239DF0DF'/%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%231A82EB'/%3E%3Cstop offset='1' stop-color='%23005BB8'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='url(%23g)'/%3E%3Cpath d='M16 6.8L11.4 16.4L16 15.2Z' fill='%23FFFFFF'/%3E%3Cpath d='M16 6.8L16 15.2L20.6 16.4Z' fill='%23DBEAFE'/%3E%3Cpath d='M5.2 14.8L11.4 16.4L9.2 21.2Z' fill='%23EFF6FF'/%3E%3Cpath d='M5.2 14.8L16 15.2L16 21.6L9.2 21.2Z' fill='%23FFFFFF'/%3E%3Cpath d='M16 15.2L26.8 14.4L22.8 21.2L16 21.6Z' fill='%23DBEAFE'/%3E%3Cpath d='M20.6 16.4L26.8 14.4L16 15.2Z' fill='%23BFDBFE'/%3E%3Cpath d='M5.5 25.4C10.2 22.3 15.5 25.5 21.2 24.4C24 23.8 26.2 22.4 27.6 20.6C25.7 24.4 22.4 26.7 18.2 26.8C13.5 26.9 9.8 24.1 5.5 25.4Z' fill='%23B8DBFF'/%3E%3C/svg%3E">
 <style>
   :root{
     color-scheme: light dark;
-    --paper:#F5F7F6; --card:#FFFFFF; --paper-2:#ECF2EE; --paper-3:#E0EAE4;
-    --ink:#101C18; --ink-2:#465750; --ink-3:#70827B;
-    --line:#D8E2DD; --line-soft:#E7EEEA;
-    --accent:#0E7C66; --accent-hover:#0A6553; --accent-ink:#FFFFFF; --accent-soft:#DFF4ED;
-    --danger:#C24136;
+    --paper:#F5F5F7; --card:#FFFFFF; --paper-2:#EAEAEE; --paper-3:#DFDFE5;
+    --ink:#1D1D1F; --ink-2:#515154; --ink-3:#86868B;
+    --line:#D8D8DE; --line-soft:#E8E8ED;
+    --accent:#0066CC; --accent-hover:#0055B3; --accent-text:#0066CC; --accent-ink:#FFFFFF; --accent-soft:#E8F2FC;
+    --danger:#D92D20;
     --sans:"Segoe UI","PingFang SC","Microsoft YaHei UI",system-ui,-apple-system,sans-serif;
     --mono:"Cascadia Mono","JetBrains Mono",Consolas,ui-monospace,monospace;
   }
   @media (prefers-color-scheme: dark){
     :root{
-      --paper:#0A0F0D; --card:#111916; --paper-2:#17221E; --paper-3:#202E29;
-      --ink:#EBF2EE; --ink-2:#A2B4AC; --ink-3:#6F837B;
-      --line:#23322C; --line-soft:#1A2621;
-      --accent:#38C8A6; --accent-hover:#54D8B9; --accent-ink:#071E18; --accent-soft:#12332B;
-      --danger:#EF7E74;
+      --paper:#0C0D10; --card:#15171C; --paper-2:#1F2229; --paper-3:#292D36;
+      --ink:#EFF1F5; --ink-2:#A1A8B5; --ink-3:#6E7685;
+      --line:#2A2E38; --line-soft:#20242D;
+      --accent:#164EA6; --accent-hover:#1E5EC2; --accent-text:#5E95E6; --accent-ink:#F2F5FA; --accent-soft:#0E1C31;
+      --danger:#FF5A52;
     }
+    .logo{background:linear-gradient(135deg,#1E5EC2,#0E387D);box-shadow:0 4px 14px rgba(22,78,166,.38)}
   }
   *{box-sizing:border-box}
   html,body{margin:0}
@@ -40,21 +41,21 @@ const pageHTML = `<!doctype html>
   .top{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;
        padding:14px 18px;background:var(--card);border:1px solid var(--line);border-radius:14px}
   .brand{display:flex;align-items:center;gap:12px}
-  .logo{width:36px;height:36px;border-radius:11px;background:linear-gradient(135deg,#19A389,#0B6857);
-        display:grid;place-items:center;flex:none;box-shadow:0 4px 12px rgba(14,124,102,.28)}
+  .logo{width:36px;height:36px;border-radius:11px;background:linear-gradient(135deg,#1A82EB,#005BB8);
+        display:grid;place-items:center;flex:none;box-shadow:0 4px 12px rgba(0,102,204,.26)}
   .title{font-weight:700;font-size:16px;letter-spacing:.01em}
   .sub{font-size:12px;color:var(--ink-2)}
   .pill{display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border-radius:999px;
-        background:var(--accent-soft);color:var(--accent);font-size:12px;font-weight:600;white-space:nowrap}
+        background:var(--accent-soft);color:var(--accent-text);font-size:12px;font-weight:600;white-space:nowrap}
   .pill i{width:7px;height:7px;border-radius:50%;background:currentColor;animation:breathe 1.6s ease-in-out infinite}
   @keyframes breathe{0%,100%{opacity:1}50%{opacity:.45}}
 
   .card{margin-top:16px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px}
   #drop{border:2px dashed var(--line);border-radius:12px;background:var(--paper-2);
         padding:30px 18px;text-align:center;color:var(--ink-2);cursor:pointer;transition:.15s ease}
-  #drop:hover,#drop.hot{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+  #drop:hover,#drop.hot{border-color:var(--accent-text);background:var(--accent-soft);color:var(--accent-text)}
   #drop b{display:block;font-size:15px;color:var(--ink);margin-bottom:4px}
-  #drop.hot b{color:var(--accent)}
+  #drop.hot b{color:var(--accent-text)}
   .pick-btn{display:inline-block;margin-top:12px;padding:8px 18px;border-radius:8px;
             background:var(--accent);color:var(--accent-ink);font-weight:600;font-size:13px}
   #bar{height:6px;background:var(--line-soft);border-radius:999px;overflow:hidden;margin-top:8px}
@@ -63,7 +64,7 @@ const pageHTML = `<!doctype html>
   .tx-top{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:13px}
   .tx-name{font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
   .tx-acts{display:flex;align-items:center;gap:6px;flex:none}
-  .tx-pct{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--accent);flex:none}
+  .tx-pct{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--accent-text);flex:none}
   .tx-btn{font:inherit;font-size:11px;font-weight:600;padding:3px 9px;border:1px solid var(--line);border-radius:7px;
           background:var(--card);color:var(--ink);cursor:pointer;white-space:nowrap}
   .tx-btn.danger{color:var(--danger)}
@@ -100,7 +101,7 @@ const pageHTML = `<!doctype html>
 <div class="wrap">
   <header class="top">
     <div class="brand">
-      <div class="logo" aria-hidden="true"><svg width="21" height="21" viewBox="0 0 32 32" fill="none"><path d="M16 6.8L11.4 16.4L16 15.2Z" fill="#FFFFFF"/><path d="M16 6.8L16 15.2L20.6 16.4Z" fill="#CFEBE3"/><path d="M5.2 14.8L11.4 16.4L9.2 21.2Z" fill="#E9F7F3"/><path d="M5.2 14.8L16 15.2L16 21.6L9.2 21.2Z" fill="#FFFFFF"/><path d="M16 15.2L26.8 14.4L22.8 21.2L16 21.6Z" fill="#D4EFE8"/><path d="M20.6 16.4L26.8 14.4L16 15.2Z" fill="#B5E0D5"/><path d="M5.5 25.4C10.2 22.3 15.5 25.5 21.2 24.4C24 23.8 26.2 22.4 27.6 20.6C25.7 24.4 22.4 26.7 18.2 26.8C13.5 26.9 9.8 24.1 5.5 25.4Z" fill="#9DF0DF"/></svg></div>
+      <div class="logo" aria-hidden="true"><svg width="21" height="21" viewBox="0 0 32 32" fill="none"><path d="M16 6.8L11.4 16.4L16 15.2Z" fill="#FFFFFF"/><path d="M16 6.8L16 15.2L20.6 16.4Z" fill="#DBEAFE"/><path d="M5.2 14.8L11.4 16.4L9.2 21.2Z" fill="#EFF6FF"/><path d="M5.2 14.8L16 15.2L16 21.6L9.2 21.2Z" fill="#FFFFFF"/><path d="M16 15.2L26.8 14.4L22.8 21.2L16 21.6Z" fill="#DBEAFE"/><path d="M20.6 16.4L26.8 14.4L16 15.2Z" fill="#BFDBFE"/><path d="M5.5 25.4C10.2 22.3 15.5 25.5 21.2 24.4C24 23.8 26.2 22.4 27.6 20.6C25.7 24.4 22.4 26.7 18.2 26.8C13.5 26.9 9.8 24.1 5.5 25.4Z" fill="#B8DBFF"/></svg></div>
       <div>
         <div class="title">轻渡 Ferry · 浏览器收发</div>
         <div class="sub" id="peer">局域网极速直连（不经公网服务器）</div>

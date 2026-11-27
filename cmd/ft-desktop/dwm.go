@@ -116,9 +116,9 @@ func enableUnfocusedAcrylic(hwnd syscall.Handle, dark bool) bool {
 	m := dwmMargins{-1, -1, -1, -1}
 	procDwmExtendFrameIntoClient.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&m)))
 
-	grad := uint32(0x9CFAFAFA) // Light frost (#FAFAFA, 0xAABBGGRR)
+	grad := uint32(0x9CF7F5F5) // Light frost (#F5F5F7, 0xAABBGGRR)
 	if dark {
-		grad = 0xB0302218 // Dark frost (#182230, 0xAABBGGRR)
+		grad = 0xB41C1715 // Dark frost (#15171C, 0xAABBGGRR)
 	}
 	pol := accentPolicy{
 		AccentState:   accentEnableAcrylic,

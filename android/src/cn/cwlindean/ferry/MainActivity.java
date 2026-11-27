@@ -720,44 +720,44 @@ public class MainActivity extends Activity {
 
     private void loadThemeTokens() {
         if (isNight()) {
-            cPrimary = Color.parseColor("#14B8A6");
-            cPrimaryPressed = Color.parseColor("#0D9488");
-            cOnPrimary = Color.WHITE;
-            cPrimaryContainer = Color.parseColor("#134E4A");
-            cOnPrimaryContainer = Color.parseColor("#99F6E4");
-            cSurface = Color.parseColor("#111827");
-            cCard = Color.parseColor("#182230");
-            cSurfaceAlt = Color.parseColor("#1F2937");
-            cSheetBg = Color.parseColor("#EB182230");
-            cBorder = Color.parseColor("#273244");
-            cOnSurface = Color.parseColor("#F3F4F6");
-            cOnSurfaceVariant = Color.parseColor("#9CA3AF");
-            cOutline = Color.parseColor("#4B5563");
-            cError = Color.parseColor("#F87171");
-            cOnError = Color.parseColor("#450A0A");
-            cErrorContainer = Color.parseColor("#7F1D1D");
-            cOnErrorContainer = Color.parseColor("#FEE2E2");
-            cWarn = Color.parseColor("#FBBF24");
-            cWarnContainer = Color.parseColor("#451A03");
+            cPrimary = Color.parseColor("#5E95E6");
+            cPrimaryPressed = Color.parseColor("#164EA6");
+            cOnPrimary = Color.parseColor("#F2F5FA");
+            cPrimaryContainer = Color.parseColor("#0E1C31");
+            cOnPrimaryContainer = Color.parseColor("#7EADF0");
+            cSurface = Color.parseColor("#0C0D10");
+            cCard = Color.parseColor("#15171C");
+            cSurfaceAlt = Color.parseColor("#1F2229");
+            cSheetBg = Color.parseColor("#EB15171C");
+            cBorder = Color.parseColor("#2A2E38");
+            cOnSurface = Color.parseColor("#EFF1F5");
+            cOnSurfaceVariant = Color.parseColor("#A1A8B5");
+            cOutline = Color.parseColor("#5B6373");
+            cError = Color.parseColor("#FF5A52");
+            cOnError = Color.parseColor("#330D0B");
+            cErrorContainer = Color.parseColor("#331618");
+            cOnErrorContainer = Color.parseColor("#FFABA6");
+            cWarn = Color.parseColor("#F5A623");
+            cWarnContainer = Color.parseColor("#2E2009");
             cRipple = Color.parseColor("#26FFFFFF");
         } else {
-            cPrimary = Color.parseColor("#0D9488");
-            cPrimaryPressed = Color.parseColor("#0F766E");
+            cPrimary = Color.parseColor("#0066CC");
+            cPrimaryPressed = Color.parseColor("#0066CC");
             cOnPrimary = Color.WHITE;
-            cPrimaryContainer = Color.parseColor("#CCFBF1");
-            cOnPrimaryContainer = Color.parseColor("#134E4A");
-            cSurface = Color.parseColor("#FFFFFF");
-            cCard = Color.parseColor("#FAFAFA");
-            cSurfaceAlt = Color.parseColor("#F3F4F6");
-            cSheetBg = Color.parseColor("#F0FFFFFF");
-            cBorder = Color.parseColor("#E5E7EB");
-            cOnSurface = Color.parseColor("#111827");
-            cOnSurfaceVariant = Color.parseColor("#6B7280");
-            cOutline = Color.parseColor("#9CA3AF");
-            cError = Color.parseColor("#DC2626");
+            cPrimaryContainer = Color.parseColor("#E8F2FC");
+            cOnPrimaryContainer = Color.parseColor("#004C99");
+            cSurface = Color.parseColor("#F5F5F7");
+            cCard = Color.parseColor("#FFFFFF");
+            cSurfaceAlt = Color.parseColor("#EAEAEE");
+            cSheetBg = Color.parseColor("#F2FFFFFF");
+            cBorder = Color.parseColor("#D8D8DE");
+            cOnSurface = Color.parseColor("#1D1D1F");
+            cOnSurfaceVariant = Color.parseColor("#515154");
+            cOutline = Color.parseColor("#86868B");
+            cError = Color.parseColor("#D92D20");
             cOnError = Color.WHITE;
-            cErrorContainer = Color.parseColor("#FEE2E2");
-            cOnErrorContainer = Color.parseColor("#7F1D1D");
+            cErrorContainer = Color.parseColor("#FEECEB");
+            cOnErrorContainer = Color.parseColor("#7A1913");
             cWarn = Color.parseColor("#B45309");
             cWarnContainer = Color.parseColor("#FEF3C7");
             cRipple = Color.parseColor("#18000000");
@@ -6304,7 +6304,7 @@ public class MainActivity extends Activity {
             float w = b.width();
             float h = b.height();
             p.setStyle(Paint.Style.FILL);
-            p.setColor(0xFF0D9488);
+            p.setColor(isNight() ? 0xFF164EA6 : 0xFF0066CC);
             canvas.drawRoundRect(0, 0, w, h, w * 0.22f, h * 0.22f, p);
 
             p.setColor(Color.WHITE);
@@ -6323,7 +6323,7 @@ public class MainActivity extends Activity {
             sail.close();
             canvas.drawPath(sail, p);
 
-            p.setColor(0xFFCCFBF1);
+            p.setColor(isNight() ? 0xFF7BA9EB : 0xFFB8DBFF);
             wave.reset();
             wave.moveTo(w * 0.22f, h * 0.70f);
             wave.quadTo(w * 0.50f, h * 0.65f, w * 0.78f, h * 0.69f);
@@ -6489,7 +6489,7 @@ public class MainActivity extends Activity {
 
         CornerBracketsView() {
             super(MainActivity.this);
-            p.setColor(Color.parseColor("#14B8A6"));
+            p.setColor(Color.parseColor("#5E95E6"));
             p.setStyle(Paint.Style.STROKE);
             p.setStrokeWidth(dp(2.5f));
             p.setStrokeCap(Paint.Cap.ROUND);

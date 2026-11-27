@@ -476,7 +476,7 @@ func (w *tempWin) paint(hwnd syscall.Handle) {
 		sEdge := w.pal.line
 		if w.hover == tsHoverSend {
 			sFill = w.pal.accentSoft
-			sEdge = w.pal.accent
+			sEdge = w.pal.accentText
 		}
 		cv.drawAlphaRoundRect(w.sendCardR, float64(w.px(12)), sFill, 240, sEdge, 255, 1.2)
 		cv.drawAlphaText(w.fontBody, "我要发文件",
@@ -490,7 +490,7 @@ func (w *tempWin) paint(hwnd syscall.Handle) {
 		rEdge := w.pal.line
 		if w.hover == tsHoverRecv {
 			rFill = w.pal.accentSoft
-			rEdge = w.pal.accent
+			rEdge = w.pal.accentText
 		}
 		cv.drawAlphaRoundRect(w.recvCardR, float64(w.px(12)), rFill, 240, rEdge, 255, 1.2)
 		cv.drawAlphaText(w.fontBody, "我要收文件",
@@ -508,7 +508,7 @@ func (w *tempWin) paint(hwnd syscall.Handle) {
 			cv.drawAlphaText(w.fontSm, w.errMsg, rectT{pad, w.px(344), cr.right - pad, w.px(384)},
 				dtCenter|dtWordBreak, w.pal.danger)
 		}
-		cv.drawAlphaText(w.fontSm, "输入对方 6 位临时码 →", w.toJoinR, dtCenter|dtSingleLine|dtVCenter, w.pal.accent)
+		cv.drawAlphaText(w.fontSm, "输入对方 6 位临时码 →", w.toJoinR, dtCenter|dtSingleLine|dtVCenter, w.pal.accentText)
 
 	case tsModeHost:
 		st := w.host.Status()
@@ -519,7 +519,7 @@ func (w *tempWin) paint(hwnd syscall.Handle) {
 		cv.drawAlphaText(w.fontTitle, "临时快传进行中", rectT{pad, w.px(26), cr.right - pad, w.px(54)},
 			dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
 		cv.drawAlphaText(w.fontSm, modeSub, rectT{pad, w.px(56), cr.right - pad, w.px(80)},
-			dtCenter|dtSingleLine|dtVCenter, w.pal.accent)
+			dtCenter|dtSingleLine|dtVCenter, w.pal.accentText)
 
 		cv.drawAlphaRoundRect(w.qrRect, float64(w.px(12)), col(0xFF, 0xFF, 0xFF), 255, w.pal.line, 255, 1.0)
 		if len(w.qrBits) > 0 {
@@ -684,7 +684,7 @@ func (w *tempWin) paint(hwnd syscall.Handle) {
 			cv.drawAlphaText(w.fontSm, w.status, rectT{pad, statusTop, cr.right - pad, w.px(420)},
 				dtCenter|dtWordBreak, w.pal.ink2)
 		}
-		cv.drawAlphaText(w.fontSm, "← 返回发起快传", w.backRect, dtCenter|dtSingleLine|dtVCenter, w.pal.accent)
+		cv.drawAlphaText(w.fontSm, "← 返回发起快传", w.backRect, dtCenter|dtSingleLine|dtVCenter, w.pal.accentText)
 	}
 
 	cv.finishBlit(hdc)

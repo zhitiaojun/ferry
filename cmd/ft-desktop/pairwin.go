@@ -705,7 +705,7 @@ func (p *pairWin) paint(hwnd syscall.Handle) {
 		}
 
 		cv.fillColorAlpha(rectT{pad, p.switchRect.top - p.px(4), cr.right - pad, p.switchRect.top - p.px(3)}, p.pal.line, 200)
-		cv.drawAlphaText(p.fontSm, "返回二维码", p.switchRect, dtCenter|dtSingleLine|dtVCenter, p.pal.accent)
+		cv.drawAlphaText(p.fontSm, "返回二维码", p.switchRect, dtCenter|dtSingleLine|dtVCenter, p.pal.accentText)
 		cv.finishBlit(hdc)
 		return
 	}
@@ -779,7 +779,7 @@ func (p *pairWin) paint(hwnd syscall.Handle) {
 	}
 	cv.drawAlphaText(p.fontSm, cdText, rectT{pad, cdY, p.refreshRect.left - p.px(6), cdY + p.px(22)},
 		dtRight|dtSingleLine|dtVCenter, p.pal.ink2)
-	cv.drawAlphaText(p.fontSm, "刷新", p.refreshRect, dtCenter|dtSingleLine|dtVCenter, p.pal.accent)
+	cv.drawAlphaText(p.fontSm, "刷新", p.refreshRect, dtCenter|dtSingleLine|dtVCenter, p.pal.accentText)
 
 	if p.status != "" {
 		cv.drawAlphaText(p.fontSm, p.status,
@@ -788,7 +788,7 @@ func (p *pairWin) paint(hwnd syscall.Handle) {
 	}
 
 	cv.fillColorAlpha(rectT{pad, p.switchRect.top - p.px(4), cr.right - pad, p.switchRect.top - p.px(3)}, p.pal.line, 200)
-	cv.drawAlphaText(p.fontSm, "改为输入对方配对码", p.switchRect, dtCenter|dtSingleLine|dtVCenter, p.pal.accent)
+	cv.drawAlphaText(p.fontSm, "改为输入对方配对码", p.switchRect, dtCenter|dtSingleLine|dtVCenter, p.pal.accentText)
 	cv.finishBlit(hdc)
 }
 

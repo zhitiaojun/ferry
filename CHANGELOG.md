@@ -1,5 +1,13 @@
 # 变更日志
 
+## 1.0.5-beta.1 — 2026-11-27
+
+全端与 Web 视觉配色统一升级为「苹果原生克制蓝 × 暗夜墨海蓝」双轨体系（浅色 `#0066CC` + `#F5F5F7` / 深色按钮 `#164EA6` + 高亮字 `#5E95E6` + `#0C0D10`）：
+
+- **官网与网页快传全面换色**：同步更新线上官网（`server/assets/index.html`）、静态展示页（`site/index.html`）、网页临时快传（`server/assets/app.html`）与局域网直连页（`core/lanweb/page.go`）的浅/深色令牌、折纸船 SVG 图标与浏览器 Favicon，深色模式拆分按钮主色（`--accent: #164EA6`）与高亮文字色（`--accent-text: #5E95E6`）以兼顾沉稳质感与可读性。
+- **Windows 桌面端与安装器双轨主题**：升级 `cmd/ft-desktop`（主界面、悬浮投放面板、配对窗、临时快传窗与 DWM Acrylic 霜化底色）及 `cmd/ft-setup` 安装向导调色板，引入 `accentText` 区分实心主按钮与深色高亮文字/描边。
+- **Android 原生端主题与全套应用图标焕新**：更新 `MainActivity.java` 浅/深色 MD3 色彩令牌、折纸船徽章与扫码角标，并重新生成 Android 全分辨率启动图标（`android/res/mipmap-*/ic_launcher.png`）与 Windows MSIX / 托盘图标资产（`deploy/msix/` 与 `cmd/ft-setup/payload/menu/`）。
+
 ## 1.0.4 — 2026-11-27
 
 官网前端重构、全新折纸船图标与 Web 快传视觉统一正式版本（整合 `v1.0.4-beta.1` ～ `beta.4` 全部更新）：

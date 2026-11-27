@@ -362,7 +362,7 @@ func (p *dropPanel) paint(hwnd syscall.Handle) {
 		if active {
 			fill = pal.accentSoft
 			fillA = 225
-			edge = pal.accent
+			edge = pal.accentText
 			borderW = float64(p.px(2))
 			if borderW < 1.5 {
 				borderW = 1.5
@@ -378,7 +378,7 @@ func (p *dropPanel) paint(hwnd syscall.Handle) {
 		if active {
 			hintW := textWidth(cv.memDC, p.fontSm, "松手发送") + p.px(16)
 			hintR := rectT{r.right - hintW, r.top, r.right - p.px(12), r.bottom}
-			cv.drawAlphaText(p.fontSm, "松手发送", hintR, dtSingleLine|dtVCenter|dtRight, pal.accent)
+			cv.drawAlphaText(p.fontSm, "松手发送", hintR, dtSingleLine|dtVCenter|dtRight, pal.accentText)
 			rightPad = hintW + p.px(4)
 		}
 		nmR := rectT{r.left + p.px(12), r.top, r.right - rightPad, r.bottom}

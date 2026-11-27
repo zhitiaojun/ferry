@@ -181,6 +181,7 @@ type palette struct {
 	ink, ink2, ink3               uint32
 	line, lineSoft                uint32
 	accent, accentInk, accentSoft uint32
+	accentText                    uint32
 	danger, amber, violet         uint32
 }
 
@@ -188,36 +189,38 @@ func col(r, g, b uint32) uint32 { return b<<16 | g<<8 | r }
 
 var palLight = palette{
 	paper:      col(0xFF, 0xFF, 0xFF),
-	paper2:     col(0xFA, 0xFA, 0xFA),
-	paper3:     col(0xF3, 0xF4, 0xF6),
-	ink:        col(0x11, 0x18, 0x27),
-	ink2:       col(0x4B, 0x55, 0x63),
-	ink3:       col(0x9C, 0xA3, 0xAF),
-	line:       col(0xE5, 0xE7, 0xEB),
-	lineSoft:   col(0xF3, 0xF4, 0xF6),
-	accent:     col(0x0D, 0x94, 0x88),
+	paper2:     col(0xF5, 0xF5, 0xF7),
+	paper3:     col(0xEA, 0xEA, 0xEE),
+	ink:        col(0x1D, 0x1D, 0x1F),
+	ink2:       col(0x51, 0x51, 0x54),
+	ink3:       col(0x86, 0x86, 0x8B),
+	line:       col(0xD8, 0xD8, 0xDE),
+	lineSoft:   col(0xE8, 0xE8, 0xED),
+	accent:     col(0x00, 0x66, 0xCC),
+	accentText: col(0x00, 0x66, 0xCC),
 	accentInk:  col(0xFF, 0xFF, 0xFF),
-	accentSoft: col(0xF0, 0xFD, 0xFA),
-	danger:     col(0xDC, 0x26, 0x26),
-	amber:      col(0xD9, 0x77, 0x06),
-	violet:     col(0x7C, 0x3A, 0xED),
+	accentSoft: col(0xE8, 0xF2, 0xFC),
+	danger:     col(0xD9, 0x2D, 0x20),
+	amber:      col(0xB4, 0x53, 0x09),
+	violet:     col(0x5E, 0x5C, 0xE6),
 }
 
 var palDark = palette{
-	paper:      col(0x11, 0x18, 0x27),
-	paper2:     col(0x18, 0x22, 0x30),
-	paper3:     col(0x1F, 0x29, 0x37),
-	ink:        col(0xF3, 0xF4, 0xF6),
-	ink2:       col(0x9C, 0xA3, 0xAF),
-	ink3:       col(0x6B, 0x72, 0x80),
-	line:       col(0x27, 0x32, 0x44),
-	lineSoft:   col(0x1F, 0x29, 0x37),
-	accent:     col(0x14, 0xB8, 0xA6),
-	accentInk:  col(0xFF, 0xFF, 0xFF),
-	accentSoft: col(0x13, 0x35, 0x33),
-	danger:     col(0xF8, 0x71, 0x71),
-	amber:      col(0xFB, 0xBF, 0x24),
-	violet:     col(0xA7, 0x8B, 0xFA),
+	paper:      col(0x0C, 0x0D, 0x10),
+	paper2:     col(0x15, 0x17, 0x1C),
+	paper3:     col(0x1F, 0x22, 0x29),
+	ink:        col(0xEF, 0xF1, 0xF5),
+	ink2:       col(0xA1, 0xA8, 0xB5),
+	ink3:       col(0x6E, 0x76, 0x85),
+	line:       col(0x2A, 0x2E, 0x38),
+	lineSoft:   col(0x20, 0x24, 0x2D),
+	accent:     col(0x16, 0x4E, 0xA6),
+	accentText: col(0x5E, 0x95, 0xE6),
+	accentInk:  col(0xF2, 0xF5, 0xFA),
+	accentSoft: col(0x0E, 0x1C, 0x31),
+	danger:     col(0xFF, 0x5A, 0x52),
+	amber:      col(0xF5, 0xA6, 0x23),
+	violet:     col(0x8E, 0x8D, 0xFF),
 }
 
 var (
@@ -1800,7 +1803,7 @@ func (w *mainWin) drawRail(cv *glassCanvas) {
 		active := w.page == it.page
 		fg := w.pal.ink2
 		if active {
-			fg = w.pal.accent
+			fg = w.pal.accentText
 			fillA := byte(230)
 			if !w.acrylic {
 				fillA = 255
@@ -1889,14 +1892,14 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 		cv.drawAlphaRoundRect(rectT{dotX, dotY, dotX + dotSz, dotY + dotSz}, float64(dotSz)/2.0, col(0x10, 0xB9, 0x81), 255, 0, 0, 0)
 		cv.drawAlphaText(w.fontSm, readyTxt,
 			rectT{dotX + dotSz + p(8), readyR.top, readyR.right - p(10), readyR.bottom},
-			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.accent)
+			dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.accentText)
 
 		// Left Card: Value Before Wall (Temp Share & LAN Discovery)
 		cv.drawAlphaRoundRect(w.coldLeftCardR, float64(p(14)), w.pal.paper2, tileA, w.pal.line, w.surfaceAlpha(210), 1.0)
 		lMidX := (w.coldLeftCardR.left + w.coldLeftCardR.right) / 2
 		iconBox := rectT{lMidX - p(24), w.coldLeftCardR.top + p(28), lMidX + p(24), w.coldLeftCardR.top + p(76)}
 		cv.drawAlphaRoundRect(iconBox, float64(p(14)), w.pal.accentSoft, w.surfaceAlpha(240), 0, 0, 0)
-		drawUploadSDF(cv, rectT{iconBox.left + p(10), iconBox.top + p(10), iconBox.right - p(10), iconBox.bottom - p(10)}, w.pal.accent)
+		drawUploadSDF(cv, rectT{iconBox.left + p(10), iconBox.top + p(10), iconBox.right - p(10), iconBox.bottom - p(10)}, w.pal.accentText)
 
 		cv.drawAlphaText(w.fontH2, "免配对直接体验",
 			rectT{w.coldLeftCardR.left + p(18), iconBox.bottom + p(14), w.coldLeftCardR.right - p(18), iconBox.bottom + p(38)},
@@ -1916,7 +1919,7 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 		scanEdge := w.pal.line
 		if w.hover == hoverHomeScanLan {
 			scanFill = w.pal.paper3
-			scanEdge = w.pal.accent
+			scanEdge = w.pal.accentText
 		}
 		scanLbl := "搜索局域网"
 		if w.app != nil && w.app.isLANScanning() {
@@ -1940,8 +1943,8 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 			dtCenter|dtWordBreak, w.pal.ink2)
 
 		addFill := w.pal.paper
-		addEdge := w.pal.accent
-		addFg := w.pal.accent
+		addEdge := w.pal.accentText
+		addFg := w.pal.accentText
 		if w.hover == hoverAddDevice {
 			addFill = w.pal.accentSoft
 		}
@@ -1971,7 +1974,7 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 		hovered := w.hover == hoverTargetPill && w.hoverIdx == i
 		bg, edge, fg := w.pal.paper2, w.pal.line, w.pal.ink
 		if selected {
-			bg, edge, fg = w.pal.accentSoft, w.pal.accent, w.pal.accent
+			bg, edge, fg = w.pal.accentSoft, w.pal.accentText, w.pal.accentText
 		} else if hovered {
 			bg = w.pal.paper3
 		}
@@ -1981,9 +1984,9 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 		dotCol := w.pal.ink3
 		switch reach {
 		case "lan":
-			dotCol = col(0x10, 0xB9, 0x81)
+			dotCol = col(0x34, 0xC7, 0x59)
 		case "cloud":
-			dotCol = w.pal.accent
+			dotCol = w.pal.accentText
 		}
 		dotSz := p(7)
 		dotX := pr.left + p(11)
@@ -2020,7 +2023,7 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 
 	tsFill, tsEdge, tsFg := w.pal.paper, w.pal.line, w.pal.ink2
 	if w.hover == hoverTempShare {
-		tsFill, tsEdge, tsFg = w.pal.accentSoft, w.pal.accent, w.pal.accent
+		tsFill, tsEdge, tsFg = w.pal.accentSoft, w.pal.accentText, w.pal.accentText
 	}
 	cv.drawAlphaRoundRect(w.tempShareBtnR, float64(p(15)), tsFill, tileA, tsEdge, w.surfaceAlpha(200), 1.0)
 	cv.drawAlphaText(w.fontSm, "+ 临时扫码传", w.tempShareBtnR, dtCenter|dtSingleLine|dtVCenter|dtNoPrefix, tsFg)
@@ -2052,7 +2055,7 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 
 	iconBox := rectT{dzMidX - p(23), innerTop, dzMidX + p(23), innerTop + p(46)}
 	cv.drawAlphaRoundRect(iconBox, float64(p(13)), w.pal.accentSoft, w.surfaceAlpha(240), 0, 0, 0)
-	drawUploadSDF(cv, rectT{iconBox.left + p(10), iconBox.top + p(10), iconBox.right - p(10), iconBox.bottom - p(10)}, w.pal.accent)
+	drawUploadSDF(cv, rectT{iconBox.left + p(10), iconBox.top + p(10), iconBox.right - p(10), iconBox.bottom - p(10)}, w.pal.accentText)
 
 	headline := "拖入文件或文件夹，直接发送"
 	subline := "端到端加密传输"
@@ -2101,14 +2104,14 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 
 	fldFill, fldEdge := w.pal.paper, w.pal.line
 	if w.hover == hoverTileFolder {
-		fldFill, fldEdge = w.pal.paper3, w.pal.accent
+		fldFill, fldEdge = w.pal.paper3, w.pal.accentText
 	}
 	cv.drawAlphaRoundRect(w.tileFolderR, float64(p(10)), fldFill, 255, fldEdge, 220, 1.0)
 	cv.drawAlphaText(w.fontSm, "发文件夹", w.tileFolderR, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
 
 	txtFill, txtEdge := w.pal.paper, w.pal.line
 	if w.hover == hoverSendText {
-		txtFill, txtEdge = w.pal.paper3, w.pal.accent
+		txtFill, txtEdge = w.pal.paper3, w.pal.accentText
 	}
 	cv.drawAlphaRoundRect(w.sendTextR, float64(p(10)), txtFill, 255, txtEdge, 220, 1.0)
 	cv.drawAlphaText(w.fontSm, "发文字", w.sendTextR, dtCenter|dtSingleLine|dtVCenter, w.pal.ink)
@@ -2117,7 +2120,7 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 	cv.drawAlphaRoundRect(w.clipBarR, float64(p(12)), w.pal.paper2, tileA, w.pal.line, w.surfaceAlpha(210), 1.0)
 	cIconR := rectT{w.clipBarR.left + p(12), w.clipBarR.top + p(11), w.clipBarR.left + p(44), w.clipBarR.bottom - p(11)}
 	cv.drawAlphaRoundRect(cIconR, float64(p(8)), w.pal.accentSoft, w.surfaceAlpha(235), 0, 0, 0)
-	drawClipSDF(cv, rectT{cIconR.left + p(6), cIconR.top + p(6), cIconR.right - p(6), cIconR.bottom - p(6)}, w.pal.accent)
+	drawClipSDF(cv, rectT{cIconR.left + p(6), cIconR.top + p(6), cIconR.right - p(6), cIconR.bottom - p(6)}, w.pal.accentText)
 
 	clipTitle := "剪贴板快捷发送"
 	clipSub := "复制截图或文本后，点右侧一键发往对方"
@@ -2137,7 +2140,7 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 		dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink3)
 
 	cbFill := w.pal.accentSoft
-	cbFg := w.pal.accent
+	cbFg := w.pal.accentText
 	if w.hover == hoverSendClip {
 		cbFill = w.pal.accent
 		cbFg = w.pal.accentInk
@@ -2183,11 +2186,11 @@ func (w *mainWin) drawHome(cv *glassCanvas, cr rectT) {
 
 			openClr := w.pal.ink2
 			if w.hover == hoverOpenDir {
-				openClr = w.pal.accent
+				openClr = w.pal.accentText
 			}
 			cv.drawAlphaText(w.fontSm, "打开接收目录", w.openDirR, dtRight|dtSingleLine|dtVCenter, openClr)
 
-			allClr := w.pal.accent
+			allClr := w.pal.accentText
 			if w.hover == hoverAllHistory {
 				allClr = shade(allClr, w.dark, 0.14)
 			}
@@ -2212,7 +2215,7 @@ func (w *mainWin) drawHistory(cv *glassCanvas, cr rectT) {
 
 	openClr := w.pal.ink2
 	if w.hover == hoverOpenDir {
-		openClr = w.pal.accent
+		openClr = w.pal.accentText
 	}
 	cv.drawAlphaText(w.fontSm, "打开接收文件夹", w.openDirR, dtRight|dtSingleLine|dtVCenter, openClr)
 
@@ -2231,7 +2234,7 @@ func (w *mainWin) drawHistory(cv *glassCanvas, cr rectT) {
 		c := w.pal.ink2
 		if w.filter == tb.flt {
 			c = w.pal.ink
-			cv.fillColorAlpha(rectT{tb.r.left, tb.r.bottom - p(2), tb.r.right, tb.r.bottom}, w.pal.accent, 255)
+			cv.fillColorAlpha(rectT{tb.r.left, tb.r.bottom - p(2), tb.r.right, tb.r.bottom}, w.pal.accentText, 255)
 		}
 		cv.drawAlphaText(w.fontBold, tb.label, tb.r, dtSingleLine|dtVCenter, c)
 	}
@@ -2282,7 +2285,7 @@ func (w *mainWin) drawHistory(cv *glassCanvas, cr rectT) {
 				openW := p(66)
 				cv.drawAlphaText(w.fontSm, "打开位置",
 					rectT{rr.right - openW, rr.top, rr.right - p(4), rr.bottom},
-					dtRight|dtSingleLine|dtVCenter, w.pal.accent)
+					dtRight|dtSingleLine|dtVCenter, w.pal.accentText)
 				rightLimit = rr.right - openW - p(6)
 			}
 			if chLabel, chBg, chFg := channelDisplayLabel(r.path, w.pal, w.dark); chLabel != "" {
@@ -2319,10 +2322,12 @@ func (w *mainWin) drawActiveTransferCard(cv *glassCanvas, r rectT, tx *activeTra
 	peerPaused := (tx.peerPaused || tx.stage == "peer_paused") && !localPaused
 	anyPaused := localPaused || peerPaused
 	accentCol := w.pal.accent
+	accentTextCol := w.pal.accentText
 	if anyPaused {
 		accentCol = w.pal.amber
+		accentTextCol = w.pal.amber
 	}
-	cv.drawAlphaRoundRect(r, float64(p(12)), w.pal.paper, w.surfaceAlpha(215), accentCol, w.surfaceAlpha(160), 1.0)
+	cv.drawAlphaRoundRect(r, float64(p(12)), w.pal.paper, w.surfaceAlpha(215), accentTextCol, w.surfaceAlpha(160), 1.0)
 
 	inL := r.left + p(14)
 	inR := r.right - p(14)
@@ -2362,7 +2367,7 @@ func (w *mainWin) drawActiveTransferCard(cv *glassCanvas, r rectT, tx *activeTra
 	if pctTxt != "" {
 		cv.drawAlphaText(w.fontBold, pctTxt,
 			rectT{badgeR.left - p(6) - pctW, r.top + p(10), badgeR.left - p(6), r.top + p(34)},
-			dtRight|dtSingleLine|dtVCenter, accentCol)
+			dtRight|dtSingleLine|dtVCenter, accentTextCol)
 	} else {
 		pctW = 0
 	}
@@ -2469,9 +2474,9 @@ func stageDisplayLabel(stage string) string {
 func channelDisplayLabel(ch string, pal palette, dark bool) (string, uint32, uint32) {
 	switch strings.ToLower(strings.TrimSpace(ch)) {
 	case "lan", "lan 直连":
-		return "LAN 直连", pal.accentSoft, pal.accent
+		return "LAN 直连", pal.accentSoft, pal.accentText
 	case "网页快传", "web":
-		return "网页快传", pal.accentSoft, pal.accent
+		return "网页快传", pal.accentSoft, pal.accentText
 	case "打洞", "punch", "udp 打洞":
 		if dark {
 			return "UDP 打洞", col(0x45, 0x1A, 0x03), pal.amber
@@ -2784,8 +2789,8 @@ func (w *mainWin) drawDevices(cv *glassCanvas, cr rectT) {
 					sFg := w.pal.ink
 					if w.selectedLAN.id == entry.id {
 						sFill = w.pal.accentSoft
-						sEdge = w.pal.accent
-						sFg = w.pal.accent
+						sEdge = w.pal.accentText
+						sFg = w.pal.accentText
 					} else if w.hover == hoverDevLanSelectBtn && w.hoverIdx == i {
 						sFill = w.pal.paper3
 					}
@@ -2969,9 +2974,9 @@ func (w *mainWin) drawSettings(cv *glassCanvas, cr rectT) {
 	cv.drawAlphaText(w.fontMono, verTxt, rectT{emR.right + p(98), aboutTop, w.aboutRepoR.left - p(10), aboutTop + aboutH},
 		dtSingleLine|dtVCenter|dtEndEllipsis, w.pal.ink2)
 
-	repoColor := w.pal.accent
+	repoColor := w.pal.accentText
 	if w.hover == hoverAboutRepo {
-		repoColor = shade(w.pal.accent, w.dark, 0.14)
+		repoColor = shade(w.pal.accentText, w.dark, 0.14)
 	}
 	cv.drawAlphaText(w.fontSm, strings.TrimPrefix(ferryRepoURL, "https://"), w.aboutRepoR,
 		dtRight|dtSingleLine|dtVCenter|dtEndEllipsis, repoColor)
