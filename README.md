@@ -43,7 +43,7 @@
 **轻渡（Ferry）** 是一款专注于「我的手机 ↔ 我的电脑 ↔ 浏览器 ↔ AI 智能体」之间的跨平台文件与文本传输工具。无需注册账号、不经过第三方网盘压缩或留存，基于单一 Go 核心实现 **局域网直连 → UDP 打洞 P2P（QUIC）→ 加密中继** 三档链路自动竞速调度，并在底层内置原生 stdio **MCP Server**，让 AI 助手可直接将生成产物或文本发送至你的设备。
 
 > [!NOTE]
-> - 当前正式版本：`v1.0.3`（协议版本 `v1`，采用 **AGPL-3.0** 协议开源）。
+> - 当前正式版本：`v1.0.4`（协议版本 `v1`，采用 **AGPL-3.0** 协议开源）。
 > - 默认预置公共信令与中继节点，开箱即用；你也可以在客户端「设置」或命令行参数中一键切换至自建服务端。
 > - 当前跨网直连与穿透基于 IPv4（LAN / UDP 打洞 / WSS 中继），IPv6 直连探测将在后续版本规划支持。
 
@@ -82,9 +82,9 @@
 | --- | --- | --- |
 | **Windows 桌面端** | `ferry-setup-windows-amd64.exe` | 纯 Win32 GDI + SDF 矢量图标 + DWM Acrylic 弹窗（零 WebView2 依赖）、单焦点发射台与自适应目标设备药丸、托盘常驻、拖拽浮窗投放、Windows 11 一级右键菜单（`ftmenu.dll`）、文件/文件夹/剪贴板截图文本互传、自定义服务器配置与独立传输台账 |
 | **Android 原生端** | `ferry-android-arm64.apk` / `ferry-android-armv7a.apk` | 原生 Java（Material Design 3 + 四栏悬浮胶囊）+ `gomobile` Go 核心（`cn.cwlindean.ferry`，API 21+，`arm64-v8a` 支持 16 KB 页对齐 + 兼容 32 位 `armeabi-v7a`），支持文件/文件夹树发送、智能剪贴板一键发送、系统「分享」面板接入、扫码配对、公共 `Download/Ferry` 落盘，以及最低优先级保活通知渠道引导与可选隐藏最近任务卡片 |
-| **浏览器临时快传** | `/transfer` · `/app` · `/s/<token>` | 免装客户端一码双用：`file.slice` 分块流式上传、`showSaveFilePicker` + 纯 JS 增量 SHA-256 流式下载、暂停/恢复与取消（不中断控制信道），支持一键切换同 Wi-Fi 直连 |
+| **浏览器临时快传** | `/transfer` · `/app` · `/s/<token>` | 免装客户端一码双用：`file.slice` 分块流式上传、`showSaveFilePicker` + 纯 JS 增量 SHA-256 流式下载、暂停/恢复与取消（不中断控制信道），支持深浅色主题切换与一键切换同 Wi-Fi 直连 |
 | **跨平台 CLI & MCP** | `ferry`（`./cmd/ferry`） | Windows / Linux / macOS 命令行收发、常驻守护进程（`ferry daemon`）、临时快传（`ferry share`）与标准 stdio **MCP Server**（`ferry mcp`） |
-| **信令与中继服务端** | `ferry-server-linux-amd64`（`./cmd/ft-server`） | 单二进制、全内存状态、内置 `-memlimit`；集成 WebSocket 信令（`/signal`）、加密中继（`/relay`）、匿名快传门户与双端口 UDP STUN 服务 |
+| **信令与中继服务端** | `ferry-server-linux-amd64`（`./cmd/ft-server`） | 单二进制、全内存状态、内置 `-memlimit`；集成全新官网首页（`/`）、WebSocket 信令（`/signal`）、加密中继（`/relay`）、匿名快传门户与双端口 UDP STUN 服务 |
 
 ---
 
