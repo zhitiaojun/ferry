@@ -1,5 +1,10 @@
 # 变更日志
 
+## 1.0.2-beta.4 — 2026-11-27
+
+- **桌面端目标设备药丸自适应宽度与 105% 上限**：`cmd/ft-desktop/mainwin.go` 改用与实际渲染一致的 Win32 `DrawTextW(DT_CALCRECT|DT_SINGLELINE|DT_NOPREFIX)` 精确测宽（按选中加粗态 `w.fontBold` / 未选中 `w.fontSm` 与对称内边距计算，并加上 `dtNoPrefix` 防 `&` 转义），短设备名自动收紧、`REDMI K90 Ultra` 宽度以内零省略、超长设备名准确截断在 `"REDMI K90 Ultra"` 宽度的 105% 上限，同时分离 `· 局域网` 后缀避免互相挤占截断。
+- **Win32 GDI 防截断与上限单元测试**：新增 `TestTargetPillAdaptiveWidthAndK90UCap`，覆盖 `96 DPI` 与 `144 DPI` 缩放下短名称、标准名称与超长名称的实际文本截断判定。
+
 ## 1.0.2-beta.3 — 2026-11-26
 
 - **修复桌面端对端设备名称未及时刷新并加固 Android 友好名称读取**：Windows 主界面在激活/显示及传输握手后（含取消/失败路径与 IPC 发送）自动重载配对表以立即同步最新设备名，同时加宽目标设备药丸最大宽度；Android 端 `defaultDeviceName` 增加 `bluetooth_name` / `device_name` / `market_name` 多源回退，避免回退为硬件型号码（如 `M...`），并统一 `MainActivity` 与 `TransferService` 的配置读写。
