@@ -63,7 +63,8 @@ import mobile.Mobile;
  */
 public class TransferService extends Service implements EventListener {
     private static final String TAG = "FerryService";
-    static final String CHANNEL_STATUS = "ferry-transfer";
+    private static final String LEGACY_CHANNEL_STATUS = "ferry-transfer";
+    static final String CHANNEL_STATUS = "ferry-transfer-min";
     static final String CHANNEL_RECEIVED = "ferry-received";
     static final int NOTIFICATION_ID = 1;
     private static final int RECV_NOTIF_BASE = 200;
@@ -857,21 +858,48 @@ public class TransferService extends Service implements EventListener {
     // ================= Notifications =================
 
     private void createChannels() {
-        if (Build.VERSION.SDK_INT < 26) {
+        ensureChannels(this);
+    }
+
+    static void ensureChannels(Context ctx) {
+        if (Build.VERSION.SDK_INT < 26 || ctx == null) {
             return;
         }
-        NotificationManager nm = getSystemService(NotificationManager.class);
+        NotificationManager nm = ctx.getSystemService(NotificationManager.class);
         if (nm == null) {
             return;
         }
+        try {
+            nm.deleteNotificationChannel(LEGACY_CHANNEL_STATUS);
+        } catch (Exception ignored) {
+        }
         NotificationChannel statusCh = new NotificationChannel(
-                CHANNEL_STATUS, "后台接收服务", NotificationManager.IMPORTANCE_LOW);
+                CHANNEL_STATUS, "后台接收服务", NotificationManager.IMPORTANCE_MIN);
+        statusCh.setDescription("后台接收文件时的常驻保活通知（默认最低优先级）；可在此关闭以隐藏状态栏图标，不影响收到新文件通知");
         statusCh.setShowBadge(false);
+        statusCh.setSound(null, null);
+        statusCh.enableLights(false);
+        statusCh.enableVibration(false);
         nm.createNotificationChannel(statusCh);
 
         NotificationChannel recvCh = new NotificationChannel(
                 CHANNEL_RECEIVED, "收到新文件通知", NotificationManager.IMPORTANCE_DEFAULT);
         nm.createNotificationChannel(recvCh);
+    }
+
+    static boolean isStatusChannelMuted(Context ctx) {
+        if (Build.VERSION.SDK_INT < 26 || ctx == null) {
+            return false;
+        }
+        NotificationManager nm = ctx.getSystemService(NotificationManager.class);
+        if (nm == null) {
+            return false;
+        }
+        if (!nm.areNotificationsEnabled()) {
+            return true;
+        }
+        NotificationChannel ch = nm.getNotificationChannel(CHANNEL_STATUS);
+        return ch != null && ch.getImportance() == NotificationManager.IMPORTANCE_NONE;
     }
 
     private PendingIntent openAppIntent() {
@@ -884,6 +912,7 @@ public class TransferService extends Service implements EventListener {
         return PendingIntent.getActivity(this, 0, open, flags);
     }
 
+    @SuppressWarnings("deprecation")
     private Notification buildStatusNotification(String text) {
         Notification.Builder b = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(this, CHANNEL_STATUS)
@@ -893,6 +922,9 @@ public class TransferService extends Service implements EventListener {
                 .setSmallIcon(android.R.drawable.stat_sys_upload)
                 .setContentIntent(openAppIntent())
                 .setOngoing(true);
+        if (Build.VERSION.SDK_INT < 26) {
+            b.setPriority(Notification.PRIORITY_MIN);
+        }
         return b.build();
     }
 

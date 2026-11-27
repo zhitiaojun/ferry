@@ -3,6 +3,7 @@ package cn.cwlindean.ferry;
 import android.Manifest;
 import android.animation.ValueAnimator;
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.app.AlertDialog;
 import android.app.Dialog;
 import android.content.ClipData;
@@ -261,6 +262,9 @@ public class MainActivity extends Activity {
 
     // Settings views
     private Button setRecvBtn;
+    private TextView setKeepAliveNotifSub;
+    private Button setKeepAliveNotifBtn;
+    private Button setHideRecentsBtn;
     private TextView setDownloadDirSub;
     private Button setDownloadResetBtn;
     private TextView setServerSub;
@@ -426,7 +430,9 @@ public class MainActivity extends Activity {
         migrateLegacyState();
         deviceName = loadSavedName();
         loadDownloadDirPrefs();
+        TransferService.ensureChannels(this);
         setContentView(buildUi());
+        applyExcludeFromRecents(isHideRecentsEnabled());
 
         if (Build.VERSION.SDK_INT >= 33) {
             requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 7);
@@ -483,6 +489,9 @@ public class MainActivity extends Activity {
         if (pairDialog != null && pairDialog.isShowing() && pairMode == 0) {
             startCameraIfReady();
         }
+        applyExcludeFromRecents(isHideRecentsEnabled());
+        refreshKeepAliveNotifUi();
+        refreshHideRecentsUi();
         refreshClipboardPreviewBar();
     }
 
@@ -605,6 +614,7 @@ public class MainActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        applyExcludeFromRecents(isHideRecentsEnabled());
         handleShareIntent(intent);
     }
 
@@ -1777,6 +1787,17 @@ public class MainActivity extends Activity {
         grp1.addView(settingActionRow("后台保活白名单", "防止息屏后漏收电脑发来的文件", batBtn, v -> requestBatteryExemption()),
                 new LinearLayout.LayoutParams(MATCH, WRAP));
 
+        grp1.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
+
+        grp1.addView(settingKeepAliveNotifRow(), new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        grp1.addView(hairline(), new LinearLayout.LayoutParams(MATCH, 1));
+
+        setHideRecentsBtn = smallOutlineBtn("已关闭", v -> onHideRecentsToggleClicked());
+        grp1.addView(settingActionRow("隐藏最近任务后台", "开启后从多任务列表隐藏卡片，防止误划清理", setHideRecentsBtn,
+                        v -> onHideRecentsToggleClicked()),
+                new LinearLayout.LayoutParams(MATCH, WRAP));
+
         LinearLayout.LayoutParams g1Lp = new LinearLayout.LayoutParams(MATCH, WRAP);
         g1Lp.bottomMargin = dp(22);
         root.addView(grp1, g1Lp);
@@ -1872,6 +1893,8 @@ public class MainActivity extends Activity {
 
         refreshDownloadDirUi();
         refreshServerUi();
+        refreshKeepAliveNotifUi();
+        refreshHideRecentsUi();
         sv.addView(root, new FrameLayout.LayoutParams(MATCH, WRAP));
         return sv;
     }
@@ -2107,6 +2130,8 @@ public class MainActivity extends Activity {
         }
         refreshDownloadDirUi();
         refreshServerUi();
+        refreshKeepAliveNotifUi();
+        refreshHideRecentsUi();
     }
 
     private void showRenameDialog() {
@@ -6622,6 +6647,136 @@ public class MainActivity extends Activity {
                 toast("请在系统设置中允许轻渡后台运行");
             }
         }
+    }
+
+    private LinearLayout settingKeepAliveNotifRow() {
+        setKeepAliveNotifBtn = smallOutlineBtn("去关闭", v -> showKeepAliveNotifGuide());
+        LinearLayout row = settingActionRow(
+                "保活状态通知",
+                "默认最低优先级；如需彻底隐藏，可引导关闭此通知渠道",
+                setKeepAliveNotifBtn,
+                v -> showKeepAliveNotifGuide());
+        setKeepAliveNotifSub = (TextView) ((LinearLayout) row.getChildAt(0)).getChildAt(1);
+        return row;
+    }
+
+    private void styleTogglePill(Button btn, boolean active, String activeText, String inactiveText) {
+        if (btn == null) {
+            return;
+        }
+        btn.setText(active ? activeText : inactiveText);
+        btn.setBackground(ripple(roundBox(
+                active ? cPrimaryContainer : cSurface,
+                active ? cPrimary : cBorder, 10), 10));
+        btn.setTextColor(active ? cOnPrimaryContainer : cOnSurfaceVariant);
+    }
+
+    private void refreshKeepAliveNotifUi() {
+        boolean muted = TransferService.isStatusChannelMuted(this);
+        if (setKeepAliveNotifSub != null) {
+            setKeepAliveNotifSub.setText(muted
+                    ? "已关闭保活通知，不影响「收到新文件通知」"
+                    : "默认最低优先级；如需彻底隐藏，可引导关闭此通知渠道");
+        }
+        styleTogglePill(setKeepAliveNotifBtn, muted, "已关闭", "去关闭");
+    }
+
+    private void showKeepAliveNotifGuide() {
+        TransferService.ensureChannels(this);
+        String msg = Build.VERSION.SDK_INT >= 26
+                ? "轻渡已默认将「后台接收服务」通知设为最低优先级，以减少状态栏打扰。\n\n如需彻底隐藏状态栏图标和常驻横幅，可在即将打开的通知设置页中关闭「后台接收服务」开关；这不会影响「收到新文件通知」，后台仍可正常接收文件。"
+                : "轻渡已默认将后台接收通知设为最低优先级。\n\n如需彻底隐藏，可在应用信息页关闭通知显示；但系统版本较旧时，全部关闭通知可能一并屏蔽新文件提醒。";
+        new AlertDialog.Builder(this)
+                .setTitle("关闭保活状态通知")
+                .setMessage(msg)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("前往通知设置", (d, w) -> openKeepAliveChannelSettings())
+                .show();
+    }
+
+    private void openKeepAliveChannelSettings() {
+        TransferService.ensureChannels(this);
+        if (Build.VERSION.SDK_INT >= 26) {
+            try {
+                Intent i = new Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS);
+                i.putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
+                i.putExtra(Settings.EXTRA_CHANNEL_ID, TransferService.CHANNEL_STATUS);
+                startActivity(i);
+                return;
+            } catch (Exception ignored) {
+            }
+            try {
+                Intent i = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+                i.putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
+                startActivity(i);
+                return;
+            } catch (Exception ignored) {
+            }
+        }
+        try {
+            Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+            i.setData(Uri.parse("package:" + getPackageName()));
+            startActivity(i);
+        } catch (Exception e) {
+            toast("请在系统设置 → 应用通知中关闭「后台接收服务」");
+        }
+    }
+
+    private boolean isHideRecentsEnabled() {
+        return getPreferences(MODE_PRIVATE).getBoolean("hideRecents", false);
+    }
+
+    private void setHideRecentsEnabled(boolean hide) {
+        getPreferences(MODE_PRIVATE).edit().putBoolean("hideRecents", hide).apply();
+        applyExcludeFromRecents(hide);
+        refreshHideRecentsUi();
+    }
+
+    private void applyExcludeFromRecents(boolean hide) {
+        if (Build.VERSION.SDK_INT < 21) {
+            return;
+        }
+        try {
+            ActivityManager am = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
+            if (am == null) {
+                return;
+            }
+            List<ActivityManager.AppTask> tasks = am.getAppTasks();
+            if (tasks != null) {
+                for (ActivityManager.AppTask task : tasks) {
+                    if (task != null) {
+                        task.setExcludeFromRecents(hide);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "applyExcludeFromRecents", e);
+        }
+    }
+
+    private void refreshHideRecentsUi() {
+        styleTogglePill(setHideRecentsBtn, isHideRecentsEnabled(), "已开启", "已关闭");
+    }
+
+    private void onHideRecentsToggleClicked() {
+        if (isHideRecentsEnabled()) {
+            setHideRecentsEnabled(false);
+            toast("已关闭隐藏后台，卡片将重新显示在最近任务中");
+        } else {
+            showHideRecentsGuideDialog();
+        }
+    }
+
+    private void showHideRecentsGuideDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle("开启前请先锁定后台卡片")
+                .setMessage("开启「隐藏最近任务后台」后，轻渡将不再出现在手机多任务列表中，隐藏后将无法再通过多任务卡片加锁。\n\n请先按以下步骤锁定后台，防止被系统清理：\n1. 上滑进入手机最近任务界面；\n2. 长按「轻渡」卡片并点击「锁定 / 加锁」；\n3. 返回轻渡后，点击下方「已锁定，开启隐藏」。")
+                .setNegativeButton("暂不开启", null)
+                .setPositiveButton("已锁定，开启隐藏", (d, w) -> {
+                    setHideRecentsEnabled(true);
+                    toast("已开启隐藏最近任务后台");
+                })
+                .show();
     }
 
     private String lanHint() {

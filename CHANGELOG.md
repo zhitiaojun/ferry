@@ -1,5 +1,10 @@
 # 变更日志
 
+## 1.0.3-beta.1 — 2026-11-27
+
+- **Android 前台保活通知默认最低优先级与一键关闭引导**：将 `TransferService` 常驻状态渠道迁移为 `ferry-transfer-min`（默认 `NotificationManager.IMPORTANCE_MIN`，关闭角标/铃声/振动，Android 7.1 及以下同步设置 `PRIORITY_MIN`）并清理旧 `ferry-transfer` 渠道，覆盖安装即可自动生效；设置页新增「保活状态通知」引导弹窗与系统通知渠道直达入口，支持在不影响「收到新文件通知」的前提下彻底关闭常驻保活通知。
+- **Android「隐藏最近任务后台」可选开关与加锁引导**：设置页新增默认关闭的「隐藏最近任务后台」开关（基于 `ActivityManager.AppTask.setExcludeFromRecents` 动态控制）；初次尝试开启时会先弹窗引导用户进入最近任务为轻渡卡片「锁定 / 加锁」，确认后再启用卡片隐藏，防止隐藏后无法从多任务加锁而遭系统误杀。
+
 ## 1.0.2 — 2026-11-27
 
 Windows 与 Android 全新「发送优先」单焦点界面重构正式版本（整合 `v1.0.2-beta.1` ～ `beta.4` 全部改进与修复）：
