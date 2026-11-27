@@ -170,3 +170,41 @@ func TestDiscoverNoHintAndDeviceIDSerialization(t *testing.T) {
 		}
 	}
 }
+
+func TestFilterDiscoveredDevicesExcludesSelf(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "device.key")
+	k, err := identity.LoadOrCreateKey(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selfHex, err := DeviceIDFor(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selfHex != k.IDHex() {
+		t.Fatalf("DeviceIDFor = %s, want %s", selfHex, k.IDHex())
+	}
+
+	fallbackID := identity.DeviceID("REDMI K90 Ultra")
+	var peerID [32]byte
+	copy(peerID[:], []byte("peer-hyperx-00000000000000000000"))
+
+	t.Cleanup(func() {
+		mu.Lock()
+		localDevID = [32]byte{}
+		localDevIDSet = false
+		mu.Unlock()
+	})
+
+	skip := collectSelfDeviceIDs(fallbackID)
+	raw := []discovery.Device{
+		{DeviceID: k.ID(), Name: "REDMI K90 Ultra", TCPAddr: "192.168.1.20:49152"},
+		{DeviceID: fallbackID, Name: "REDMI K90 Ultra", TCPAddr: "192.168.1.20:49153"},
+		{DeviceID: peerID, Name: "HyperX", TCPAddr: "192.168.1.10:49154"},
+	}
+	filtered := filterDiscoveredDevices(raw, skip)
+	if len(filtered) != 1 || filtered[0].DeviceID != peerID {
+		t.Fatalf("filtered = %+v, want only peerID", filtered)
+	}
+}

@@ -41,12 +41,53 @@ type lanPeerEntry struct {
 }
 
 var (
-	mu           sync.Mutex
-	rcv          *receiver
-	lanPeersMu   sync.Mutex
-	lanPeers     = map[string]lanPeerEntry{}
-	lanListening bool
+	mu            sync.Mutex
+	rcv           *receiver
+	localDevID    [32]byte
+	localDevIDSet bool
+	lanPeersMu    sync.Mutex
+	lanPeers      = map[string]lanPeerEntry{}
+	lanListening  bool
 )
+
+func rememberLocalDeviceID(id [32]byte) {
+	if id == ([32]byte{}) {
+		return
+	}
+	mu.Lock()
+	localDevID = id
+	localDevIDSet = true
+	mu.Unlock()
+}
+
+func collectSelfDeviceIDs(extra ...[32]byte) map[[32]byte]struct{} {
+	skip := make(map[[32]byte]struct{}, len(extra)+2)
+	for _, id := range extra {
+		if id != ([32]byte{}) {
+			skip[id] = struct{}{}
+		}
+	}
+	mu.Lock()
+	if localDevIDSet && localDevID != ([32]byte{}) {
+		skip[localDevID] = struct{}{}
+	}
+	if rcv != nil && rcv.devID != ([32]byte{}) {
+		skip[rcv.devID] = struct{}{}
+	}
+	mu.Unlock()
+	return skip
+}
+
+func filterDiscoveredDevices(raw []discovery.Device, skipIDs map[[32]byte]struct{}) []discovery.Device {
+	out := make([]discovery.Device, 0, len(raw))
+	for _, d := range raw {
+		if _, isSelf := skipIDs[d.DeviceID]; isSelf {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
+}
 
 type receiver struct {
 	name       string
@@ -121,6 +162,8 @@ func startReceiver(name, outDir, keyPath, pairedPath, hintJSON string) (string, 
 			return "", err
 		}
 		devID = k.ID()
+		localDevID = devID
+		localDevIDSet = true
 	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return "", fmt.Errorf("create output dir: %w", err)
@@ -422,6 +465,13 @@ func discoverNoHintError(goos string, hint *discovery.Hint) error {
 // Discover waits timeoutMS for LAN announcements and returns a JSON array of
 // devices (id, name, addr, iface). It announces this device's receiver port if running.
 func Discover(name string, timeoutMS int, hintJSON string) (string, error) {
+	return DiscoverWithKey(name, "", timeoutMS, hintJSON)
+}
+
+// DiscoverWithKey is like Discover and loads the persistent Ed25519 key at
+// keyPath so the local device is filtered out even when discovery races with
+// receiver startup or runs while background receiving is disabled.
+func DiscoverWithKey(name, keyPath string, timeoutMS int, hintJSON string) (string, error) {
 	name = pairing.SanitizeName(name)
 	if name == "" {
 		name = "android"
@@ -434,12 +484,27 @@ func Discover(name string, timeoutMS int, hintJSON string) (string, error) {
 		return "", err
 	}
 
-	devID := identity.DeviceID(name)
+	fallbackID := identity.DeviceID(name)
+	var keyID [32]byte
+	var hasKeyID bool
+	if keyPath != "" {
+		if k, kerr := identity.LoadOrCreateKey(keyPath); kerr == nil {
+			keyID = k.ID()
+			hasKeyID = true
+			rememberLocalDeviceID(keyID)
+		}
+	}
+
+	devID := fallbackID
 	rcvPort := 0
 	mu.Lock()
 	if rcv != nil {
 		devID = rcv.devID
 		rcvPort = portOf(rcv.ln.Addr())
+	} else if hasKeyID {
+		devID = keyID
+	} else if localDevIDSet {
+		devID = localDevID
 	}
 	mu.Unlock()
 
@@ -474,10 +539,18 @@ func Discover(name string, timeoutMS int, hintJSON string) (string, error) {
 	for time.Now().Before(deadline) {
 		time.Sleep(100 * time.Millisecond)
 	}
-	rawDevs := l.Devices()
+	skipIDs := collectSelfDeviceIDs(devID, fallbackID, keyID)
+	rawDevs := filterDiscoveredDevices(l.Devices(), skipIDs)
 	devices := make([]Device, 0, len(rawDevs))
 	changed := false
 	lanPeersMu.Lock()
+	for skipID := range skipIDs {
+		skipHex := hex.EncodeToString(skipID[:])
+		if _, existed := lanPeers[skipHex]; existed {
+			delete(lanPeers, skipHex)
+			changed = true
+		}
+	}
 	for _, d := range rawDevs {
 		idHex := hex.EncodeToString(d.DeviceID[:])
 		devices = append(devices, Device{ID: idHex, Name: d.Name, Addr: d.TCPAddr, Iface: d.Iface})

@@ -5735,9 +5735,10 @@ public class MainActivity extends Activity {
         ioPool.execute(() -> {
             try {
                 String id = Mobile.deviceIDFor(keyFile().getAbsolutePath());
-                final String full = id == null ? "" : id;
+                final String full = id == null ? "" : id.trim().toLowerCase(Locale.US);
                 ui.post(() -> {
                     fullDeviceId = full;
+                    pruneSelfEntries();
                     refreshSettingsInfo();
                 });
             } catch (Exception e) {
@@ -5754,7 +5755,7 @@ public class MainActivity extends Activity {
                 final List<PeerEntry> entries = new ArrayList<>();
                 for (int i = 0; i < arr.length(); i++) {
                     JSONObject o = arr.getJSONObject(i);
-                    String id = o.optString("id", "").trim();
+                    String id = o.optString("id", "").trim().toLowerCase(Locale.US);
                     if (id.isEmpty()) {
                         continue;
                     }
@@ -5767,9 +5768,10 @@ public class MainActivity extends Activity {
                 ui.post(() -> {
                     pairedEntries.clear();
                     pairedEntries.addAll(entries);
+                    pruneSelfEntries();
                     prunePairedLanEntries();
-                    if (selectedTarget.isEmpty() && !entries.isEmpty()) {
-                        selectedTarget = entries.get(0).value;
+                    if (selectedTarget.isEmpty() && !pairedEntries.isEmpty()) {
+                        selectedTarget = pairedEntries.get(0).value;
                         saveLastPeer(selectedTarget);
                     }
                     renderPeerSection();
@@ -5781,6 +5783,44 @@ public class MainActivity extends Activity {
                 Log.w(TAG, "loadPairedPeers", e);
             }
         });
+    }
+
+    private void pruneSelfEntries() {
+        if (fullDeviceId == null || fullDeviceId.isEmpty()) {
+            return;
+        }
+        Set<String> removedVals = new HashSet<>();
+        Iterator<PeerEntry> pit = pairedEntries.iterator();
+        while (pit.hasNext()) {
+            PeerEntry p = pit.next();
+            if (!p.deviceId.isEmpty() && p.deviceId.equalsIgnoreCase(fullDeviceId)) {
+                removedVals.add(p.value);
+                pit.remove();
+            }
+        }
+        Iterator<PeerEntry> lit = lanEntries.iterator();
+        while (lit.hasNext()) {
+            PeerEntry e = lit.next();
+            if (!e.deviceId.isEmpty() && e.deviceId.equalsIgnoreCase(fullDeviceId)) {
+                removedVals.add(e.value);
+                lit.remove();
+            }
+        }
+        removedVals.add(fullDeviceId);
+        lanOnlineSet.removeAll(removedVals);
+        cloudOnlineSet.removeAll(removedVals);
+        if (removedVals.contains(selectedTarget)) {
+            selectedTarget = "";
+            userPickedTarget = false;
+            saveLastPeer("");
+        }
+        if (removedVals.contains(shareSelectedTarget)) {
+            shareSelectedTarget = "";
+        }
+        renderPeerSection();
+        if (shareDialog != null && shareDialog.isShowing()) {
+            refreshShareSheetPeers();
+        }
     }
 
     private void prunePairedLanEntries() {
@@ -5830,9 +5870,22 @@ public class MainActivity extends Activity {
         lanSearching = true;
         renderPeerSection();
         final String name = deviceName;
+        final String knownSelfId = fullDeviceId == null ? "" : fullDeviceId.trim().toLowerCase(Locale.US);
+        final String keyPath = keyFile().getAbsolutePath();
         new Thread(() -> {
             try {
-                String json = Mobile.discover(name, 3000, hint);
+                String resolvedSelfId = knownSelfId;
+                if (resolvedSelfId.isEmpty()) {
+                    try {
+                        String id = Mobile.deviceIDFor(keyPath);
+                        if (id != null) {
+                            resolvedSelfId = id.trim().toLowerCase(Locale.US);
+                        }
+                    } catch (Exception ignored) {
+                    }
+                }
+                final String selfId = resolvedSelfId;
+                String json = Mobile.discoverWithKey(name, keyPath, 3000, hint);
                 JSONArray arr = new JSONArray(json);
                 final List<PeerEntry> found = new ArrayList<>();
                 for (int i = 0; i < arr.length(); i++) {
@@ -5846,10 +5899,17 @@ public class MainActivity extends Activity {
                         dn = addr;
                     }
                     String id = o.optString("ID", "").trim().toLowerCase(Locale.US);
+                    if (!id.isEmpty() && !selfId.isEmpty() && id.equals(selfId)) {
+                        continue;
+                    }
                     found.add(new PeerEntry(dn + " (LAN)", addr, id));
                 }
                 ui.post(() -> {
                     lanSearching = false;
+                    if (fullDeviceId.isEmpty() && !selfId.isEmpty()) {
+                        fullDeviceId = selfId;
+                        refreshSettingsInfo();
+                    }
                     Map<String, String> pairedById = new HashMap<>();
                     for (PeerEntry p : pairedEntries) {
                         if (!p.deviceId.isEmpty()) {
@@ -5859,6 +5919,10 @@ public class MainActivity extends Activity {
                     List<PeerEntry> unpairedFound = new ArrayList<>();
                     int pairedFoundCount = 0;
                     for (PeerEntry e : found) {
+                        if (!e.deviceId.isEmpty() && !fullDeviceId.isEmpty()
+                                && e.deviceId.equalsIgnoreCase(fullDeviceId)) {
+                            continue;
+                        }
                         if (!e.deviceId.isEmpty() && pairedById.containsKey(e.deviceId)) {
                             pairedFoundCount++;
                             lanOnlineSet.add(pairedById.get(e.deviceId));

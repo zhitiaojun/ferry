@@ -62,6 +62,7 @@ func StartAutoReceive(name, outDir, signalURL, keyPath, pairedPath, hintJSON, st
 	if err != nil {
 		return "", err
 	}
+	rememberLocalDeviceID(key.ID())
 	name = pairing.SanitizeName(name)
 	if name == "" {
 		name = "android"

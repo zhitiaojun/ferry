@@ -53,6 +53,7 @@ func DeviceIDFor(keyPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	rememberLocalDeviceID(k.ID())
 	return k.IDHex(), nil
 }
 

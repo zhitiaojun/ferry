@@ -1,5 +1,9 @@
 # 变更日志
 
+## 1.0.3-beta.3 — 2026-11-27
+
+- **修复 Android 端启动时局域网发现会搜到并选中本机的问题**：修复 `MainActivity` 启动并发调用 `discoverSilent` 与后台服务 `startReceiverWithAuth` 时的竞态——此前 `Mobile.Discover` 在接收端尚未就绪前会用临时设备名哈希监听局域网，导致误收本机持久化密钥的局域网广播并在首页顶部药丸栏出现本机 `"(LAN)"` 入口；现新增 `Mobile.DiscoverWithKey` 并统一在 Go 内核与 Android 端按本机 `DeviceID` 双向过滤且清理自连接条目。
+
 ## 1.0.3-beta.2 — 2026-11-27
 
 - **修复 Android 底部悬浮胶囊阴影边缘被裁切的问题**：为胶囊外层容器开启 `setClipToPadding(false)` / `setClipChildren(false)` 并调整四周留白，解决 `elevation` 阴影在左右和下边缘被硬生生切出黑色直角三角阴影的渲染缺陷；同时使用精确的半高 `ViewOutlineProvider`（`h / 2f`）与柔和阴影色调，使四周阴影圆润自然过渡。
