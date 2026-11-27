@@ -141,9 +141,9 @@
   .btn-ghost:hover{filter:brightness(.96)}
 
   /* Hero */
-  .hero{padding:58px 0 44px}
+  .hero{padding:54px 0 42px}
   .hero-grid{
-    display:grid;grid-template-columns:minmax(0,1.08fr) minmax(0,.92fr);gap:40px;align-items:center;
+    display:grid;grid-template-columns:minmax(0,1.02fr) minmax(0,.98fr);gap:34px;align-items:center;
   }
   .eyebrow{
     display:inline-flex;align-items:center;gap:8px;
@@ -174,161 +174,230 @@
   .hero-meta span{display:inline-flex;align-items:center;gap:6px}
   .hero-meta svg{color:var(--accent);flex-shrink:0}
 
-  /* Interactive Hero Stage */
-  .stage{
-    min-width:0;
+  /* Fanned Paper-Sheet Cascade Showcase */
+  .deck-stage{
+    min-width:0;display:flex;flex-direction:column;align-items:center;gap:14px;
+    user-select:none;
+  }
+  .deck-arena{
+    --rx:0deg;--ry:0deg;--sway:0px;
+    position:relative;width:100%;height:434px;
+    display:grid;place-items:center;
+    perspective:1350px;
+  }
+  .deck-arena::before{
+    content:"";position:absolute;width:390px;height:390px;border-radius:50%;
+    background:radial-gradient(circle,color-mix(in srgb,var(--accent) 16%,transparent) 0%,transparent 70%);
+    pointer-events:none;filter:blur(10px);
+  }
+  .deck-tilt{
+    position:relative;width:266px;height:368px;
+    transform-style:preserve-3d;
+    transform:rotateX(var(--rx)) rotateY(var(--ry));
+    transition:transform .28s cubic-bezier(.22,1,.36,1);
+  }
+  .deck-card{
+    position:absolute;inset:0;
     background:var(--surface);border:1px solid var(--line);
-    border-radius:26px;padding:16px;box-shadow:var(--shadow);
+    border-radius:22px;padding:14px;
+    display:flex;flex-direction:column;gap:9px;
+    cursor:pointer;transform-origin:34% 92%;
+    will-change:transform;
+    box-shadow:0 16px 34px rgba(16,28,24,.11),0 2px 6px rgba(16,28,24,.05);
+    transition:transform .52s cubic-bezier(.22,1,.36,1),box-shadow .34s ease,border-color .25s ease,opacity .28s ease;
   }
-  .stage-bar{
-    display:flex;align-items:center;justify-content:space-between;gap:10px;
-    padding-bottom:12px;border-bottom:1px solid var(--line-soft);margin-bottom:14px;
-    flex-wrap:wrap;
+  :root[data-theme="dark"] .deck-card{
+    box-shadow:0 22px 46px rgba(0,0,0,.54),0 2px 10px rgba(0,0,0,.32);
   }
-  .stage-tabs{
-    display:inline-flex;gap:4px;padding:3px;border-radius:999px;
-    background:var(--surface-2);border:1px solid var(--line-soft);
+  /* Cascading desk-fan resting state: 0 front-left -> 1 middle -> 2 back-right */
+  .deck-card[data-slot="0"]{
+    z-index:3;opacity:1;
+    border-color:color-mix(in srgb,var(--accent) 52%,var(--line));
+    box-shadow:14px 24px 48px rgba(16,28,24,.17),0 4px 14px color-mix(in srgb,var(--accent) 12%,transparent);
+    transform:translate3d(calc(-56px + var(--sway) * 0.45),2px,24px) rotate(-7.5deg) scale(1);
   }
-  .stage-tab{
-    border:0;background:transparent;color:var(--ink-2);
-    font-size:12px;font-weight:600;padding:6px 12px;border-radius:999px;
-    cursor:pointer;transition:all .15s;
+  :root[data-theme="dark"] .deck-card[data-slot="0"]{
+    box-shadow:14px 28px 58px rgba(0,0,0,.66),0 0 0 1px color-mix(in srgb,var(--accent) 34%,transparent);
   }
-  .stage-tab.active{background:var(--accent);color:var(--accent-ink);box-shadow:var(--shadow-sm)}
-  .stage-badge{
-    font-size:11.5px;font-weight:600;color:var(--ink-2);
-    background:var(--surface-2);border:1px solid var(--line);
-    padding:3px 10px;border-radius:999px;
+  .deck-card[data-slot="1"]{
+    z-index:2;opacity:.96;
+    box-shadow:10px 18px 38px rgba(16,28,24,.12);
+    transform:translate3d(calc(8px + var(--sway) * 0.1),-2px,0px) rotate(1.5deg) scale(.975);
   }
-  .stage-badge.demo{
-    color:var(--accent-soft-ink);background:var(--accent-soft);
-    border-color:color-mix(in srgb,var(--accent) 30%,var(--line));
+  .deck-card[data-slot="2"]{
+    z-index:1;opacity:.92;
+    transform:translate3d(calc(72px - var(--sway) * 0.35),10px,-28px) rotate(10deg) scale(.945);
   }
-  .stage-panel{display:none}
-  .stage-panel.active{display:block;animation:fadeUp .22s ease}
-  @keyframes fadeUp{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  /* Expanded fan when hovering the arena */
+  .deck-arena.is-open .deck-card[data-slot="0"]{
+    transform:translate3d(calc(-74px + var(--sway) * 0.5),0px,26px) rotate(-9.5deg) scale(1);
+  }
+  .deck-arena.is-open .deck-card[data-slot="1"]{
+    transform:translate3d(calc(10px + var(--sway) * 0.1),-4px,4px) rotate(1.5deg) scale(.98);
+  }
+  .deck-arena.is-open .deck-card[data-slot="2"]{
+    transform:translate3d(calc(94px - var(--sway) * 0.4),10px,-20px) rotate(12.5deg) scale(.955);
+  }
+  /* Individual card hover peek (stays under cursor — zero jitter) */
+  .deck-arena .deck-card.is-peek[data-slot="0"]{
+    z-index:9;opacity:1;
+    border-color:color-mix(in srgb,var(--accent) 68%,var(--line));
+    box-shadow:16px 32px 62px rgba(16,28,24,.21);
+    transform:translate3d(calc(-70px + var(--sway) * 0.35),-12px,48px) rotate(-2deg) scale(1.025);
+  }
+  .deck-arena .deck-card.is-peek[data-slot="1"]{
+    z-index:9;opacity:1;
+    border-color:color-mix(in srgb,var(--accent) 68%,var(--line));
+    box-shadow:12px 32px 62px rgba(16,28,24,.21);
+    transform:translate3d(calc(14px + var(--sway) * 0.25),-18px,52px) rotate(0deg) scale(1.025);
+  }
+  .deck-arena .deck-card.is-peek[data-slot="2"]{
+    z-index:9;opacity:1;
+    border-color:color-mix(in srgb,var(--accent) 68%,var(--line));
+    box-shadow:8px 32px 62px rgba(16,28,24,.21);
+    transform:translate3d(calc(102px + var(--sway) * 0.2),-16px,52px) rotate(3deg) scale(1.025);
+  }
+  /* Gentle sibling spread when peeking middle or right sheet */
+  .deck-arena[data-peek="1"] .deck-card[data-slot="0"]{
+    transform:translate3d(-92px,6px,6px) rotate(-12deg) scale(.96);
+  }
+  .deck-arena[data-peek="1"] .deck-card[data-slot="2"]{
+    transform:translate3d(108px,14px,-24px) rotate(14.5deg) scale(.935);
+  }
+  .deck-arena[data-peek="2"] .deck-card[data-slot="0"]{
+    transform:translate3d(-86px,8px,6px) rotate(-11.5deg) scale(.96);
+  }
+  .deck-arena[data-peek="2"] .deck-card[data-slot="1"]{
+    transform:translate3d(-6px,4px,-8px) rotate(-1deg) scale(.96);
+  }
 
-  /* Preview Frame & Non-Interactive Guard */
-  .mock-shell{
-    position:relative;user-select:none;cursor:default;
-  }
-  .mock-caption{
-    margin-top:11px;padding:9px 12px;border-radius:12px;
-    background:var(--surface-2);border:1px solid var(--line-soft);
-    display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
-    font-size:12px;color:var(--ink-2);transition:border-color .2s,background .2s;
-  }
-  .mock-caption.hint{
-    border-color:var(--accent);background:var(--accent-soft);color:var(--accent-soft-ink);
-  }
-  .mock-caption a{
-    color:var(--accent);font-weight:700;white-space:nowrap;
-  }
-  .mock-caption a:hover{text-decoration:underline}
-  .mock-head-label{
+  .card-suit{
     display:flex;align-items:center;justify-content:space-between;gap:8px;
-    font-size:11px;font-weight:600;color:var(--ink-3);
-    padding-bottom:6px;border-bottom:1px dashed var(--line);
+    padding-bottom:8px;border-bottom:1px dashed var(--line);
+    font-size:11.5px;font-weight:700;color:var(--ink);
   }
+  .card-suit .suit-l{display:inline-flex;align-items:center;gap:6px}
+  .card-suit .suit-dot{width:7px;height:7px;border-radius:50%;background:var(--accent)}
+  .card-suit .suit-dot.win{background:#1F7AE0}
+  .card-suit .suit-dot.rt{background:var(--violet)}
   .mock-chip{
     font-family:var(--mono);font-size:10px;font-weight:700;
     padding:1px 7px;border-radius:999px;
     background:var(--surface-2);color:var(--ink-3);border:1px solid var(--line);
   }
 
-  /* Mock Windows Launchpad */
-  .win-mock{
-    background:var(--bg);border:1px solid var(--line);border-radius:18px;
-    padding:14px;display:flex;flex-direction:column;gap:11px;
-  }
-  .win-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
-  .win-nav{display:flex;gap:6px;font-size:11px;font-weight:600}
-  .win-nav span{padding:4px 10px;border-radius:8px;color:var(--ink-3)}
-  .win-nav span.on{background:var(--surface);color:var(--ink);border:1px solid var(--line)}
-  .win-dots{display:flex;gap:5px}
-  .win-dots i{width:8px;height:8px;border-radius:50%;background:var(--line)}
-  .pill-strip{display:flex;gap:7px;flex-wrap:wrap}
+  /* Compact Miniature UI Illustrations inside Deck Cards */
+  .mini-pill-row{display:flex;gap:5px;flex-wrap:wrap}
   .dev-pill{
-    display:inline-flex;align-items:center;gap:6px;
-    font-size:12px;font-weight:600;padding:5px 12px;border-radius:999px;
-    border:1px solid var(--line);background:var(--surface);color:var(--ink-2);
+    display:inline-flex;align-items:center;gap:5px;
+    font-size:10.5px;font-weight:600;padding:3px 9px;border-radius:999px;
+    border:1px solid var(--line);background:var(--bg);color:var(--ink-2);
   }
   .dev-pill.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
-  .dev-pill i{width:6px;height:6px;border-radius:50%;background:#59E1B7}
+  .dev-pill i{width:5px;height:5px;border-radius:50%;background:#59E1B7}
+  .win-top{display:flex;align-items:center;justify-content:space-between;gap:6px}
+  .win-nav{display:flex;gap:4px;font-size:10px;font-weight:600}
+  .win-nav span{padding:3px 7px;border-radius:7px;color:var(--ink-3)}
+  .win-nav span.on{background:var(--surface-2);color:var(--ink);border:1px solid var(--line)}
+  .win-dots{display:flex;gap:4px}
+  .win-dots i{width:6px;height:6px;border-radius:50%;background:var(--line)}
   .drop-mock{
-    border:1.5px dashed color-mix(in srgb,var(--accent) 50%,var(--line));
-    border-radius:15px;padding:22px 16px;text-align:center;
-    background:color-mix(in srgb,var(--accent-soft) 45%,var(--surface));
+    flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    border:1.5px dashed color-mix(in srgb,var(--accent) 48%,var(--line));
+    border-radius:14px;padding:18px 12px;text-align:center;
+    background:color-mix(in srgb,var(--accent-soft) 40%,var(--bg));
   }
-  .drop-mock strong{display:block;font-size:14px;margin-bottom:4px}
-  .drop-mock span{font-size:12px;color:var(--ink-2)}
+  .drop-mock strong{display:block;font-size:12.5px;margin-bottom:4px}
+  .drop-mock span{font-size:10.5px;color:var(--ink-2);line-height:1.45}
   .clip-bar{
-    display:flex;align-items:center;justify-content:space-between;gap:10px;
-    padding:9px 12px;border-radius:12px;
+    display:flex;align-items:center;justify-content:space-between;gap:6px;
+    padding:7px 9px;border-radius:10px;
     background:var(--accent-soft);color:var(--accent-soft-ink);
-    font-size:12px;
+    font-size:10.5px;
   }
   .clip-bar b{font-weight:700;white-space:nowrap}
 
-  /* Mock Android Floating Capsule */
-  .and-mock{
-    max-width:340px;margin:0 auto;
-    background:var(--bg);border:1px solid var(--line);border-radius:24px;
-    padding:14px 14px 12px;display:flex;flex-direction:column;gap:10px;
-  }
   .and-hero{
     background:linear-gradient(135deg,#1E6856,#155042);color:#fff;
-    border-radius:16px;padding:14px 15px;display:flex;align-items:center;justify-content:space-between;gap:10px;
+    border-radius:14px;padding:11px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px;
   }
-  .and-hero strong{display:block;font-size:15px}
-  .and-hero span{font-size:11px;opacity:.88}
+  .and-hero strong{display:block;font-size:13px}
+  .and-hero span{font-size:10px;opacity:.88}
   .and-hero-ico{
-    width:36px;height:36px;border-radius:11px;background:rgba(255,255,255,.16);
+    width:30px;height:30px;border-radius:9px;background:rgba(255,255,255,.16);
     display:grid;place-items:center;flex-shrink:0;
   }
-  .and-acts{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
+  .and-acts{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}
   .and-act{
-    background:var(--surface);border:1px solid var(--line);border-radius:11px;
-    padding:8px 4px;text-align:center;font-size:11px;font-weight:600;color:var(--ink);
+    background:var(--bg);border:1px solid var(--line);border-radius:9px;
+    padding:6px 3px;text-align:center;font-size:10px;font-weight:600;color:var(--ink);
   }
   .and-recent{
-    background:var(--surface);border:1px solid var(--line);border-radius:14px;
-    padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px;
-    font-size:11px;
+    background:var(--bg);border:1px solid var(--line);border-radius:11px;
+    padding:8px 10px;display:flex;align-items:center;justify-content:space-between;gap:6px;
+    font-size:10px;
   }
-  .and-recent strong{display:block;font-size:12px;color:var(--ink)}
+  .and-recent strong{display:block;font-size:11px;color:var(--ink)}
   .and-recent span{color:var(--ink-3)}
   .and-capsule{
-    display:grid;grid-template-columns:repeat(4,1fr);gap:4px;
-    background:var(--surface);border:1px solid var(--line);border-radius:999px;
-    padding:5px;box-shadow:0 8px 20px rgba(16,28,24,.10);
+    margin-top:auto;
+    display:grid;grid-template-columns:repeat(4,1fr);gap:3px;
+    background:var(--bg);border:1px solid var(--line);border-radius:999px;
+    padding:4px;box-shadow:0 6px 14px rgba(16,28,24,.08);
   }
   .and-tab{
-    text-align:center;font-size:11px;font-weight:600;padding:6px 4px;border-radius:999px;
+    text-align:center;font-size:10px;font-weight:600;padding:4px 2px;border-radius:999px;
     color:var(--ink-2);
   }
   .and-tab.on{background:var(--accent-soft);color:var(--accent-soft-ink)}
 
-  /* Route Simulator */
-  .tier{
-    border:1px solid var(--line);border-radius:15px;padding:12px 14px;margin-bottom:9px;
-    cursor:pointer;transition:all .15s;background:var(--bg);
+  /* Route Miniature inside Deck Card 3 */
+  .tier-mini{
+    border:1px solid var(--line);border-radius:12px;padding:9px 10px;background:var(--bg);
   }
-  .tier:last-of-type{margin-bottom:12px}
-  .tier.active{border-color:var(--accent);background:var(--surface-2)}
-  .tier-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
-  .tier-title{font-weight:700;font-size:13.5px}
+  .tier-mini.active{border-color:var(--accent);background:var(--surface-2)}
+  .tier-top{display:flex;align-items:center;justify-content:space-between;gap:6px}
+  .tier-title{font-weight:700;font-size:11.5px}
   .pill{
-    font-family:var(--mono);font-size:11px;font-weight:700;
-    padding:2px 9px;border-radius:999px;display:inline-block;
+    font-family:var(--mono);font-size:10px;font-weight:700;
+    padding:2px 7px;border-radius:999px;display:inline-block;white-space:nowrap;
   }
   .pill.lan{background:var(--accent-soft);color:var(--accent-soft-ink)}
   .pill.punch{background:var(--amber-soft);color:var(--amber)}
   .pill.relay{background:var(--violet-soft);color:var(--violet)}
-  .tier p{margin:5px 0 0;font-size:12.5px;color:var(--ink-2)}
+  .tier-mini p{margin:3px 0 0;font-size:10.5px;color:var(--ink-2);line-height:1.4}
   .route-log{
-    background:var(--surface-2);border:1px solid var(--line-soft);border-radius:12px;
-    padding:10px 12px;font-family:var(--mono);font-size:12px;color:var(--ink-2);
+    margin-top:auto;
+    background:var(--surface-2);border:1px solid var(--line-soft);border-radius:10px;
+    padding:7px 9px;font-family:var(--mono);font-size:10px;color:var(--ink-2);line-height:1.45;
+  }
+
+  /* Deck Controls & Clear Preview Caption */
+  .deck-dock{
+    display:flex;flex-direction:column;align-items:center;gap:8px;width:100%;
+  }
+  .deck-pills{
+    display:inline-flex;gap:4px;padding:3px;border-radius:999px;
+    background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow-sm);
+  }
+  .deck-pill{
+    border:0;background:transparent;color:var(--ink-2);
+    font-size:12px;font-weight:600;padding:5px 12px;border-radius:999px;
+    cursor:pointer;transition:all .16s;
+  }
+  .deck-pill.active{background:var(--accent);color:var(--accent-ink)}
+  .deck-note{
+    font-size:12px;color:var(--ink-3);text-align:center;
+    padding:4px 12px;border-radius:999px;transition:all .2s;
+  }
+  .deck-note.hint{
+    background:var(--accent-soft);color:var(--accent-soft-ink);
+  }
+  .deck-note a{color:var(--accent);font-weight:700;margin-left:4px}
+  .deck-note a:hover{text-decoration:underline}
+
+  @media (prefers-reduced-motion:reduce){
+    .deck-card,.deck-tilt{transition:none}
   }
 
   /* Sections */
@@ -477,7 +546,12 @@
     .nav-links{display:none}
   }
   @media (max-width:600px){
-    .hero{padding:36px 0 28px}
+    .hero{padding:34px 0 26px}
+    .deck-arena{height:396px}
+    .deck-tilt{width:230px;height:348px}
+    .deck-card[data-slot="0"]{transform:translate3d(-32px,2px,20px) rotate(-6deg) scale(1)}
+    .deck-card[data-slot="1"]{transform:translate3d(4px,-2px,0) rotate(1deg) scale(.97)}
+    .deck-card[data-slot="2"]{transform:translate3d(40px,8px,-24px) rotate(8deg) scale(.94)}
     .dl-grid,.sec-grid{grid-template-columns:1fr}
     .hero-cta .btn{width:100%}
     .nav-actions .hide-xs{display:none}
@@ -548,126 +622,117 @@
         </div>
       </div>
 
-      <div class="stage" aria-label="轻渡界面示意与选路原理展示">
-        <div class="stage-bar">
-          <div class="stage-tabs" role="tablist">
-            <button class="stage-tab active" type="button" data-stage="android" role="tab" aria-selected="true">Android 界面示意</button>
-            <button class="stage-tab" type="button" data-stage="windows" role="tab" aria-selected="false">Windows 界面示意</button>
-            <button class="stage-tab" type="button" data-stage="route" role="tab" aria-selected="false">三档竞速演示</button>
-          </div>
-          <span class="stage-badge" id="stage-badge">客户端界面示意 · 仅预览</span>
-        </div>
-
-        <div class="stage-panel active" data-panel="android">
-          <div class="mock-shell" data-mock="android">
-            <div class="and-mock" aria-hidden="true">
-              <div class="mock-head-label">
-                <span>Android 原生客户端界面（v1.0.3）</span>
-                <span class="mock-chip">预览图</span>
+      <div class="deck-stage" id="deck-stage" aria-label="轻渡客户端界面三卡扇形预览">
+        <div class="deck-arena" id="deck-arena">
+          <div class="deck-tilt" id="deck-tilt">
+            <article class="deck-card" data-idx="0" data-slot="0" role="button" tabindex="0" aria-label="查看 Windows 单焦点发射台界面示意">
+              <div class="card-suit">
+                <span class="suit-l"><i class="suit-dot win"></i>01 · Windows</span>
+                <span class="mock-chip">界面示意</span>
               </div>
-              <div class="pill-strip">
+              <div class="win-top" aria-hidden="true">
+                <div class="win-nav">
+                  <span class="on">传输</span><span>记录</span><span>设备</span>
+                </div>
+                <div class="win-dots"><i></i><i></i><i></i></div>
+              </div>
+              <div class="mini-pill-row" aria-hidden="true">
+                <span class="dev-pill on"><i></i>REDMI K90 Ultra</span>
+                <span class="dev-pill">+ 扫码</span>
+              </div>
+              <div class="drop-mock" aria-hidden="true">
+                <strong>单焦点拖放发射台</strong>
+                <span>拖拽文件或文件夹直发<br>Win11 一级右键 + 桌面浮窗</span>
+              </div>
+              <div class="clip-bar" aria-hidden="true">
+                <span>剪贴板截图 · 自动转 PNG</span>
+                <b>一键发</b>
+              </div>
+            </article>
+
+            <article class="deck-card" data-idx="1" data-slot="1" role="button" tabindex="0" aria-label="查看 Android 四栏悬浮胶囊界面示意">
+              <div class="card-suit">
+                <span class="suit-l"><i class="suit-dot"></i>02 · Android</span>
+                <span class="mock-chip">界面示意</span>
+              </div>
+              <div class="mini-pill-row" aria-hidden="true">
                 <span class="dev-pill on"><i></i>HyperX</span>
                 <span class="dev-pill">+ 临时扫码传</span>
               </div>
-              <div class="and-hero">
+              <div class="and-hero" aria-hidden="true">
                 <div>
                   <strong>发照片 / 文件</strong>
-                  <span>● 直发给 HyperX · 局域网高速直连</span>
+                  <span>● 直发给 HyperX · 局域网直连</span>
                 </div>
                 <span class="and-hero-ico">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                 </span>
               </div>
-              <div class="and-acts">
+              <div class="and-acts" aria-hidden="true">
                 <div class="and-act">发剪贴板</div>
                 <div class="and-act">发文字</div>
                 <div class="and-act">发文件夹</div>
               </div>
-              <div class="clip-bar">
-                <span>示例：检测到剪贴板链接…</span>
+              <div class="clip-bar" aria-hidden="true">
+                <span>检测到剪贴板链接…</span>
                 <b>一键发送</b>
               </div>
-              <div class="and-recent">
+              <div class="and-recent" aria-hidden="true">
                 <div>
-                  <strong>示例 · RAW_Photo_042.dng</strong>
-                  <span>24.6 MB · 局域网直连 · 已校验</span>
+                  <strong>RAW_Photo_042.dng</strong>
+                  <span>24.6 MB · SHA-256 校验通过</span>
                 </div>
                 <span class="pill lan">记录</span>
               </div>
-              <div class="and-capsule">
+              <div class="and-capsule" aria-hidden="true">
                 <span class="and-tab on">传输</span>
                 <span class="and-tab">记录</span>
                 <span class="and-tab">设备</span>
                 <span class="and-tab">设置</span>
               </div>
-            </div>
-            <div class="mock-caption" data-caption="android">
-              <span class="cap-text">以上为 Android 客户端界面示意，并非网页传文件入口</span>
-              <a href="https://ferry.cwlindean.cn/transfer" target="_blank" rel="noopener">去网页快传 →</a>
-            </div>
-          </div>
-        </div>
+            </article>
 
-        <div class="stage-panel" data-panel="windows">
-          <div class="mock-shell" data-mock="windows">
-            <div class="win-mock" aria-hidden="true">
-              <div class="mock-head-label">
-                <span>Windows 单焦点发射台界面（v1.0.3）</span>
-                <span class="mock-chip">预览图</span>
+            <article class="deck-card" data-idx="2" data-slot="2" role="button" tabindex="0" aria-label="查看三档自动选路原理示意">
+              <div class="card-suit">
+                <span class="suit-l"><i class="suit-dot rt"></i>03 · 三档选路</span>
+                <span class="mock-chip">工作原理</span>
               </div>
-              <div class="win-top">
-                <div class="win-nav">
-                  <span class="on">传输</span>
-                  <span>历史记录</span>
-                  <span>设备</span>
-                  <span>设置</span>
+              <div class="tier-mini active" aria-hidden="true">
+                <div class="tier-top">
+                  <span class="tier-title">1. 局域网 / 热点直连</span>
+                  <span class="pill lan">LAN</span>
                 </div>
-                <div class="win-dots"><i></i><i></i><i></i></div>
+                <p>同 Wi-Fi 自动直连 TCP，不走公网，支持 <code>.ftpart</code> 续传。</p>
               </div>
-              <div class="pill-strip">
-                <span class="dev-pill on"><i></i>REDMI K90 Ultra</span>
-                <span class="dev-pill">Linux Server</span>
-                <span class="dev-pill">+ 临时扫码传</span>
+              <div class="tier-mini" aria-hidden="true">
+                <div class="tier-top">
+                  <span class="tier-title">2. UDP 穿透直连</span>
+                  <span class="pill punch">P2P</span>
+                </div>
+                <p>跨网经双端口 STUN + QUIC 隧道点对点加密传输。</p>
               </div>
-              <div class="drop-mock">
-                <strong>客户端拖放发射区（样式示意）</strong>
-                <span>实际客户端支持拖入文件/文件夹、桌面浮窗与 Win11 一级右键</span>
+              <div class="tier-mini" aria-hidden="true">
+                <div class="tier-top">
+                  <span class="tier-title">3. 私有中继兜底</span>
+                  <span class="pill relay">WSS</span>
+                </div>
+                <p>双端 VPN / 对称 NAT 毫秒接管，内层 TLS 1.3 钉定。</p>
               </div>
-              <div class="clip-bar">
-                <span>示例：剪贴板截图（2560×1440 · 自动转 PNG）</span>
-                <b>客户端内一键发</b>
-              </div>
-            </div>
-            <div class="mock-caption" data-caption="windows">
-              <span class="cap-text">以上为 Windows 客户端界面示意，如需在浏览器传文件请前往</span>
-              <a href="https://ferry.cwlindean.cn/transfer" target="_blank" rel="noopener">网页快传 →</a>
-            </div>
+              <div class="route-log" aria-hidden="true">pathmgr.Race(t=0) → 最快握手航道自动胜出</div>
+            </article>
           </div>
         </div>
 
-        <div class="stage-panel" data-panel="route">
-          <div class="tier active" data-tier="lan">
-            <div class="tier-top">
-              <span class="tier-title">1. 局域网 / 手机热点直连</span>
-              <span class="pill lan">LAN · &lt;10ms</span>
-            </div>
-            <p>同一 Wi-Fi 或热点下自动探测并直连 TCP，不经公网服务器，中断保留 <code>.ftpart</code> 秒级续传。</p>
+        <div class="deck-dock">
+          <div class="deck-pills" role="tablist" aria-label="切换置顶预览卡片">
+            <button class="deck-pill active" type="button" data-pick="0" role="tab" aria-selected="true">01 Windows</button>
+            <button class="deck-pill" type="button" data-pick="1" role="tab" aria-selected="false">02 Android</button>
+            <button class="deck-pill" type="button" data-pick="2" role="tab" aria-selected="false">03 三档选路</button>
           </div>
-          <div class="tier" data-tier="punch">
-            <div class="tier-top">
-              <span class="tier-title">2. UDP 穿透直连（QUIC + STUN）</span>
-              <span class="pill punch">P2P 打洞</span>
-            </div>
-            <p>身处不同网络时经信令交换双端口 STUN 候选，在 QUIC 隧道上点对点端到端加密传输。</p>
+          <div class="deck-note" id="deck-note">
+            <span>客户端样式预览（悬停展开 · 点击置顶）</span>
+            <a href="https://ferry.cwlindean.cn/transfer" target="_blank" rel="noopener">去网页快传真实传文件 →</a>
           </div>
-          <div class="tier" data-tier="relay">
-            <div class="tier-top">
-              <span class="tier-title">3. 私有服务器加密中继</span>
-              <span class="pill relay">WSS 兜底</span>
-            </div>
-            <p>对称 NAT、校园网防火墙或双端开启 VPN（TUN）时毫秒接管，内层仍强制 TLS 1.3 公钥钉定。</p>
-          </div>
-          <div class="route-log" id="route-log">已选航道：LAN（局域网直连） · 零公网流量 · 原字节直写 + SHA-256 校验</div>
         </div>
       </div>
     </div>
@@ -1005,71 +1070,100 @@
     primaryDl.rel = 'noopener';
   }
 
-  // Hero stage tabs
-  const stageBadges = {
-    android: { text: '客户端界面示意 · 仅预览', demo: false },
-    windows: { text: '客户端界面示意 · 仅预览', demo: false },
-    route:   { text: '原理交互演示 · 可点击切换', demo: true }
-  };
-  const stageBadgeEl = document.getElementById('stage-badge');
-  document.querySelectorAll('.stage-tab').forEach(function(btn){
-    btn.addEventListener('click', function(){
-      const key = btn.getAttribute('data-stage');
-      document.querySelectorAll('.stage-tab').forEach(function(b){
-        const on = b === btn;
-        b.classList.toggle('active', on);
-        b.setAttribute('aria-selected', on ? 'true' : 'false');
-      });
-      document.querySelectorAll('.stage-panel').forEach(function(p){
-        p.classList.toggle('active', p.getAttribute('data-panel') === key);
-      });
-      const meta = stageBadges[key] || { text: '', demo: false };
-      stageBadgeEl.textContent = meta.text;
-      stageBadgeEl.classList.toggle('demo', !!meta.demo);
+  // 3-card fanned playing-card deck interaction
+  const deckStage = document.getElementById('deck-stage');
+  const deckArena = document.getElementById('deck-arena');
+  const deckCards = Array.from(document.querySelectorAll('.deck-card'));
+  const deckPills = Array.from(document.querySelectorAll('.deck-pill'));
+  const deckNote = document.getElementById('deck-note');
+  const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let activeIdx = 1;
+
+  function applyDeck(frontIdx){
+    activeIdx = frontIdx;
+    const order = [frontIdx, (frontIdx + 1) % 3, (frontIdx + 2) % 3];
+    deckCards.forEach(function(card){
+      const idx = Number(card.getAttribute('data-idx'));
+      const slot = String(order.indexOf(idx));
+      card.setAttribute('data-slot', slot);
+      card.classList.remove('is-peek');
+    });
+    deckArena.removeAttribute('data-peek');
+    deckPills.forEach(function(p){
+      const on = Number(p.getAttribute('data-pick')) === frontIdx;
+      p.classList.toggle('active', on);
+      p.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+  }
+
+  deckCards.forEach(function(card){
+    card.addEventListener('pointerenter', function(){
+      deckCards.forEach(function(c){ c.classList.toggle('is-peek', c === card); });
+      deckArena.setAttribute('data-peek', card.getAttribute('data-slot'));
+    });
+    card.addEventListener('click', function(){
+      const idx = Number(card.getAttribute('data-idx'));
+      if (idx !== activeIdx) {
+        applyDeck(idx);
+      } else if (deckNote) {
+        deckNote.classList.add('hint');
+        clearTimeout(deckNote._t);
+        deckNote._t = setTimeout(function(){ deckNote.classList.remove('hint'); }, 2200);
+      }
+    });
+    card.addEventListener('keydown', function(e){
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        applyDeck(Number(card.getAttribute('data-idx')));
+      }
     });
   });
 
-  // Gently guide users if they click or drag files onto the client UI illustrations
-  document.querySelectorAll('.mock-shell').forEach(function(shell){
-    const cap = shell.querySelector('.mock-caption');
-    const txt = shell.querySelector('.cap-text');
-    let timer = null;
-    function nudge(msg){
-      if (!cap || !txt) return;
-      if (!cap.dataset.orig) cap.dataset.orig = txt.textContent;
-      txt.textContent = msg;
-      cap.classList.add('hint');
-      clearTimeout(timer);
-      timer = setTimeout(function(){
-        cap.classList.remove('hint');
-        txt.textContent = cap.dataset.orig;
-      }, 3200);
+  deckPills.forEach(function(pill){
+    pill.addEventListener('click', function(){
+      applyDeck(Number(pill.getAttribute('data-pick')));
+    });
+  });
+
+  deckArena.addEventListener('pointerenter', function(){
+    deckArena.classList.add('is-open');
+  });
+  deckArena.addEventListener('pointermove', function(e){
+    if (reduceMotion) return;
+    const rect = deckArena.getBoundingClientRect();
+    const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    const ny = ((e.clientY - rect.top) / rect.height) * 2 - 1;
+    deckArena.style.setProperty('--ry', (nx * 5.5).toFixed(2) + 'deg');
+    deckArena.style.setProperty('--rx', (-ny * 4.5).toFixed(2) + 'deg');
+    deckArena.style.setProperty('--sway', (nx * 10).toFixed(1) + 'px');
+  });
+  deckArena.addEventListener('pointerleave', function(){
+    deckArena.classList.remove('is-open');
+    deckArena.removeAttribute('data-peek');
+    deckCards.forEach(function(c){ c.classList.remove('is-peek'); });
+    deckArena.style.setProperty('--rx', '0deg');
+    deckArena.style.setProperty('--ry', '0deg');
+    deckArena.style.setProperty('--sway', '0px');
+  });
+
+  // Prevent accidental file drop navigation on the preview deck
+  deckStage.addEventListener('dragover', function(e){ e.preventDefault(); });
+  deckStage.addEventListener('drop', function(e){
+    e.preventDefault();
+    if (!deckNote) return;
+    const span = deckNote.querySelector('span');
+    if (span) {
+      if (!deckNote.dataset.orig) deckNote.dataset.orig = span.textContent;
+      span.textContent = '此处为样式预览卡片，传文件请点右侧进入';
+      deckNote.classList.add('hint');
+      clearTimeout(deckNote._t);
+      deckNote._t = setTimeout(function(){
+        deckNote.classList.remove('hint');
+        span.textContent = deckNote.dataset.orig;
+      }, 3000);
     }
-    shell.addEventListener('click', function(e){
-      if (e.target.closest('a')) return;
-      nudge('此处仅为客户端样式示意，请点右侧进入真实网页快传');
-    });
-    shell.addEventListener('dragover', function(e){ e.preventDefault(); });
-    shell.addEventListener('drop', function(e){
-      e.preventDefault();
-      nudge('首页预览区不支持直接传文件，请先进入「网页快传」或安装客户端');
-    });
   });
-
-  // Route simulator
-  const tierMessages = {
-    lan:   '已选航道：LAN（局域网直连） · 零公网流量 · 原字节直写 + SHA-256 校验',
-    punch: '已选航道：UDP 打洞（QUIC · 双端口 STUN 穿透） · 跨网点对点端到端加密',
-    relay: '已选航道：私有中继（wss://ferry.cwlindean.cn/relay） · 内层 TLS 1.3 公钥钉定穿透双 VPN'
-  };
-  const logEl = document.getElementById('route-log');
-  document.querySelectorAll('.tier').forEach(function(el){
-    el.addEventListener('click', function(){
-      document.querySelectorAll('.tier').forEach(function(t){ t.classList.remove('active'); });
-      el.classList.add('active');
-      logEl.textContent = tierMessages[el.getAttribute('data-tier')] || '';
-    });
-  });
+  applyDeck(0);
 
   // Quickstart tabs
   const snippets = {
