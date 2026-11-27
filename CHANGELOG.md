@@ -1,5 +1,9 @@
 # 变更日志
 
+## 1.0.3-beta.2 — 2026-11-27
+
+- **修复 Android 底部悬浮胶囊阴影边缘被裁切的问题**：为胶囊外层容器开启 `setClipToPadding(false)` / `setClipChildren(false)` 并调整四周留白，解决 `elevation` 阴影在左右和下边缘被硬生生切出黑色直角三角阴影的渲染缺陷；同时使用精确的半高 `ViewOutlineProvider`（`h / 2f`）与柔和阴影色调，使四周阴影圆润自然过渡。
+
 ## 1.0.3-beta.1 — 2026-11-27
 
 - **Android 前台保活通知默认最低优先级与一键关闭引导**：将 `TransferService` 常驻状态渠道迁移为 `ferry-transfer-min`（默认 `NotificationManager.IMPORTANCE_MIN`，关闭角标/铃声/振动，Android 7.1 及以下同步设置 `PRIORITY_MIN`）并清理旧 `ferry-transfer` 渠道，覆盖安装即可自动生效；设置页新增「保活状态通知」引导弹窗与系统通知渠道直达入口，支持在不影响「收到新文件通知」的前提下彻底关闭常驻保活通知。

@@ -795,6 +795,8 @@ public class MainActivity extends Activity {
         scaffold.setOrientation(LinearLayout.VERTICAL);
         scaffold.setBackgroundColor(cSurface);
         scaffold.setFitsSystemWindows(true);
+        scaffold.setClipChildren(false);
+        scaffold.setClipToPadding(false);
 
         scaffold.addView(buildTopBar(), new LinearLayout.LayoutParams(MATCH, dp(52)));
 
@@ -864,15 +866,33 @@ public class MainActivity extends Activity {
         LinearLayout outer = new LinearLayout(this);
         outer.setOrientation(LinearLayout.VERTICAL);
         outer.setBackgroundColor(cSurface);
-        outer.setPadding(dp(14), dp(6), dp(14), dp(10));
+        outer.setClipChildren(false);
+        outer.setClipToPadding(false);
+        outer.setPadding(dp(16), dp(8), dp(16), dp(12));
 
         LinearLayout capsule = new LinearLayout(this);
         capsule.setOrientation(LinearLayout.HORIZONTAL);
         capsule.setGravity(Gravity.CENTER_VERTICAL);
-        capsule.setBackground(roundBox(cCard, cBorder, 99));
+        capsule.setBackground(roundBox(cCard, cBorder, 26));
         capsule.setPadding(dp(5), dp(5), dp(5), dp(5));
         if (Build.VERSION.SDK_INT >= 21) {
-            capsule.setElevation(dp(4));
+            capsule.setOutlineProvider(new ViewOutlineProvider() {
+                @Override
+                public void getOutline(View view, Outline outline) {
+                    int w = view.getWidth();
+                    int h = view.getHeight();
+                    if (w > 0 && h > 0) {
+                        outline.setRoundRect(0, 0, w, h, h / 2f);
+                    }
+                }
+            });
+            capsule.setClipToOutline(true);
+            capsule.setElevation(dp(3));
+        }
+        if (Build.VERSION.SDK_INT >= 28) {
+            int shadow = isNight() ? Color.BLACK : Color.parseColor("#64748B");
+            capsule.setOutlineAmbientShadowColor(shadow);
+            capsule.setOutlineSpotShadowColor(shadow);
         }
 
         int[] icons = {IconDrawable.TRANSFER, IconDrawable.HISTORY, IconDrawable.DEVICES, IconDrawable.SETTINGS};
