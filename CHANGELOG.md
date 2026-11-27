@@ -1,5 +1,14 @@
 # 变更日志
 
+## 1.0.3 — 2026-11-27
+
+Android 端体验优化与局域网发现稳定性修复正式版本（整合 `v1.0.3-beta.1` ～ `beta.3` 全部改进与修复）：
+
+- **保活状态通知默认最低优先级与一键关闭引导**：将 `TransferService` 常驻状态渠道迁移为 `ferry-transfer-min`（默认 `NotificationManager.IMPORTANCE_MIN`，关闭角标/铃声/振动，Android 7.1 及以下同步设置 `PRIORITY_MIN`）并自动清理旧渠道 `ferry-transfer`；设置页新增「保活状态通知」弹窗与系统通知渠道直达入口，支持在不影响「收到新文件通知」的前提下彻底关闭常驻保活通知。
+- **可选「隐藏最近任务后台」开关与加锁引导**：设置页新增默认关闭的「隐藏最近任务后台」开关（基于 `ActivityManager.AppTask.setExcludeFromRecents` 动态控制）；初次尝试开启时先弹窗引导用户长按最近任务中的轻渡卡片进行「锁定 / 加锁」，确认后再启用隐藏以防系统误杀。
+- **修复底部悬浮胶囊阴影边缘裁切**：为胶囊外层容器开启 `setClipToPadding(false)` / `setClipChildren(false)` 并调整留白，配合半高 `ViewOutlineProvider`（`h / 2f`）与柔和阴影色调，消除胶囊左右及底部阴影直角切边问题。
+- **修复启动时局域网发现搜到并误选本机**：新增 `Mobile.DiscoverWithKey` 并在 Go 内核与 Android 端按持久化本机 `DeviceID` 双向过滤（同步清理已发现的自连接条目及 `lanPeers`），彻底解决并发启动导致的本机 `"(LAN)"` 误现与误选问题，并补充单元测试 `TestFilterDiscoveredDevicesExcludesSelf`。
+
 ## 1.0.3-beta.3 — 2026-11-27
 
 - **修复 Android 端启动时局域网发现会搜到并选中本机的问题**：修复 `MainActivity` 启动并发调用 `discoverSilent` 与后台服务 `startReceiverWithAuth` 时的竞态——此前 `Mobile.Discover` 在接收端尚未就绪前会用临时设备名哈希监听局域网，导致误收本机持久化密钥的局域网广播并在首页顶部药丸栏出现本机 `"(LAN)"` 入口；现新增 `Mobile.DiscoverWithKey` 并统一在 Go 内核与 Android 端按本机 `DeviceID` 双向过滤且清理自连接条目。
