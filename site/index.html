@@ -5,51 +5,62 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>轻渡 Ferry — 在你的设备之间，无感摆渡文件</title>
-<meta name="description" content="轻渡（Ferry）是一款为自有手机、电脑、浏览器与 AI 智能体打造的极简跨端文件摆渡工具：局域网直连、UDP 打洞、私有中继三档自动竞速，原图无损、零账号、原生 MCP 支持。">
+<meta name="description" content="轻渡（Ferry）v1.0.3：为自有手机、电脑、浏览器与 AI 智能体打造的极简跨端文件摆渡工具。局域网直连、UDP 打洞、加密中继三档竞速，原图无损、零账号、原生 MCP 支持。">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%2319A389'/%3E%3Cstop offset='1' stop-color='%230B6857'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='url(%23g)'/%3E%3Cpath d='M16 6.8L11.4 16.4L16 15.2Z' fill='%23FFFFFF'/%3E%3Cpath d='M16 6.8L16 15.2L20.6 16.4Z' fill='%23CFEBE3'/%3E%3Cpath d='M5.2 14.8L11.4 16.4L9.2 21.2Z' fill='%23E9F7F3'/%3E%3Cpath d='M5.2 14.8L16 15.2L16 21.6L9.2 21.2Z' fill='%23FFFFFF'/%3E%3Cpath d='M16 15.2L26.8 14.4L22.8 21.2L16 21.6Z' fill='%23D4EFE8'/%3E%3Cpath d='M20.6 16.4L26.8 14.4L16 15.2Z' fill='%23B5E0D5'/%3E%3Cpath d='M5.5 25.4C10.2 22.3 15.5 25.5 21.2 24.4C24 23.8 26.2 22.4 27.6 20.6C25.7 24.4 22.4 26.7 18.2 26.8C13.5 26.9 9.8 24.1 5.5 25.4Z' fill='%239DF0DF'/%3E%3C/svg%3E">
 <style>
   :root{
-    --bg:#F5F7F5;
+    color-scheme:light;
+    --bg:#F5F7F6;
+    --bg-glow-1:rgba(14,124,102,.11);
+    --bg-glow-2:rgba(92,75,148,.08);
     --surface:#FFFFFF;
-    --surface-2:#EBF1EC;
-    --surface-3:#DFE8E1;
-    --ink:#131C17;
-    --ink-2:#46534C;
-    --ink-3:#6D7B73;
-    --line:#D5DFD8;
-    --accent:#1D6B4E;
-    --accent-hover:#15533C;
+    --surface-2:#ECF2EE;
+    --surface-3:#E0EAE4;
+    --ink:#101C18;
+    --ink-2:#465750;
+    --ink-3:#70827B;
+    --line:#D8E2DD;
+    --line-soft:#E7EEEA;
+    --accent:#0E7C66;
+    --accent-hover:#0A6553;
     --accent-ink:#FFFFFF;
-    --accent-soft:#CBEBD9;
-    --accent-soft-ink:#072B1C;
-    --amber:#9A5D00;
-    --amber-soft:#FCE7C2;
-    --violet:#58498C;
-    --violet-soft:#E7E0FB;
-    --nav-bg:rgba(245,247,245,.82);
-    --shadow:0 12px 32px rgba(19,28,23,.06);
+    --accent-soft:#DFF4ED;
+    --accent-soft-ink:#083B30;
+    --amber:#9A5B00;
+    --amber-soft:#FDF0D5;
+    --violet:#5C4B94;
+    --violet-soft:#EEE9FA;
+    --nav-bg:rgba(245,247,246,.82);
+    --shadow-sm:0 2px 8px rgba(16,28,24,.04);
+    --shadow:0 18px 44px rgba(16,28,24,.08);
     --sans:"Segoe UI","PingFang SC","Microsoft YaHei UI",system-ui,-apple-system,sans-serif;
     --mono:"Cascadia Mono","JetBrains Mono",Consolas,ui-monospace,monospace;
   }
   :root[data-theme="dark"]{
-    --bg:#0D1310;
-    --surface:#141C18;
-    --surface-2:#1B2520;
-    --surface-3:#24312A;
-    --ink:#E6ECE8;
-    --ink-2:#B2BEB7;
-    --ink-3:#808E86;
-    --line:#2B3831;
-    --accent:#7CD4AA;
-    --accent-hover:#97E0BD;
-    --accent-ink:#06291A;
-    --accent-soft:#163E2E;
-    --accent-soft-ink:#B5F2D2;
-    --amber:#F1BA63;
-    --amber-soft:#3E2A06;
-    --violet:#C6B8F8;
-    --violet-soft:#2E254D;
-    --nav-bg:rgba(13,19,16,.84);
-    --shadow:0 16px 40px rgba(0,0,0,.35);
+    color-scheme:dark;
+    --bg:#0A0F0D;
+    --bg-glow-1:rgba(56,200,166,.13);
+    --bg-glow-2:rgba(176,158,242,.09);
+    --surface:#111916;
+    --surface-2:#17221E;
+    --surface-3:#202E29;
+    --ink:#EBF2EE;
+    --ink-2:#A2B4AC;
+    --ink-3:#6F837B;
+    --line:#23322C;
+    --line-soft:#1A2621;
+    --accent:#38C8A6;
+    --accent-hover:#54D8B9;
+    --accent-ink:#071E18;
+    --accent-soft:#12332B;
+    --accent-soft-ink:#A9F2DF;
+    --amber:#F3BE6B;
+    --amber-soft:#352508;
+    --violet:#C2B3F6;
+    --violet-soft:#261E40;
+    --nav-bg:rgba(10,15,13,.84);
+    --shadow-sm:0 2px 10px rgba(0,0,0,.25);
+    --shadow:0 22px 52px rgba(0,0,0,.46);
   }
   *{box-sizing:border-box}
   html{scroll-behavior:smooth}
@@ -58,40 +69,53 @@
     font-family:var(--sans);
     color:var(--ink);
     background:
-      radial-gradient(900px 420px at 14% -4%,var(--accent-soft) 0%,transparent 65%),
-      radial-gradient(760px 380px at 90% 6%,var(--violet-soft) 0%,transparent 60%),
+      radial-gradient(920px 480px at 10% -6%,var(--bg-glow-1) 0%,transparent 65%),
+      radial-gradient(760px 440px at 92% 4%,var(--bg-glow-2) 0%,transparent 60%),
       var(--bg);
     font-size:15px;
     line-height:1.65;
     -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
   }
   a{color:inherit;text-decoration:none}
-  .container{width:min(1120px,100% - 40px);margin:0 auto}
+  button{font-family:inherit}
+  code{
+    font-family:var(--mono);font-size:.88em;
+    background:var(--surface-2);color:var(--ink);
+    padding:1px 6px;border-radius:6px;
+  }
+  .container{width:min(1140px,100% - 40px);margin:0 auto}
 
   /* Nav */
   .nav-wrap{
-    position:sticky;top:0;z-index:40;
+    position:sticky;top:0;z-index:50;
     background:var(--nav-bg);
-    backdrop-filter:blur(14px);
-    -webkit-backdrop-filter:blur(14px);
-    border-bottom:1px solid var(--line);
+    backdrop-filter:blur(16px);
+    -webkit-backdrop-filter:blur(16px);
+    border-bottom:1px solid var(--line-soft);
   }
   .nav{
-    height:64px;display:flex;align-items:center;justify-content:space-between;gap:16px;
+    height:66px;display:flex;align-items:center;justify-content:space-between;gap:16px;
   }
-  .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:17px;letter-spacing:.01em}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:16px;letter-spacing:-.01em}
   .brand-mark{
-    width:32px;height:32px;border-radius:10px;
-    background:var(--accent);color:var(--accent-ink);
+    width:34px;height:34px;border-radius:10px;
+    background:linear-gradient(135deg,#169881,#0B6656);
     display:grid;place-items:center;flex-shrink:0;
+    box-shadow:0 4px 12px rgba(14,124,102,.28);
   }
-  .brand small{font-weight:500;font-size:12px;color:var(--ink-3);margin-left:2px;font-family:var(--mono)}
-  .nav-links{display:flex;align-items:center;gap:22px;font-size:14px;color:var(--ink-2)}
+  .brand-ver{
+    font-family:var(--mono);font-size:11px;font-weight:600;
+    padding:2px 8px;border-radius:999px;
+    background:var(--accent-soft);color:var(--accent-soft-ink);
+  }
+  .nav-links{display:flex;align-items:center;gap:24px;font-size:14px;color:var(--ink-2)}
+  .nav-links a{transition:color .15s}
   .nav-links a:hover{color:var(--ink)}
-  .nav-actions{display:flex;align-items:center;gap:10px}
+  .nav-actions{display:flex;align-items:center;gap:8px}
   .icon-btn{
-    height:36px;padding:0 12px;border-radius:99px;border:1px solid var(--line);
-    background:var(--surface);color:var(--ink-2);cursor:pointer;font-size:13px;
+    height:36px;padding:0 12px;border-radius:999px;border:1px solid var(--line);
+    background:var(--surface);color:var(--ink-2);cursor:pointer;font-size:13px;font-weight:500;
     display:inline-flex;align-items:center;gap:6px;transition:all .15s;
   }
   .icon-btn:hover{border-color:var(--accent);color:var(--ink)}
@@ -99,109 +123,285 @@
   /* Buttons */
   .btn{
     display:inline-flex;align-items:center;justify-content:center;gap:8px;
-    height:46px;padding:0 22px;border-radius:99px;font-weight:600;font-size:14px;
-    cursor:pointer;border:1px solid transparent;transition:transform .12s,background .15s,border-color .15s;
+    height:46px;padding:0 22px;border-radius:999px;font-weight:600;font-size:14px;
+    cursor:pointer;border:1px solid transparent;
+    transition:transform .12s,background .15s,border-color .15s,box-shadow .15s;
+    white-space:nowrap;
   }
   .btn:active{transform:scale(.98)}
-  .btn-primary{background:var(--accent);color:var(--accent-ink)}
-  .btn-primary:hover{background:var(--accent-hover)}
-  .btn-tonal{background:var(--surface-2);color:var(--ink);border-color:var(--line)}
-  .btn-tonal:hover{border-color:var(--accent)}
+  .btn-sm{height:36px;padding:0 15px;font-size:13px}
+  .btn-primary{
+    background:var(--accent);color:var(--accent-ink);
+    box-shadow:0 6px 18px color-mix(in srgb,var(--accent) 26%,transparent);
+  }
+  .btn-primary:hover{background:var(--accent-hover);transform:translateY(-1px)}
+  .btn-tonal{background:var(--surface);color:var(--ink);border-color:var(--line)}
+  .btn-tonal:hover{border-color:var(--accent);background:var(--surface-2)}
+  .btn-ghost{background:var(--accent-soft);color:var(--accent-soft-ink)}
+  .btn-ghost:hover{filter:brightness(.96)}
 
   /* Hero */
-  .hero{padding:68px 0 54px}
-  .hero-grid{display:grid;grid-template-columns:1.12fr .88fr;gap:38px;align-items:center}
+  .hero{padding:58px 0 44px}
+  .hero-grid{
+    display:grid;grid-template-columns:minmax(0,1.08fr) minmax(0,.92fr);gap:40px;align-items:center;
+  }
   .eyebrow{
     display:inline-flex;align-items:center;gap:8px;
-    padding:5px 12px;border-radius:99px;background:var(--accent-soft);color:var(--accent-soft-ink);
-    font-size:12px;font-weight:600;letter-spacing:.02em;margin-bottom:18px;
+    padding:5px 13px;border-radius:999px;
+    background:var(--accent-soft);color:var(--accent-soft-ink);
+    font-size:12px;font-weight:600;margin-bottom:18px;
   }
-  .eyebrow-dot{width:7px;height:7px;border-radius:50%;background:var(--accent)}
+  .eyebrow-dot{
+    width:7px;height:7px;border-radius:50%;background:var(--accent);
+    box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 22%,transparent);
+  }
   h1{
-    margin:0 0 16px;font-size:clamp(32px,4.5vw,48px);line-height:1.18;
-    letter-spacing:-.02em;font-weight:800;
+    margin:0 0 16px;
+    font-size:clamp(34px,4.5vw,50px);
+    line-height:1.14;letter-spacing:-.03em;font-weight:800;
   }
-  .hero-sub{margin:0 0 28px;color:var(--ink-2);font-size:16px;max-width:540px}
-  .hero-cta{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:26px}
+  h1 .hl{
+    background:linear-gradient(120deg,var(--accent),#1FA48A);
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+  }
+  .hero-sub{
+    margin:0 0 28px;color:var(--ink-2);font-size:16px;max-width:520px;line-height:1.7;
+  }
+  .hero-cta{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:24px}
   .hero-meta{
-    display:flex;flex-wrap:wrap;gap:18px;color:var(--ink-3);font-size:13px;
+    display:flex;flex-wrap:wrap;gap:10px 18px;color:var(--ink-3);font-size:13px;
   }
   .hero-meta span{display:inline-flex;align-items:center;gap:6px}
+  .hero-meta svg{color:var(--accent);flex-shrink:0}
 
-  /* Route Widget */
-  .route-card{
-    background:var(--surface);border:1px solid var(--line);border-radius:24px;
-    padding:22px;box-shadow:var(--shadow);
+  /* Interactive Hero Stage */
+  .stage{
+    min-width:0;
+    background:var(--surface);border:1px solid var(--line);
+    border-radius:26px;padding:16px;box-shadow:var(--shadow);
   }
-  .route-head{
-    display:flex;align-items:center;justify-content:space-between;
-    padding-bottom:14px;border-bottom:1px solid var(--line);margin-bottom:14px;
+  .stage-bar{
+    display:flex;align-items:center;justify-content:space-between;gap:10px;
+    padding-bottom:12px;border-bottom:1px solid var(--line-soft);margin-bottom:14px;
+    flex-wrap:wrap;
   }
-  .route-head b{font-size:14px}
-  .route-head span{font-family:var(--mono);font-size:11px;color:var(--ink-3)}
+  .stage-tabs{
+    display:inline-flex;gap:4px;padding:3px;border-radius:999px;
+    background:var(--surface-2);border:1px solid var(--line-soft);
+  }
+  .stage-tab{
+    border:0;background:transparent;color:var(--ink-2);
+    font-size:12px;font-weight:600;padding:6px 12px;border-radius:999px;
+    cursor:pointer;transition:all .15s;
+  }
+  .stage-tab.active{background:var(--accent);color:var(--accent-ink);box-shadow:var(--shadow-sm)}
+  .stage-badge{font-family:var(--mono);font-size:11px;color:var(--ink-3)}
+  .stage-panel{display:none}
+  .stage-panel.active{display:block;animation:fadeUp .22s ease}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+  /* Mock Windows Launchpad */
+  .win-mock{
+    background:var(--bg);border:1px solid var(--line);border-radius:18px;
+    padding:14px;display:flex;flex-direction:column;gap:11px;
+  }
+  .win-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .win-nav{display:flex;gap:6px;font-size:11px;font-weight:600}
+  .win-nav span{padding:4px 10px;border-radius:8px;color:var(--ink-3)}
+  .win-nav span.on{background:var(--surface);color:var(--ink);border:1px solid var(--line)}
+  .win-dots{display:flex;gap:5px}
+  .win-dots i{width:8px;height:8px;border-radius:50%;background:var(--line)}
+  .pill-strip{display:flex;gap:7px;flex-wrap:wrap}
+  .dev-pill{
+    display:inline-flex;align-items:center;gap:6px;
+    font-size:12px;font-weight:600;padding:5px 12px;border-radius:999px;
+    border:1px solid var(--line);background:var(--surface);color:var(--ink-2);
+  }
+  .dev-pill.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+  .dev-pill i{width:6px;height:6px;border-radius:50%;background:#59E1B7}
+  .drop-mock{
+    border:1.5px dashed color-mix(in srgb,var(--accent) 50%,var(--line));
+    border-radius:15px;padding:22px 16px;text-align:center;
+    background:color-mix(in srgb,var(--accent-soft) 45%,var(--surface));
+  }
+  .drop-mock strong{display:block;font-size:14px;margin-bottom:4px}
+  .drop-mock span{font-size:12px;color:var(--ink-2)}
+  .clip-bar{
+    display:flex;align-items:center;justify-content:space-between;gap:10px;
+    padding:9px 12px;border-radius:12px;
+    background:var(--accent-soft);color:var(--accent-soft-ink);
+    font-size:12px;
+  }
+  .clip-bar b{font-weight:700;white-space:nowrap}
+
+  /* Mock Android Floating Capsule */
+  .and-mock{
+    max-width:340px;margin:0 auto;
+    background:var(--bg);border:1px solid var(--line);border-radius:24px;
+    padding:14px 14px 12px;display:flex;flex-direction:column;gap:10px;
+  }
+  .and-hero{
+    background:linear-gradient(135deg,#1E6856,#155042);color:#fff;
+    border-radius:16px;padding:14px 15px;display:flex;align-items:center;justify-content:space-between;gap:10px;
+  }
+  .and-hero strong{display:block;font-size:15px}
+  .and-hero span{font-size:11px;opacity:.88}
+  .and-hero-ico{
+    width:36px;height:36px;border-radius:11px;background:rgba(255,255,255,.16);
+    display:grid;place-items:center;flex-shrink:0;
+  }
+  .and-acts{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
+  .and-act{
+    background:var(--surface);border:1px solid var(--line);border-radius:11px;
+    padding:8px 4px;text-align:center;font-size:11px;font-weight:600;color:var(--ink);
+  }
+  .and-recent{
+    background:var(--surface);border:1px solid var(--line);border-radius:14px;
+    padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px;
+    font-size:11px;
+  }
+  .and-recent strong{display:block;font-size:12px;color:var(--ink)}
+  .and-recent span{color:var(--ink-3)}
+  .and-capsule{
+    display:grid;grid-template-columns:repeat(4,1fr);gap:4px;
+    background:var(--surface);border:1px solid var(--line);border-radius:999px;
+    padding:5px;box-shadow:0 8px 20px rgba(16,28,24,.10);
+  }
+  .and-tab{
+    text-align:center;font-size:11px;font-weight:600;padding:6px 4px;border-radius:999px;
+    color:var(--ink-2);
+  }
+  .and-tab.on{background:var(--accent-soft);color:var(--accent-soft-ink)}
+
+  /* Route Simulator */
   .tier{
-    border:1px solid var(--line);border-radius:16px;padding:13px 14px;margin-bottom:10px;
-    cursor:pointer;transition:all .16s;background:var(--surface);
+    border:1px solid var(--line);border-radius:15px;padding:12px 14px;margin-bottom:9px;
+    cursor:pointer;transition:all .15s;background:var(--bg);
   }
-  .tier:last-of-type{margin-bottom:14px}
+  .tier:last-of-type{margin-bottom:12px}
   .tier.active{border-color:var(--accent);background:var(--surface-2)}
   .tier-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
-  .tier-title{display:flex;align-items:center;gap:9px;font-weight:600;font-size:14px}
+  .tier-title{font-weight:700;font-size:13.5px}
   .pill{
-    font-family:var(--mono);font-size:11px;font-weight:600;
-    padding:2px 9px;border-radius:99px;display:inline-block;
+    font-family:var(--mono);font-size:11px;font-weight:700;
+    padding:2px 9px;border-radius:999px;display:inline-block;
   }
   .pill.lan{background:var(--accent-soft);color:var(--accent-soft-ink)}
   .pill.punch{background:var(--amber-soft);color:var(--amber)}
   .pill.relay{background:var(--violet-soft);color:var(--violet)}
-  .tier p{margin:6px 0 0;font-size:13px;color:var(--ink-2)}
+  .tier p{margin:5px 0 0;font-size:12.5px;color:var(--ink-2)}
   .route-log{
-    background:var(--surface-2);border-radius:12px;padding:11px 13px;
-    font-family:var(--mono);font-size:12px;color:var(--ink-2);line-height:1.5;
+    background:var(--surface-2);border:1px solid var(--line-soft);border-radius:12px;
+    padding:10px 12px;font-family:var(--mono);font-size:12px;color:var(--ink-2);
   }
 
   /* Sections */
-  section.block{padding:44px 0}
-  .sec-head{max-width:640px;margin-bottom:28px}
+  section.block{padding:46px 0}
+  .sec-head{max-width:780px;margin-bottom:28px}
   .sec-kicker{
     font-family:var(--mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;
-    color:var(--accent);font-weight:600;margin-bottom:6px;
+    color:var(--accent);font-weight:700;margin-bottom:6px;
   }
-  h2{margin:0 0 8px;font-size:clamp(24px,3vw,32px);line-height:1.25;letter-spacing:-.01em}
-  .sec-head p{margin:0;color:var(--ink-2)}
+  h2{
+    margin:0 0 8px;font-size:clamp(24px,3.1vw,34px);
+    line-height:1.22;letter-spacing:-.02em;font-weight:800;
+  }
+  .sec-head p{margin:0;color:var(--ink-2);font-size:15px}
 
-  .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
-  .grid-2{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
-  .grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+  /* Grids & Cards */
+  .bento{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}
+  .span-7{grid-column:span 7}
+  .span-5{grid-column:span 5}
+  .span-6{grid-column:span 6}
+  .span-4{grid-column:span 4}
+  .span-12{grid-column:span 12}
 
   .card{
-    background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:22px;
-    transition:border-color .15s,transform .15s;
+    background:var(--surface);border:1px solid var(--line);border-radius:22px;padding:24px;
+    transition:border-color .15s,transform .15s,box-shadow .15s;
+    display:flex;flex-direction:column;justify-content:space-between;gap:14px;
   }
-  .card:hover{border-color:var(--accent);transform:translateY(-2px)}
+  .card:hover{border-color:color-mix(in srgb,var(--accent) 65%,var(--line));box-shadow:var(--shadow-sm)}
   .card-icon{
-    width:40px;height:40px;border-radius:12px;background:var(--surface-2);color:var(--accent);
-    display:grid;place-items:center;margin-bottom:14px;
+    width:40px;height:40px;border-radius:12px;background:var(--accent-soft);color:var(--accent-soft-ink);
+    display:grid;place-items:center;margin-bottom:12px;
   }
-  .card h3{margin:0 0 8px;font-size:17px;font-weight:700}
+  .card h3{margin:0 0 8px;font-size:18px;font-weight:700;letter-spacing:-.01em}
   .card p{margin:0;color:var(--ink-2);font-size:14px}
-  .tag-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}
+  .feat-list{
+    margin:12px 0 0;padding:0;list-style:none;
+    display:grid;gap:8px;font-size:13.5px;color:var(--ink-2);
+  }
+  .feat-list li{position:relative;padding-left:15px}
+  .feat-list li::before{
+    content:"";position:absolute;left:0;top:9px;width:6px;height:6px;border-radius:50%;
+    background:var(--accent);
+  }
+  .tag-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
   .tag{
-    font-size:11px;font-family:var(--mono);color:var(--ink-2);
-    background:var(--surface-2);padding:3px 9px;border-radius:99px;
+    font-size:11px;font-family:var(--mono);font-weight:600;color:var(--ink-2);
+    background:var(--surface-2);border:1px solid var(--line-soft);
+    padding:3px 9px;border-radius:999px;
   }
 
-  /* Security */
-  .sec-band{
-    background:var(--surface);border:1px solid var(--line);border-radius:24px;padding:26px;
+  /* Download Grid */
+  .dl-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  .dl-card{
+    background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:22px;
+    display:flex;flex-direction:column;justify-content:space-between;gap:16px;
+    transition:border-color .15s,transform .15s;
   }
-  .sec-item strong{display:block;font-size:15px;margin-bottom:5px}
-  .sec-item span{font-size:13px;color:var(--ink-2)}
+  .dl-card:hover{border-color:var(--accent);transform:translateY(-2px)}
+  .dl-card.rec{border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}
+  .dl-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .dl-head h3{margin:0;font-size:16px;font-weight:700}
+  .dl-size{font-family:var(--mono);font-size:12px;color:var(--ink-3);font-weight:600}
+  .dl-desc{margin:6px 0 0;font-size:13px;color:var(--ink-2)}
+  .dl-file{
+    font-family:var(--mono);font-size:11.5px;color:var(--ink-3);
+    background:var(--surface-2);padding:6px 10px;border-radius:9px;
+    overflow-wrap:break-word;
+  }
+  .dl-links{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  .dl-foot{
+    margin-top:16px;padding:14px 18px;border-radius:16px;
+    background:var(--surface);border:1px solid var(--line);
+    display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;
+    font-size:13px;color:var(--ink-2);
+  }
+  .dl-foot a{color:var(--accent);font-weight:600}
+  .dl-foot a:hover{text-decoration:underline}
+
+  /* Security + FAQ */
+  .sec-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px}
+  .sec-tile{
+    background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:20px;
+  }
+  .sec-tile .k{font-family:var(--mono);font-size:11.5px;font-weight:700;color:var(--accent);margin-bottom:6px}
+  .sec-tile strong{display:block;font-size:15px;margin-bottom:6px}
+  .sec-tile span{font-size:13px;color:var(--ink-2)}
+
+  .faq-list{display:grid;gap:10px}
+  details.faq{
+    background:var(--surface);border:1px solid var(--line);border-radius:16px;
+    padding:15px 20px;transition:border-color .15s;
+  }
+  details.faq[open]{border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}
+  details.faq summary{
+    cursor:pointer;font-weight:700;font-size:14.5px;list-style:none;
+    display:flex;align-items:center;justify-content:space-between;gap:12px;
+  }
+  details.faq summary::-webkit-details-marker{display:none}
+  details.faq summary::after{
+    content:"+";font-family:var(--mono);font-size:18px;color:var(--accent);line-height:1;
+  }
+  details.faq[open] summary::after{content:"−"}
+  details.faq p{margin:10px 0 0;font-size:13.5px;color:var(--ink-2)}
 
   /* Code / Quickstart */
   .tabs-card{
-    background:var(--surface);border:1px solid var(--line);border-radius:24px;overflow:hidden;
-    box-shadow:var(--shadow);
+    background:var(--surface);border:1px solid var(--line);border-radius:22px;overflow:hidden;
+    box-shadow:var(--shadow-sm);
   }
   .tabs-bar{
     display:flex;align-items:center;justify-content:space-between;gap:12px;
@@ -209,31 +409,42 @@
   }
   .tab-group{display:flex;gap:6px;flex-wrap:wrap}
   .tab-btn{
-    height:34px;padding:0 14px;border-radius:99px;border:0;background:transparent;
-    color:var(--ink-2);font-size:13px;font-weight:600;cursor:pointer;
+    height:34px;padding:0 14px;border-radius:999px;border:0;background:transparent;
+    color:var(--ink-2);font-size:13px;font-weight:600;cursor:pointer;transition:all .15s;
   }
   .tab-btn.active{background:var(--accent);color:var(--accent-ink)}
   .copy-btn{
-    height:32px;padding:0 12px;border-radius:99px;border:1px solid var(--line);
+    height:32px;padding:0 13px;border-radius:999px;border:1px solid var(--line);
     background:var(--surface);color:var(--ink);font-size:12px;font-weight:600;cursor:pointer;
   }
   .copy-btn:hover{border-color:var(--accent)}
   pre{
-    margin:0;padding:20px;overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.6;
+    margin:0;padding:20px;overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.65;
     color:var(--ink);
   }
 
   /* Footer */
   footer{
-    border-top:1px solid var(--line);padding:26px 0 42px;margin-top:26px;
+    border-top:1px solid var(--line);padding:28px 0 44px;margin-top:24px;
     display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;
     color:var(--ink-3);font-size:13px;
   }
+  .foot-links{display:flex;flex-wrap:wrap;gap:18px}
+  .foot-links a:hover{color:var(--ink)}
 
-  @media (max-width:900px){
-    .hero-grid,.grid-3,.grid-4,.grid-2{grid-template-columns:1fr}
+  @media (max-width:960px){
+    .hero-grid{grid-template-columns:1fr;gap:30px}
+    .bento{grid-template-columns:1fr}
+    .span-7,.span-5,.span-6,.span-4,.span-12{grid-column:span 1}
+    .dl-grid{grid-template-columns:repeat(2,1fr)}
+    .sec-grid{grid-template-columns:repeat(2,1fr)}
     .nav-links{display:none}
-    .hero{padding:42px 0 28px}
+  }
+  @media (max-width:600px){
+    .hero{padding:36px 0 28px}
+    .dl-grid,.sec-grid{grid-template-columns:1fr}
+    .hero-cta .btn{width:100%}
+    .nav-actions .hide-xs{display:none}
   }
 </style>
 </head>
@@ -242,21 +453,30 @@
   <div class="container nav">
     <a class="brand" href="#">
       <span class="brand-mark" aria-hidden="true">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M5 17H19M15 13l4 4-4 4M19 7H5M9 3L5 7l4 4"/>
+        <svg width="21" height="21" viewBox="0 0 32 32" fill="none">
+          <path d="M16 6.8L11.4 16.4L16 15.2Z" fill="#FFFFFF"/>
+          <path d="M16 6.8L16 15.2L20.6 16.4Z" fill="#CFEBE3"/>
+          <path d="M5.2 14.8L11.4 16.4L9.2 21.2Z" fill="#E9F7F3"/>
+          <path d="M5.2 14.8L16 15.2L16 21.6L9.2 21.2Z" fill="#FFFFFF"/>
+          <path d="M16 15.2L26.8 14.4L22.8 21.2L16 21.6Z" fill="#D4EFE8"/>
+          <path d="M20.6 16.4L26.8 14.4L16 15.2Z" fill="#B5E0D5"/>
+          <path d="M5.5 25.4C10.2 22.3 15.5 25.5 21.2 24.4C24 23.8 26.2 22.4 27.6 20.6C25.7 24.4 22.4 26.7 18.2 26.8C13.5 26.9 9.8 24.1 5.5 25.4Z" fill="#9DF0DF"/>
         </svg>
       </span>
-      <span>轻渡</span><small>Ferry</small>
+      <span>轻渡 Ferry</span>
+      <span class="brand-ver">v1.0.3</span>
     </a>
-    <nav class="nav-links">
+    <nav class="nav-links" aria-label="主导航">
       <a href="#routing">三档选路</a>
-      <a href="#platforms">全端矩阵</a>
-      <a href="#security">安全模型</a>
-      <a href="#quickstart">MCP 与上手</a>
+      <a href="#showcase">全端矩阵</a>
+      <a href="#download">下载安装</a>
+      <a href="#security">安全与保活</a>
+      <a href="#quickstart">MCP 与 CLI</a>
     </nav>
     <div class="nav-actions">
-      <button class="icon-btn" id="theme-toggle" type="button" aria-label="切换浅色深色模式">浅色 / 深色</button>
-      <a class="btn btn-primary" style="height:36px;padding:0 16px;font-size:13px" href="#quickstart">立即使用</a>
+      <button class="icon-btn" id="theme-toggle" type="button" aria-label="切换浅色或深色主题">深色</button>
+      <a class="icon-btn hide-xs" href="https://github.com/zhitiaojun/ferry" target="_blank" rel="noopener">GitHub</a>
+      <a class="btn btn-primary btn-sm" href="https://ferry.cwlindean.cn/transfer" target="_blank" rel="noopener">网页快传 →</a>
     </div>
   </div>
 </header>
@@ -265,52 +485,133 @@
   <section class="hero">
     <div class="hero-grid">
       <div>
-        <div class="eyebrow"><span class="eyebrow-dot"></span>v1.0.0 · 跨网不折腾，私密直达</div>
-        <h1>在你的设备之间，<br>无感摆渡文件</h1>
+        <div class="eyebrow"><span class="eyebrow-dot"></span>v1.0.3 正式版 · 原图无损 · 零账号 · AGPL-3.0</div>
+        <h1>在你的设备之间，<br><span class="hl">无感摆渡文件</span></h1>
         <p class="hero-sub">
-          为「我的手机 ↔ 我的电脑 ↔ 浏览器 ↔ AI 智能体」打造的轻量传输工具。
-          不需要云盘中转、不压缩画质、不登录账号——局域网跑满直连，跨网自动并发打洞与私有中继兜底。
+          专为「手机 ↔ 电脑 ↔ 浏览器 ↔ AI 智能体」打造的轻量跨端传输工具。
+          无需网盘中转、不压缩画质——同网自动跑满局域网直连，跨网或双端 VPN 时自动并发打洞与加密中继兜底。
         </p>
         <div class="hero-cta">
-          <a class="btn btn-primary" href="#quickstart">下载与安装 v1.0.0</a>
-          <a class="btn btn-tonal" href="#mcp">接入 AI 智能体（MCP）</a>
+          <a class="btn btn-primary" id="primary-dl" href="#download">下载轻渡 v1.0.3</a>
+          <a class="btn btn-tonal" href="https://ferry.cwlindean.cn/transfer" target="_blank" rel="noopener">打开网页快传 →</a>
+          <a class="btn btn-ghost" href="#download">全平台安装包</a>
         </div>
         <div class="hero-meta">
-          <span>✓ Ed25519 公钥配对</span>
-          <span>✓ TLS 1.3 端到端钉定</span>
-          <span>✓ Android MD3 + 系统下载文件夹</span>
-          <span>✓ Windows 拖拽浮窗 + 一级右键</span>
+          <span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            Ed25519 公钥配对
+          </span>
+          <span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            TLS 1.3 端到端钉定
+          </span>
+          <span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            完整文件夹树 &amp; 剪贴板截图秒发
+          </span>
         </div>
       </div>
 
-      <div class="route-card" id="route-demo">
-        <div class="route-head">
-          <b>自动路径竞速</b>
-          <span>pathmgr.Race(t = 0)</span>
-        </div>
-        <div class="tier active" data-tier="lan">
-          <div class="tier-top">
-            <span class="tier-title">1. 局域网 / 热点直连</span>
-            <span class="pill lan">LAN</span>
+      <div class="stage" aria-label="轻渡界面与选路交互预览">
+        <div class="stage-bar">
+          <div class="stage-tabs" role="tablist">
+            <button class="stage-tab active" type="button" data-stage="android" role="tab" aria-selected="true">Android 悬浮胶囊</button>
+            <button class="stage-tab" type="button" data-stage="windows" role="tab" aria-selected="false">Windows 发射台</button>
+            <button class="stage-tab" type="button" data-stage="route" role="tab" aria-selected="false">三档竞速</button>
           </div>
-          <p>同一 Wi-Fi 或手机热点下直连 TCP，不走服务器，支持断网秒级断点续传。</p>
+          <span class="stage-badge" id="stage-badge">MD3 · v1.0.3</span>
         </div>
-        <div class="tier" data-tier="punch">
-          <div class="tier-top">
-            <span class="tier-title">2. UDP 穿透直连</span>
-            <span class="pill punch">打洞</span>
+
+        <div class="stage-panel active" data-panel="android">
+          <div class="and-mock">
+            <div class="pill-strip">
+              <span class="dev-pill on"><i></i>HyperX</span>
+              <span class="dev-pill">+ 临时扫码传</span>
+            </div>
+            <div class="and-hero">
+              <div>
+                <strong>发照片 / 文件</strong>
+                <span>● 直发给 HyperX · 局域网高速直连</span>
+              </div>
+              <span class="and-hero-ico" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              </span>
+            </div>
+            <div class="and-acts">
+              <div class="and-act">发剪贴板</div>
+              <div class="and-act">发文字</div>
+              <div class="and-act">发文件夹</div>
+            </div>
+            <div class="clip-bar">
+              <span>检测到剪贴板：https://ferry.cwlind...</span>
+              <b>一键发送</b>
+            </div>
+            <div class="and-recent">
+              <div>
+                <strong>刚发出 · RAW_Photo_042.dng</strong>
+                <span>24.6 MB · 局域网直连 · SHA-256 校验通过</span>
+              </div>
+              <span class="pill lan">查看</span>
+            </div>
+            <div class="and-capsule" aria-hidden="true">
+              <span class="and-tab on">传输</span>
+              <span class="and-tab">记录</span>
+              <span class="and-tab">设备</span>
+              <span class="and-tab">设置</span>
+            </div>
           </div>
-          <p>身处不同网络时经信令交换 STUN 候选，在 QUIC 隧道上进行 P2P 点对点加密传输。</p>
         </div>
-        <div class="tier" data-tier="relay">
-          <div class="tier-top">
-            <span class="tier-title">3. 私有服务器中继</span>
-            <span class="pill relay">中继</span>
+
+        <div class="stage-panel" data-panel="windows">
+          <div class="win-mock">
+            <div class="win-top">
+              <div class="win-nav">
+                <span class="on">传输</span>
+                <span>历史记录</span>
+                <span>设备</span>
+                <span>设置</span>
+              </div>
+              <div class="win-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+            </div>
+            <div class="pill-strip">
+              <span class="dev-pill on"><i></i>REDMI K90 Ultra</span>
+              <span class="dev-pill">Linux Server</span>
+              <span class="dev-pill">+ 临时扫码传</span>
+            </div>
+            <div class="drop-mock">
+              <strong>拖放文件或整个文件夹到这里</strong>
+              <span>支持资源管理器拖放浮窗、Win11 一级右键「用轻渡发送」与自定义服务器</span>
+            </div>
+            <div class="clip-bar">
+              <span>检测到剪贴板截图（2560×1440 · 自动转 PNG）</span>
+              <b>一键直发 →</b>
+            </div>
           </div>
-          <p>对称 NAT、校园网防火墙或双端开启 VPN（TUN）时毫秒接管，仍保持端到端 TLS 1.3 加密。</p>
         </div>
-        <div class="route-log" id="route-log">
-          已选航道：LAN（10.93.x.x:42833） · 不经公网服务器 · 原文件直写
+
+        <div class="stage-panel" data-panel="route">
+          <div class="tier active" data-tier="lan">
+            <div class="tier-top">
+              <span class="tier-title">1. 局域网 / 手机热点直连</span>
+              <span class="pill lan">LAN · &lt;10ms</span>
+            </div>
+            <p>同一 Wi-Fi 或热点下自动探测并直连 TCP，不经公网服务器，中断保留 <code>.ftpart</code> 秒级续传。</p>
+          </div>
+          <div class="tier" data-tier="punch">
+            <div class="tier-top">
+              <span class="tier-title">2. UDP 穿透直连（QUIC + STUN）</span>
+              <span class="pill punch">P2P 打洞</span>
+            </div>
+            <p>身处不同网络时经信令交换双端口 STUN 候选，在 QUIC 隧道上点对点端到端加密传输。</p>
+          </div>
+          <div class="tier" data-tier="relay">
+            <div class="tier-top">
+              <span class="tier-title">3. 私有服务器加密中继</span>
+              <span class="pill relay">WSS 兜底</span>
+            </div>
+            <p>对称 NAT、校园网防火墙或双端开启 VPN（TUN）时毫秒接管，内层仍强制 TLS 1.3 公钥钉定。</p>
+          </div>
+          <div class="route-log" id="route-log">已选航道：LAN（局域网直连） · 零公网流量 · 原字节直写 + SHA-256 校验</div>
         </div>
       </div>
     </div>
@@ -318,119 +619,281 @@
 
   <section class="block" id="routing">
     <div class="sec-head">
-      <div class="sec-kicker">Why Ferry</div>
-      <h2>为什么不再忍受聊天软件或纯局域网工具</h2>
-      <p>一次配对后无需再选协议：轻渡并发测试可用航道，最先完成握手的那条直接胜出。</p>
+      <div class="sec-kicker">Architecture</div>
+      <h2>一次配对，三档航道并发竞速；临时分享，一码双用</h2>
+      <p>不用在聊天软件压画质、不用登录网盘，也不用每次手动切局域网或远程模式。</p>
     </div>
-    <div class="grid-3">
-      <article class="card">
-        <div class="card-icon">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+    <div class="bento">
+      <article class="card span-7">
+        <div>
+          <div class="card-icon" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          </div>
+          <h3>自有设备：并发竞速选路，出局域网不失联</h3>
+          <p>绑定自己的手机与电脑后，发送时自动并发探测局域网 TCP、UDP STUN 打洞与 WSS 私有中继，最先完成双向认证握手的一条直接胜出。传输中切网自动保留 <code>.ftpart</code> 断点续传。</p>
         </div>
-        <h3>不限大小 · 不压缩原文件</h3>
-        <p>不像即时通讯软件强制压缩图片视频、限制单文件体积，分块 SHA-256 逐块校验，原始字节 1:1 送达。</p>
+        <div class="tag-row">
+          <span class="tag">pathmgr.Race</span>
+          <span class="tag">不限体积</span>
+          <span class="tag">原图无损</span>
+          <span class="tag">完整文件夹树</span>
+          <span class="tag">逐块 SHA-256</span>
+        </div>
       </article>
-      <article class="card">
-        <div class="card-icon">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3.6 9h16.8M3.6 15h16.8M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
+
+      <article class="card span-5">
+        <div>
+          <div class="card-icon" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><path d="M3 14h7v7H3z"/></svg>
+          </div>
+          <h3>临时快传：扫码即用，不留绑定记录</h3>
+          <p>客户端用 Ed25519 私钥签名发起「发文件 / 收文件」，生成 10 分钟有效的 HTTPS 二维码与 6 位短码。浏览器扫码直接流式收发，同 Wi-Fi 下可一键跳转局域网极速直连。</p>
         </div>
-        <h3>出局域网也不失联</h3>
-        <p>在家里 Wi-Fi 跑局域网直连，在外面 5G / 挂着 VPN TUN 时自动切换中继，手机与电脑随时互达。</p>
-      </article>
-      <article class="card">
-        <div class="card-icon">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <div class="dl-links">
+          <a class="btn btn-tonal btn-sm" href="https://ferry.cwlindean.cn/transfer" target="_blank" rel="noopener">去输入 6 位码 →</a>
+          <span class="tag">10 分钟自动失效</span>
         </div>
-        <h3>中断自动断点续传</h3>
-        <p>传输途中切网或重连，接收端保留 <code>.ftpart</code> 进度并在重连后直接续传剩余分块，无需重头来过。</p>
       </article>
     </div>
   </section>
 
-  <section class="block" id="platforms">
+  <section class="block" id="showcase">
     <div class="sec-head">
-      <div class="sec-kicker">Platforms</div>
-      <h2>一套 Go 核心驱动全平台客户端</h2>
-      <p>没有 Electron 套壳与臃肿依赖，每一端都贴合对应系统的真实操作直觉。</p>
+      <div class="sec-kicker">Platforms · v1.0.3</div>
+      <h2>一套 Go 核心，打磨每一端的原生直觉</h2>
+      <p>拒绝 Electron 套壳与 WebView2 臃肿依赖，Windows、Android、浏览器与 CLI 均保持轻快响应。</p>
     </div>
-    <div class="grid-2">
-      <article class="card">
-        <h3>Android 原生端（Material Design 3）</h3>
-        <p>Android 12+ 动态取色、底部三段式导航、一键同时开启局域网与远程接收、发送剪贴板文本、收到文件自动落盘至系统公共 <code>Download/Ferry</code> 目录，相册与系统文件管理即刻可见。</p>
+    <div class="bento">
+      <article class="card span-6">
+        <div>
+          <h3>Windows 桌面端（纯 Win32 + GDI）</h3>
+          <p>零 WebView2 依赖，托盘低内存常驻。<code>v1.0.2</code> 重做单焦点发射台，操作路径缩短到一步。</p>
+          <ul class="feat-list">
+            <li>顶部自适应目标设备药丸、独立「历史记录」传输台账与自定义服务器设置</li>
+            <li>底部独立智能剪贴板栏：支持将截图 DIB 自动转 PNG 发送或文本一键直发</li>
+            <li>资源管理器拖拽自动唤起「轻渡投放」DWM Acrylic 浮窗，支持 Win11 一级右键菜单</li>
+          </ul>
+        </div>
         <div class="tag-row">
-          <span class="tag">MD3 Dynamic Color</span>
-          <span class="tag">16 KB 页对齐</span>
-          <span class="tag">~20 MB 独立包</span>
+          <span class="tag">纯 Win32 GDI + SDF</span>
+          <span class="tag">Win11 一级右键</span>
+          <span class="tag">截图秒发 PNG</span>
         </div>
       </article>
-      <article class="card">
-        <h3>Windows 桌面端（原生 Win32 + GDI）</h3>
-        <p>托盘常驻内存极低；资源管理器拖拽文件即刻在屏幕右下角弹出「轻渡投放」浮窗；支持 Windows 11 一级右键菜单「用轻渡发送」、经典「发送到」、开机自启与传输台账。</p>
+
+      <article class="card span-6">
+        <div>
+          <h3>Android 原生端（Material Design 3）</h3>
+          <p>原生 Java + gomobile Go 核心，支持 Android 5.0+（API 21+）与 Android 12+ 动态取色。</p>
+          <ul class="feat-list">
+            <li>四栏悬浮胶囊导航（传输 / 记录 / 设备 / 设置）、系统「分享」面板接入与完整文件夹树发送</li>
+            <li>智能剪贴板一键发送，收到文件自动落盘公共 <code>Download/Ferry</code> 目录，相册即刻可见</li>
+            <li><code>v1.0.3</code> 默认最低优先级保活通知渠道（支持设置页一键静音保活）+ 可选「隐藏最近任务后台」</li>
+          </ul>
+        </div>
         <div class="tag-row">
-          <span class="tag">SysDragImage 浮窗</span>
-          <span class="tag">Win11 一级菜单</span>
-          <span class="tag">双缓冲台账</span>
+          <span class="tag">arm64 (16 KB 页对齐)</span>
+          <span class="tag">armv7a 32 位兼容</span>
+          <span class="tag">~12 MB 独立包</span>
         </div>
       </article>
-      <article class="card">
-        <h3>浏览器零安装网页快传</h3>
-        <p>手机/电脑直接输出局域网分享链接或 6 位临时码，对方浏览器打开即可拖放上传下载。手机私钥与接收目录严格隔离，分享链接不触碰任何本机敏感文件。</p>
+
+      <article class="card span-6">
+        <div>
+          <h3>浏览器零安装网页快传（/transfer）</h3>
+          <p>在公用电脑、iOS/macOS 或朋友设备上免装客户端即可互传大文件。</p>
+          <ul class="feat-list">
+            <li><code>file.slice</code> 分块流式上传 + <code>showSaveFilePicker</code> 增量 SHA-256 流式下载，不爆浏览器内存</li>
+            <li>支持随时暂停、恢复与取消传输，且不中断底层 WebSocket 控制信道</li>
+            <li>同 Wi-Fi 环境自动提示一键切换局域网直连，不消耗公网中继带宽</li>
+          </ul>
+        </div>
         <div class="tag-row">
-          <span class="tag">零客户端依赖</span>
-          <span class="tag">独立沙盒目录</span>
-          <span class="tag">6 位口令</span>
+          <span class="tag">流式分块读写</span>
+          <span class="tag">暂停 / 恢复 / 取消</span>
+          <span class="tag">LAN 一键切换</span>
         </div>
       </article>
-      <article class="card" id="mcp">
-        <h3>AI 智能体原生 MCP 与 CLI</h3>
-        <p>内置标准 stdio <b>MCP Server</b>（<code>ferry mcp</code> / <code>ft mcp</code>），暴露设备查看、局域网扫描、文件发送、文本笔记快传、单次等待接收等 6 个工具，自动复用桌面端配对表。</p>
+
+      <article class="card span-6" id="mcp">
+        <div>
+          <h3>AI 智能体原生 MCP 与跨平台 CLI</h3>
+          <p>单一 <code>ferry</code> 可执行文件，内置标准 JSON-RPC 2.0 stdio <strong>MCP Server</strong>，自动共享桌面端配对表。</p>
+          <ul class="feat-list">
+            <li>通过 <code>ferry mcp</code> 接入 Antigravity / Cursor / Claude，直接让 AI 帮你发文件、传笔记给手机</li>
+            <li>提供 <code>ferry daemon</code> 后台守护、<code>ferry share</code> 终端二维码快传与脚本自动化编排</li>
+            <li>配套单二进制 <code>ft-server</code>，一行 systemd 即可自建私有信令、中继与 STUN 服务</li>
+          </ul>
+        </div>
         <div class="tag-row">
-          <span class="tag">JSON-RPC 2.0 stdio</span>
-          <span class="tag">Antigravity / Claude</span>
-          <span class="tag">CLI 可编排</span>
+          <span class="tag">ferry mcp</span>
+          <span class="tag">6 个 MCP 工具</span>
+          <span class="tag">支持私有化部署</span>
         </div>
       </article>
+    </div>
+  </section>
+
+  <section class="block" id="download">
+    <div class="sec-head">
+      <div class="sec-kicker">Downloads · v1.0.3</div>
+      <h2>下载轻渡 Ferry v1.0.3</h2>
+      <p>所有正式安装包均由 GitHub Actions 自动构建并附带 <code>SHA256SUMS.txt</code>，开源可验证。</p>
+    </div>
+
+    <div class="dl-grid">
+      <article class="dl-card rec" data-os="windows">
+        <div>
+          <div class="dl-head">
+            <h3>Windows 桌面端</h3>
+            <span class="dl-size">17.6 MB</span>
+          </div>
+          <p class="dl-desc">Windows 10 / 11 (x64) 一体化安装器，内置桌面端、CLI/MCP 与 Win11 一级右键菜单。</p>
+        </div>
+        <div class="dl-file">ferry-setup-windows-amd64.exe</div>
+        <div class="dl-links">
+          <a class="btn btn-primary btn-sm" href="https://github.com/zhitiaojun/ferry/releases/latest/download/ferry-setup-windows-amd64.exe" target="_blank" rel="noopener">下载 Windows 安装器</a>
+        </div>
+      </article>
+
+      <article class="dl-card rec" data-os="android">
+        <div>
+          <div class="dl-head">
+            <h3>Android（64 位推荐）</h3>
+            <span class="dl-size">12.0 MB</span>
+          </div>
+          <p class="dl-desc">现代主流安卓手机（<code>arm64-v8a</code>，Android 5.0+，已启用 16 KB ELF 页对齐）。</p>
+        </div>
+        <div class="dl-file">ferry-android-arm64.apk</div>
+        <div class="dl-links">
+          <a class="btn btn-primary btn-sm" href="https://github.com/zhitiaojun/ferry/releases/latest/download/ferry-android-arm64.apk" target="_blank" rel="noopener">下载 arm64 APK</a>
+        </div>
+      </article>
+
+      <article class="dl-card" data-os="android32">
+        <div>
+          <div class="dl-head">
+            <h3>Android（32 位兼容版）</h3>
+            <span class="dl-size">11.9 MB</span>
+          </div>
+          <p class="dl-desc">专为老旧 32 位安卓设备或精简系统编译（<code>armeabi-v7a</code>，Android 5.0+）。</p>
+        </div>
+        <div class="dl-file">ferry-android-armv7a.apk</div>
+        <div class="dl-links">
+          <a class="btn btn-tonal btn-sm" href="https://github.com/zhitiaojun/ferry/releases/latest/download/ferry-android-armv7a.apk" target="_blank" rel="noopener">下载 armv7a APK</a>
+        </div>
+      </article>
+
+      <article class="dl-card" data-os="linux">
+        <div>
+          <div class="dl-head">
+            <h3>Linux CLI &amp; MCP</h3>
+            <span class="dl-size">10.3 MB</span>
+          </div>
+          <p class="dl-desc">Linux amd64 静态二进制，提供 <code>daemon</code>、<code>send</code>、<code>share</code> 与 <code>mcp</code> 全部能力。</p>
+        </div>
+        <div class="dl-file">ferry-linux-amd64</div>
+        <div class="dl-links">
+          <a class="btn btn-tonal btn-sm" href="https://github.com/zhitiaojun/ferry/releases/latest/download/ferry-linux-amd64" target="_blank" rel="noopener">下载 Linux CLI</a>
+        </div>
+      </article>
+
+      <article class="dl-card" data-os="server">
+        <div>
+          <div class="dl-head">
+            <h3>私有信令与中继服务端</h3>
+            <span class="dl-size">7.0 MB</span>
+          </div>
+          <p class="dl-desc">单二进制全内存运行（<code>/signal</code>、<code>/relay</code>、双端口 STUN 与 Web 门户），支持低配 VPS 自建。</p>
+        </div>
+        <div class="dl-file">ferry-server-linux-amd64</div>
+        <div class="dl-links">
+          <a class="btn btn-tonal btn-sm" href="https://github.com/zhitiaojun/ferry/releases/latest/download/ferry-server-linux-amd64" target="_blank" rel="noopener">下载服务端</a>
+        </div>
+      </article>
+
+      <article class="dl-card" data-os="web">
+        <div>
+          <div class="dl-head">
+            <h3>浏览器临时快传</h3>
+            <span class="dl-size">零安装</span>
+          </div>
+          <p class="dl-desc">iOS、macOS 或临时使用他人电脑时，无需下载安装包，输入 6 位临时码或扫码即刻传文件。</p>
+        </div>
+        <div class="dl-file">ferry.cwlindean.cn/transfer</div>
+        <div class="dl-links">
+          <a class="btn btn-ghost btn-sm" href="https://ferry.cwlindean.cn/transfer" target="_blank" rel="noopener">立即打开网页快传 →</a>
+        </div>
+      </article>
+    </div>
+
+    <div class="dl-foot">
+      <span>完整性校验与历史版本均托管于 GitHub Releases（AGPL-3.0 开源）。</span>
+      <div class="foot-links">
+        <a href="https://github.com/zhitiaojun/ferry/releases/latest/download/SHA256SUMS.txt" target="_blank" rel="noopener">SHA256SUMS.txt</a>
+        <a href="https://github.com/zhitiaojun/ferry/releases" target="_blank" rel="noopener">全部版本下载</a>
+        <a href="https://github.com/zhitiaojun/ferry/blob/main/CHANGELOG.md" target="_blank" rel="noopener">v1.0.3 更新日志</a>
+      </div>
     </div>
   </section>
 
   <section class="block" id="security">
     <div class="sec-head">
-      <div class="sec-kicker">Privacy &amp; Security</div>
+      <div class="sec-kicker">Security &amp; FAQ</div>
       <h2>默认不留存云端，中继也看不见你的文件内容</h2>
+      <p>安全边界内建于协议层，同时针对手机日常挂机提供细致可控的通知与后台策略。</p>
     </div>
-    <div class="sec-band">
-      <div class="grid-4">
-        <div class="sec-item">
-          <strong>Ed25519 设备身份</strong>
-          <span>每台设备首次运行本地生成唯一非对称密钥对，设备 ID 即公钥 SHA-256，不上传任何账号资料。</span>
-        </div>
-        <div class="sec-item">
-          <strong>TLS 1.3 公钥钉定</strong>
-          <span>经公网中继或打洞时，在信令房间内再套一层双向认证 TLS 1.3，仅信任已配对公钥。</span>
-        </div>
-        <div class="sec-item">
-          <strong>SPAKE2 6 位码配对</strong>
-          <span>一次性 6 位会话码全程零明文上网络，双方零知识证明完成密钥协商后才互信落盘。</span>
-        </div>
-        <div class="sec-item">
-          <strong>最小目录隔离</strong>
-          <span>手机私钥与配对表独立存放于私有 <code>state/</code>，即使开启局域网网页分享也绝不暴露。</span>
-        </div>
+
+    <div class="sec-grid">
+      <div class="sec-tile">
+        <div class="k">IDENTITY</div>
+        <strong>Ed25519 设备身份</strong>
+        <span>首次启动本地生成非对称密钥对，设备 ID 即公钥 SHA-256，不注册、不上传账号资料。</span>
       </div>
+      <div class="sec-tile">
+        <div class="k">END-TO-END</div>
+        <strong>TLS 1.3 公钥钉定</strong>
+        <span>经公网中继或 UDP 打洞时，内层再套双向认证 TLS 1.3，仅信任已配对公钥。</span>
+      </div>
+      <div class="sec-tile">
+        <div class="k">PAIRING</div>
+        <strong>SPAKE2 零知识配对</strong>
+        <span>6 位配对码零明文传输，完成密钥协商后才落盘互信；临时建房必须由客户端私钥签名。</span>
+      </div>
+      <div class="sec-tile">
+        <div class="k">ISOLATION</div>
+        <strong>最小权限目录隔离</strong>
+        <span>私钥与配对表存放于私有 <code>state/</code>；网页收发严格限定于本次选中文件或独立目录。</span>
+      </div>
+    </div>
+
+    <div class="faq-list">
+      <details class="faq">
+        <summary>Android 端如何去掉状态栏的常驻保活通知，同时保留「收到新文件」提醒？</summary>
+        <p><code>v1.0.3</code> 默认将保活服务通知设为最低优先级（不响铃、不震动、不在状态栏弹出图标）。如果你希望完全隐藏它，打开轻渡「设置 → 保活状态通知」，可一键跳转到系统通知渠道设置关闭该渠道；新文件接收通知使用独立渠道，关闭保活通知后依然会正常弹出提醒。</p>
+      </details>
+      <details class="faq">
+        <summary>开启 Android「隐藏最近任务后台」后，一键清理后台会杀掉轻渡吗？</summary>
+        <p>在「设置」中开启「隐藏最近任务后台」前，轻渡会先弹出操作引导，建议你在系统多任务视图中为轻渡卡片加锁（锁定后台），随后再启用隐藏开关。这样既能让多任务栏保持清爽，又能避免手机常驻接收被误划清理。</p>
+      </details>
+      <details class="faq">
+        <summary>公网中继服务器会不会保存我的文件？可以完全自建吗？</summary>
+        <p>服务端采用全内存路由且不落盘任何文件内容，同时在 WebSocket 通道内部强制端到端 TLS 1.3 公钥钉定，中继仅透传密文。你可以直接下载 <code>ferry-server-linux-amd64</code> 部署到自己的服务器，并在 Windows、Android 与 CLI 设置中一键填入自定义服务器地址。</p>
+      </details>
     </div>
   </section>
 
   <section class="block" id="quickstart">
     <div class="sec-head">
-      <div class="sec-kicker">Quickstart</div>
-      <h2>立刻在命令行与智能体里使用轻渡</h2>
+      <div class="sec-kicker">Developer &amp; AI Agent</div>
+      <h2>在 AI 智能体、终端与私有服务器里快速接入</h2>
     </div>
     <div class="tabs-card">
       <div class="tabs-bar">
         <div class="tab-group">
           <button class="tab-btn active" type="button" data-tab="mcp">MCP 配置（Antigravity / Cursor / Claude）</button>
-          <button class="tab-btn" type="button" data-tab="cli">CLI 命令行</button>
-          <button class="tab-btn" type="button" data-tab="build">构建与安装包</button>
+          <button class="tab-btn" type="button" data-tab="cli">CLI 常用命令</button>
+          <button class="tab-btn" type="button" data-tab="server">自建 ft-server</button>
         </div>
         <button class="copy-btn" id="copy-code" type="button">复制代码</button>
       </div>
@@ -440,28 +903,79 @@
 </main>
 
 <footer class="container">
-  <span><strong>轻渡 Ferry</strong> · v1.0.0 — 私有设备间的安全直连摆渡</span>
-  <span>Go + Win32 + Android MD3 · 零云端留存</span>
+  <span><strong>轻渡 Ferry</strong> · v1.0.3 — 私有设备间的安全直连摆渡 · AGPL-3.0</span>
+  <div class="foot-links">
+    <a href="https://ferry.cwlindean.cn/transfer" target="_blank" rel="noopener">网页快传</a>
+    <a href="https://github.com/zhitiaojun/ferry" target="_blank" rel="noopener">GitHub 仓库</a>
+    <a href="https://github.com/zhitiaojun/ferry/releases" target="_blank" rel="noopener">版本下载</a>
+    <a href="https://github.com/zhitiaojun/ferry/blob/main/CHANGELOG.md" target="_blank" rel="noopener">更新日志</a>
+  </div>
 </footer>
 
 <script>
 (function(){
   const root = document.documentElement;
+  const toggleBtn = document.getElementById('theme-toggle');
   const saved = localStorage.getItem('ferry_theme');
   const darkPref = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
   function setTheme(mode){
     root.setAttribute('data-theme', mode);
     localStorage.setItem('ferry_theme', mode);
+    toggleBtn.textContent = mode === 'dark' ? '浅色' : '深色';
   }
   setTheme(saved || (darkPref ? 'dark' : 'light'));
-  document.getElementById('theme-toggle').addEventListener('click', function(){
+  toggleBtn.addEventListener('click', function(){
     setTheme(root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
   });
 
+  // OS-aware primary download CTA
+  const ua = navigator.userAgent || '';
+  const primaryDl = document.getElementById('primary-dl');
+  const baseDl = 'https://github.com/zhitiaojun/ferry/releases/latest/download/';
+  if (/Android/i.test(ua)) {
+    primaryDl.textContent = '下载 Android APK（12.0 MB）';
+    primaryDl.href = baseDl + 'ferry-android-arm64.apk';
+    primaryDl.target = '_blank';
+    primaryDl.rel = 'noopener';
+  } else if (/Windows/i.test(ua)) {
+    primaryDl.textContent = '下载 Windows 安装器（17.6 MB）';
+    primaryDl.href = baseDl + 'ferry-setup-windows-amd64.exe';
+    primaryDl.target = '_blank';
+    primaryDl.rel = 'noopener';
+  } else if (/Linux/i.test(ua)) {
+    primaryDl.textContent = '下载 Linux CLI（10.3 MB）';
+    primaryDl.href = baseDl + 'ferry-linux-amd64';
+    primaryDl.target = '_blank';
+    primaryDl.rel = 'noopener';
+  }
+
+  // Hero stage tabs
+  const stageBadges = {
+    android: 'MD3 · v1.0.3',
+    windows: 'Win32 GDI · v1.0.3',
+    route: 'pathmgr.Race(t = 0)'
+  };
+  const stageBadgeEl = document.getElementById('stage-badge');
+  document.querySelectorAll('.stage-tab').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      const key = btn.getAttribute('data-stage');
+      document.querySelectorAll('.stage-tab').forEach(function(b){
+        const on = b === btn;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      document.querySelectorAll('.stage-panel').forEach(function(p){
+        p.classList.toggle('active', p.getAttribute('data-panel') === key);
+      });
+      stageBadgeEl.textContent = stageBadges[key] || '';
+    });
+  });
+
+  // Route simulator
   const tierMessages = {
-    lan:   '已选航道：LAN（10.93.x.x:42833） · 不经公网服务器 · 原文件直写',
-    punch: '已选航道：UDP 打洞（QUIC · STUN 双向穿透） · 跨网点对点加密直传',
-    relay: '已选航道：私有中继（wss://ferry.cwlindean.cn） · 内层 TLS 1.3 公钥钉定穿透双 VPN'
+    lan:   '已选航道：LAN（局域网直连） · 零公网流量 · 原字节直写 + SHA-256 校验',
+    punch: '已选航道：UDP 打洞（QUIC · 双端口 STUN 穿透） · 跨网点对点端到端加密',
+    relay: '已选航道：私有中继（wss://ferry.cwlindean.cn/relay） · 内层 TLS 1.3 公钥钉定穿透双 VPN'
   };
   const logEl = document.getElementById('route-log');
   document.querySelectorAll('.tier').forEach(function(el){
@@ -472,6 +986,7 @@
     });
   });
 
+  // Quickstart tabs
   const snippets = {
     mcp: `{
   "mcpServers": {
@@ -482,34 +997,33 @@
   }
 }
 
-// 可用 MCP 工具（自动共享桌面端配对表，接收默认存入 ~/Downloads/Ferry）：
+// 可用 MCP 工具（自动复用桌面端配对表，接收默认存入 ~/Downloads/Ferry）：
 // 1. ferry_whoami       — 查看本机设备 ID 与配对 URI
 // 2. ferry_list_peers   — 列出已配对设备 & 扫描局域网接收端
-// 3. ferry_send_files   — 按设备备注名 / 设备 ID / IP:端口发送文件或文件夹
-// 4. ferry_send_text    — 直接把一段文本作为笔记发送给对方设备
-// 5. ferry_receive_once — 等待接收一次文件（支持 auto / race / punch / relay / lan）
-// 6. ferry_pair_add     — 导入对方 ferry:// 或 ftpair:// 凭证`,
-    cli: `# 1. 启动标准 MCP Server（供 AI 智能体调用）
-ferry.exe mcp
+// 3. ferry_send_files   — 按备注名 / 设备 ID / IP:端口发送文件或完整文件夹
+// 4. ferry_send_text    — 直接把文本或摘要作为笔记发送到对方设备
+// 5. ferry_receive_once — 等待接收一次文件（支持 auto / lan / punch / relay）
+// 6. ferry_pair_add     — 导入对方 ferry:// 配对凭证`,
+    cli: `# 1. 启动常驻守护进程（同时监听局域网与远程信令接收）
+ferry daemon --dir ~/Downloads/Ferry
 
-# 2. 6 位一次性配对码建立信任（另一端填同码 + 本机 ID）
-ferry.exe pair --code 123456 --wait
+# 2. 使用 6 位一次性配对码与另一台设备建立信任（SPAKE2）
+ferry pair --code 123456 --wait
 
-# 3. 发送文件或文件夹（局域网 / 打洞 / 中继并发竞速）
-ferry.exe send --signal wss://ferry.cwlindean.cn/signal --to-id <对方64位ID> --punch --allow punch,relay --file ./report.pdf
+# 3. 发送文件或文件夹（局域网 / UDP 打洞 / 加密中继并发竞速）
+ferry send --signal wss://ferry.cwlindean.cn/signal --to-id <对方64位ID> --file ./report.pdf
 
-# 4. 发起零安装网页快传（生成浏览器直连/中继 6 位码）
-ferry.exe share --recv --out ./recv`,
-    build: `# 1. 编译 Windows 端（CLI/MCP + 桌面端 + 安装程序）
-go build -o out/ferry.exe ./cmd/ferry
-go build -ldflags="-H=windowsgui" -o out/ferry-desktop.exe ./cmd/ft-desktop
+# 4. 终端发起临时网页快传（打印二维码与 6 位码，免安装客户端收发）
+ferry share --recv --out ./recv`,
+    server: `# 1. 下载服务端单二进制并安装 systemd 守护（含 160MiB 内存软限制）
+install -d /opt/ft-server /var/log/ft-server
+install -m 0755 ferry-server-linux-amd64 /opt/ft-server/ft-server
+install -m 0644 deploy/ft-server.service /etc/systemd/system/ft-server.service
+systemctl daemon-reload && systemctl enable --now ft-server
 
-# 2. 编译 Android MD3 原生 APK（支持 16 KB 页对齐）
-./android/build.sh
-
-# 3. 安装与接入：
-# - 手机安装包：android/build/ferry-android-arm64.apk（系统自动保存收到文件至 Download）
-# - 桌面右键与拖放浮窗：运行 out/ferry-desktop.exe`
+# 2. 放行双端口 UDP STUN（40000-40001/udp）并用 Nginx 反代 /signal /relay /web/
+# 3. 在桌面端 / Android「设置 → 服务器地址」填入你的域名即可切到私有中继
+curl -fsS http://127.0.0.1:18790/healthz`
   };
   const pane = document.getElementById('code-pane');
   const copyBtn = document.getElementById('copy-code');
